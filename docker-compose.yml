@@ -1,0 +1,188 @@
+# ============================================================
+# Claw-Native Agent 平台 — 全栈 Docker Compose 编排
+# 对齐 PRD 4.1 架构图与 7.1 集成方案
+# ============================================================
+
+services:
+  # ── 基础设施层 ──
+
+  postgres:
+    image: postgres:16
+    container_name: claw-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-claw_agent}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agent-network
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: claw-es
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    networks:
+      - agent-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: claw-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - agent-network
+
+  minio:
+    image: minio/minio
+    container_name: claw-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agent-network
+
+  # ── 本地 Agent 层 (OpenClaw / Hermes) ──
+
+  openclaw:
+    # OpenClaw: 本地 AI 智能体框架, Docker 原生, Skills 系统, 可配置模型
+    # 仓库: https://github.com/openclaw/openclaw
+    image: ${OPENCLAW_IMAGE:-openclaw/openclaw:latest}
+    container_name: claw-openclaw
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./deploy/openclaw/skills:/app/skills
+      - ./deploy/openclaw/config:/app/config
+    environment:
+      - LLM_BASE_URL=${OPENCLAW_LLM_BASE_URL:-}
+      - SKILLS_DIR=/app/skills
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - agent-network
+
+  hermes:
+    # Hermes: 智能体框架, 自定义 Skill 开发, 本地部署
+    # 仓库: https://github.com/NousResearch/hermes-agent (PRD 附录 URL 已修正)
+    image: ${HERMES_IMAGE:-nousresearch/hermes-agent:latest}
+    container_name: claw-hermes
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./deploy/hermes/skills:/app/skills
+      - ./deploy/hermes/config:/app/config
+    environment:
+      - LLM_BASE_URL=${HERMES_LLM_BASE_URL:-}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - agent-network
+
+  # ── 应用层 ──
+
+  backend:
+    build: ./backend
+    container_name: claw-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - POSTGRES_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-claw_agent}
+      - ES_URL=http://elasticsearch:9200
+      - REDIS_URL=redis://redis:6379/0
+      - MINIO_URL=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
+      - OPENCLAW_URL=http://openclaw:8080
+      - HERMES_URL=http://hermes:8080
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CORS_ORIGINS=["http://localhost:5173","http://localhost:3000","http://localhost"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    networks:
+      - agent-network
+
+  frontend:
+    build: ./frontend
+    container_name: claw-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - agent-network
+
+volumes:
+  pg_data:
+  es_data:
+  redis_data:
+  minio_data:
+
+networks:
+  agent-network:
+    driver: bridge
