@@ -62,8 +62,11 @@ async def health_check():
     try:
         import httpx
 
+        headers = {}
+        if settings.openclaw_token:
+            headers["Authorization"] = f"Bearer {settings.openclaw_token}"
         async with httpx.AsyncClient(timeout=3) as client:
-            resp = await client.get(f"{settings.openclaw_url}/health")
+            resp = await client.get(f"{settings.openclaw_url}/health", headers=headers)
             checks["openclaw"] = "ok" if resp.status_code < 500 else f"error: HTTP {resp.status_code}"
     except Exception as e:
         checks["openclaw"] = f"error: {e.__class__.__name__}"
@@ -81,6 +84,27 @@ async def health_check():
     except Exception:
         # 端口不可达是正常的 — Hermes gateway 默认不暴露 HTTP
         checks["hermes"] = "running (gateway mode, no HTTP API)"
+
+    # TEI (Text Embeddings Inference — BGE-M3)
+    try:
+        from app.core.tei_client import health_check as tei_health
+
+        if await tei_health():
+            checks["tei"] = "ok"
+        else:
+            checks["tei"] = "error: unhealthy"
+    except Exception as e:
+        checks["tei"] = f"error: {e.__class__.__name__}"
+
+    # Reranker (Cross-Encoder — BGE-reranker-v2-m3)
+    try:
+        from app.core.reranker_client import health_check as reranker_health
+        if await reranker_health():
+            checks["reranker"] = "ok"
+        else:
+            checks["reranker"] = "error: unhealthy"
+    except Exception as e:
+        checks["reranker"] = f"error: {e.__class__.__name__}"
 
     all_ok = all(v == "ok" or v.startswith("running") for v in checks.values())
     return {

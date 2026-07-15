@@ -33,6 +33,13 @@ class Settings(BaseSettings):
 
     # ── Elasticsearch (向量 + 全文检索) ──
     es_url: str = "http://localhost:9200"
+    # 知识库 chunk 索引名 (M2)
+    es_kb_index: str = "claw-kb-chunks"
+
+    # ── TEI: Text Embeddings Inference sidecar (BGE-M3) ──
+    tei_url: str = "http://localhost:8082"
+    embedding_model: str = "BAAI/bge-m3"
+    embedding_dim: int = 1024
 
     # ── Redis (缓存 + Celery broker + 分布式锁) ──
     redis_url: str = "redis://localhost:6379/0"
@@ -43,11 +50,18 @@ class Settings(BaseSettings):
     minio_secret_key: str = "minioadmin"
     minio_bucket: str = "claw-workspaces"
 
+    # ── 文件上传限制 ──
+    max_upload_size: int = 100 * 1024 * 1024  # 100 MB
+
     # ── 本地 Agent: OpenClaw ──
     openclaw_url: str = "http://localhost:8080"
+    openclaw_token: str = ""  # Gateway auth token (--auth token --token xxx)
 
     # ── 本地 Agent: Hermes ──
     hermes_url: str = "http://localhost:8081"
+
+    # ── Cross-Encoder 重排序 (TEI reranker sidecar) ──
+    reranker_url: str = "http://localhost:8083"
 
     # ── Fallback 模型供应商 ──
     openai_api_key: str = ""

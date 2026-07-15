@@ -1,14 +1,16 @@
 import { NavLink, useNavigate } from "react-router-dom"
-import { LayoutDashboard, BookOpen, Workflow, Settings, LogOut } from "lucide-react"
+import { LayoutDashboard, BookOpen, Workflow, Settings, Clock, Brain, LogOut } from "lucide-react"
 import { useAuthStore } from "@/store/auth"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
 const navItems = [
   { to: "/", label: "仪表盘", icon: LayoutDashboard },
-  { to: "/kb", label: "知识库", icon: BookOpen, disabled: true },
-  { to: "/flows", label: "Agent 画布", icon: Workflow, disabled: true },
-  { to: "/settings", label: "系统配置", icon: Settings, disabled: true },
+  { to: "/kb", label: "知识库", icon: BookOpen },
+  { to: "/flows", label: "Agent 画布", icon: Workflow },
+  { to: "/schedules", label: "定时任务", icon: Clock },
+  { to: "/memories", label: "记忆系统", icon: Brain },
+  { to: "/settings", label: "系统配置", icon: Settings },
 ]
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
@@ -31,19 +33,16 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           {navItems.map((item) => (
             <NavLink
               key={item.to}
-              to={item.disabled ? "#" : item.to}
-              className={cn(
-                "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                item.disabled && "cursor-not-allowed opacity-40",
-                !item.disabled && "hover:bg-accent",
-              )}
-              onClick={(e) => item.disabled && e.preventDefault()}
+              to={item.to}
+              className={({ isActive }) =>
+                cn(
+                  "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                  isActive ? "bg-accent text-accent-foreground" : "hover:bg-accent",
+                )
+              }
             >
               <item.icon className="h-4 w-4" />
               {item.label}
-              {item.disabled && (
-                <span className="ml-auto text-xs text-muted-foreground">M2+</span>
-              )}
             </NavLink>
           ))}
         </nav>

@@ -27,7 +27,7 @@ services:
       - agent-network
 
   elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    build: ./deploy/es
     container_name: claw-es
     restart: unless-stopped
     environment:
@@ -43,6 +43,45 @@ services:
       interval: 15s
       timeout: 10s
       retries: 5
+    networks:
+      - agent-network
+
+  # ── Embedding 服务 (BGE-M3, 1024维, 本地推理) ──
+  tei:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.5
+    container_name: claw-tei
+    restart: unless-stopped
+    platform: linux/amd64
+    ports:
+      - "8082:80"
+    volumes:
+      - tei_data:/data
+      - /tmp/bge-m3-model:/models/bge-m3:ro
+    command: ["--model-id", "/models/bge-m3", "--max-batch-tokens", "16384"]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/80 && echo -e \"GET /health HTTP/1.0\\r\\n\\r\\n\" >&3 && grep -q \"200\" <&3'"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 300s
+    networks:
+      - agent-network
+
+  # ── Cross-Encoder 重排序服务 (BGE-reranker-v2-m3) ──
+  reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.5
+    container_name: claw-reranker
+    restart: unless-stopped
+    platform: linux/amd64
+    ports:
+      - "8083:80"
+    volumes:
+      - reranker_data:/data
+      - /tmp/bge-reranker-v2-m3:/models/reranker:ro
+    command: ["--model-id", "/models/reranker", "--max-batch-tokens", "8192"]
+    healthcheck:
+      disable: true
+    mem_limit: 8g
     networks:
       - agent-network
 
@@ -151,7 +190,10 @@ services:
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
       - OPENCLAW_URL=http://openclaw:8080
+      - OPENCLAW_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-dev-token-claw}
       - HERMES_URL=http://hermes:8080
+      - TEI_URL=http://tei:80
+      - RERANKER_URL=http://reranker:80
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -165,6 +207,8 @@ services:
       elasticsearch:
         condition: service_healthy
       minio:
+        condition: service_healthy
+      tei:
         condition: service_healthy
     volumes:
       - ./backend:/app
@@ -189,6 +233,8 @@ volumes:
   minio_data:
   openclaw_data:
   hermes_data:
+  tei_data:
+  reranker_data:
 
 networks:
   agent-network:

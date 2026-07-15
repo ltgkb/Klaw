@@ -13,6 +13,7 @@ from app.models.base import Base, TimestampMixin, UUIDMixin
 class ExecutionStatus(str, enum.Enum):
     pending = "pending"
     running = "running"
+    paused = "paused"
     success = "success"
     failed = "failed"
     cancelled = "cancelled"

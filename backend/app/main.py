@@ -2,6 +2,7 @@
 
 import logging
 import sys
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,6 +20,54 @@ logging.basicConfig(
 logger = logging.getLogger("claw")
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期: 启动时初始化基础设施资源。"""
+    logger.info("应用启动中 — 初始化基础设施资源")
+
+    # MinIO bucket
+    try:
+        from app.core.minio_client import ensure_bucket
+        ensure_bucket()
+    except Exception as e:
+        logger.warning("MinIO bucket 初始化失败 (将在请求时重试): %s", e)
+
+    # ES 知识库索引
+    try:
+        from app.core.es_client import ensure_kb_index, get_es_client
+        await ensure_kb_index()
+    except Exception as e:
+        logger.warning("ES 索引初始化失败 (将在请求时重试): %s", e)
+
+    logger.info("基础设施资源初始化完成")
+
+    # APScheduler 定时调度器
+    try:
+        from app.core.scheduler import init_scheduler
+        init_scheduler()
+    except Exception as e:
+        logger.warning("APScheduler 初始化失败: %s", e)
+
+    yield
+
+    # 关闭连接
+    logger.info("应用关闭中 — 释放资源")
+
+    # 关闭调度器
+    try:
+        from app.core.scheduler import shutdown_scheduler
+        shutdown_scheduler()
+    except Exception as e:
+        logger.warning("APScheduler 关闭失败: %s", e)
+
+    try:
+        from app.core.es_client import close_es_client
+        await close_es_client()
+    except Exception as e:
+        logger.warning("ES 连接关闭失败: %s", e)
+    logger.info("资源释放完成")
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title=settings.app_name,
@@ -26,6 +75,7 @@ def create_app() -> FastAPI:
         description="Claw-Native Agent 平台 — 本地 OpenClaw/Hermes 为一等公民的 Agent 平台",
         docs_url="/docs",
         redoc_url="/redoc",
+        lifespan=lifespan,
     )
 
     # CORS
