@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     embedding_model: str = "BAAI/bge-m3"
     embedding_dim: int = 1024
 
+    # ── Embedding 模型 API (OpenAI 兼容 /v1/embeddings, 优先于 TEI) ──
+    # 配置后向量化走此 API; 留空则回落 TEI, 再回落 dev 哈希兜底。
+    embedding_api_base_url: str = ""
+    embedding_api_key: str = ""
+    embedding_api_model: str = ""
+
     # ── Redis (缓存 + Celery broker + 分布式锁) ──
     redis_url: str = "redis://localhost:6379/0"
 
@@ -66,6 +72,12 @@ class Settings(BaseSettings):
     # ── Fallback 模型供应商 ──
     openai_api_key: str = ""
     anthropic_api_key: str = ""
+
+    # ── Kaiweb API (自建 OpenAI 兼容网关, https://ai.kaiweb.net) ──
+    # 优先级最高的真实 LLM 供应商; dev 环境配置 Key 后即取代 Mock 兜底。
+    kaiweb_base_url: str = "https://ai.kaiweb.net/v1"
+    kaiweb_api_key: str = ""
+    kaiweb_model: str = "glm-4.5-air"
 
     # ── CORS ──
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]

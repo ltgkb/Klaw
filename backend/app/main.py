@@ -48,6 +48,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("APScheduler 初始化失败: %s", e)
 
+    # 载入 embedding 模型 API 配置 (system_settings)
+    try:
+        from app.core.database import async_session_factory
+        from app.core import embedding_config
+        async with async_session_factory() as db:
+            await embedding_config.load_from_db(db)
+        logger.info("Embedding 配置已载入: source=%s", embedding_config.get().get("base_url") and "api" or "env/tei")
+    except Exception as e:
+        logger.warning("Embedding 配置载入失败: %s", e)
+
     yield
 
     # 关闭连接

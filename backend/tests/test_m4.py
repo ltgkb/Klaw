@@ -58,9 +58,9 @@ async def test_memory_crud(client):
     assert resp.status_code == 200
     assert resp.json()["value"]["value"] == "English"
 
-    # 搜索 (GET /memories/search, body=MemorySearchRequest)
-    resp = await client.request("GET", "/api/v1/memories/search",
-        json={"query": "language"}, headers=h)
+    # 搜索 (GET /memories/search?q=)
+    resp = await client.get("/api/v1/memories/search",
+        params={"q": "language"}, headers=h)
     assert resp.status_code == 200
     assert len(resp.json()) == 1
 
@@ -204,7 +204,8 @@ async def test_providers_list(client, mock_llm_provider):
     resp = await client.get("/api/v1/providers", headers=_auth_headers(token))
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data) == 4
+    # dev 环境会额外返回 mock 兜底供应商
+    assert len(data) >= 4
     names = [p["name"] for p in data]
     assert "openclaw" in names
     assert "hermes" in names

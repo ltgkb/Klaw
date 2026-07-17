@@ -1,0 +1,13 @@
+{
+  "id": "data_analysis",
+  "name": "数据分析",
+  "description": "对给定数据集执行基础统计分析并生成摘要。Hermes 自定义 Skill。",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "dataset_url": { "type": "string", "description": "数据集 URL 或工作区路径" },
+      "metric": { "type": "string", "description": "分析维度" }
+    },
+    "required": ["dataset_url"]
+  }
+}

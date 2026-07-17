@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Plus, Trash2, Clock, Loader2, Pause, Play } from "lucide-react"
+import { Plus, Trash2, Clock, Loader2, Pause, Play, Pencil } from "lucide-react"
 
 export function ScheduleList() {
   const [schedules, setSchedules] = useState<ScheduleRead[]>([])
@@ -15,6 +15,10 @@ export function ScheduleList() {
   const [name, setName] = useState("")
   const [cron, setCron] = useState("")
   const [creating, setCreating] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editName, setEditName] = useState("")
+  const [editCron, setEditCron] = useState("")
+  const [saving, setSaving] = useState(false)
 
   const fetchSchedules = async () => {
     setLoading(true)
@@ -76,6 +80,26 @@ export function ScheduleList() {
       await fetchSchedules()
     } catch {
       // 错误由拦截器处理
+    }
+  }
+
+  const startEdit = (s: ScheduleRead) => {
+    setEditingId(s.id)
+    setEditName(s.name)
+    setEditCron(s.cron)
+  }
+
+  const handleSaveEdit = async (id: string) => {
+    if (!editName.trim() || !editCron.trim()) return
+    setSaving(true)
+    try {
+      await scheduleApi.update(id, { name: editName, cron: editCron })
+      setEditingId(null)
+      await fetchSchedules()
+    } catch {
+      // 错误由拦截器处理
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -179,30 +203,68 @@ export function ScheduleList() {
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-2">
                     <Clock className="h-5 w-5 text-muted-foreground" />
-                    <CardTitle className="text-base">{schedule.name}</CardTitle>
+                    {editingId === schedule.id ? (
+                      <Input
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        className="h-8 text-base"
+                      />
+                    ) : (
+                      <CardTitle className="text-base">{schedule.name}</CardTitle>
+                    )}
                   </div>
                   <div className="flex gap-1">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleToggle(schedule.id, schedule.status)}
-                    >
-                      {schedule.status === "active" ? (
-                        <Pause className="h-4 w-4" />
-                      ) : (
-                        <Play className="h-4 w-4" />
-                      )}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleDelete(schedule.id)}
-                    >
-                      <Trash2 className="h-4 w-4 text-destructive" />
-                    </Button>
+                    {editingId === schedule.id ? (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleSaveEdit(schedule.id)}
+                          disabled={saving}
+                        >
+                          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : "保存"}
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={() => setEditingId(null)}>
+                          取消
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleToggle(schedule.id, schedule.status)}
+                        >
+                          {schedule.status === "active" ? (
+                            <Pause className="h-4 w-4" />
+                          ) : (
+                            <Play className="h-4 w-4" />
+                          )}
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={() => startEdit(schedule)}>
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleDelete(schedule.id)}
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </>
+                    )}
                   </div>
                 </div>
-                <CardDescription className="font-mono">{schedule.cron}</CardDescription>
+                {editingId === schedule.id ? (
+                  <Input
+                    value={editCron}
+                    onChange={(e) => setEditCron(e.target.value)}
+                    className="h-8 font-mono text-sm"
+                    placeholder="0 9 * * *"
+                  />
+                ) : (
+                  <CardDescription className="font-mono">{schedule.cron}</CardDescription>
+                )}
               </CardHeader>
               <CardContent>
                 <div className="flex items-center gap-4 text-xs text-muted-foreground">

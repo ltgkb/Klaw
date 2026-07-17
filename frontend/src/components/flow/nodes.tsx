@@ -1,11 +1,22 @@
 import { memo } from "react"
-import { Handle, Position, type NodeProps } from "@xyflow/react"
-import { Brain, Database, GitBranch, Type, Bell, BrainCog } from "lucide-react"
+import {
+  Handle,
+  Position,
+  BaseEdge,
+  EdgeLabelRenderer,
+  getBezierPath,
+  useReactFlow,
+  type NodeProps,
+  type EdgeProps,
+} from "@xyflow/react"
+import { Brain, Database, GitBranch, Type, Bell, BrainCog, Play, Square } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { NodeType, NodeState } from "@/lib/api"
 
 /** 节点类型 → 图标 + 颜色 */
 const NODE_META: Record<NodeType, { icon: typeof Brain; color: string; label: string }> = {
+  start: { icon: Play, color: "border-green-500 bg-green-50", label: "开始" },
+  end: { icon: Square, color: "border-red-400 bg-red-50", label: "结束" },
   llm: { icon: Brain, color: "border-blue-400 bg-blue-50", label: "LLM 对话" },
   retrieval: { icon: Database, color: "border-purple-400 bg-purple-50", label: "知识库检索" },
   condition: { icon: GitBranch, color: "border-amber-400 bg-amber-50", label: "条件分支" },
@@ -29,10 +40,14 @@ export interface FlowNodeData {
 
 function BaseNode({ id, type, data, selected }: NodeProps) {
   const nodeData = data as unknown as FlowNodeData
-  const meta = NODE_META[(type as NodeType) ?? "text"] ?? NODE_META.text
+  const t = (type as NodeType) ?? "text"
+  const meta = NODE_META[t] ?? NODE_META.text
   const Icon = meta.icon
   const nodeState = nodeData.nodeState
   const stateClass = nodeState?.status ? STATE_BORDER[nodeState.status] ?? "" : ""
+  const isStart = t === "start"
+  const isEnd = t === "end"
+  const isCondition = t === "condition"
 
   return (
     <div
@@ -43,12 +58,14 @@ function BaseNode({ id, type, data, selected }: NodeProps) {
         selected && "ring-2 ring-primary",
       )}
     >
-      {/* 输入 Handle (除入口节点外都有) */}
-      <Handle
-        type="target"
-        position={Position.Left}
-        className="!h-3 !w-3 !border-2 !border-gray-400 !bg-white"
-      />
+      {/* 输入 Handle (开始节点无) */}
+      {!isStart && (
+        <Handle
+          type="target"
+          position={Position.Left}
+          className="!h-3 !w-3 !border-2 !border-gray-400 !bg-white"
+        />
+      )}
 
       {/* 节点头部 */}
       <div className="flex items-center gap-2">
@@ -80,17 +97,66 @@ function BaseNode({ id, type, data, selected }: NodeProps) {
         </p>
       )}
 
-      <Handle
-        type="source"
-        position={Position.Right}
-        className="!h-3 !w-3 !border-2 !border-gray-400 !bg-white"
-      />
+      {/* 条件分支: 多个 source handle (每个 case 一个) + 默认 */}
+      {isCondition && (nodeData.config?.cases as { id?: string; name?: string }[] | undefined)?.length ? (
+        <div className="mt-2 space-y-1">
+          {((nodeData.config?.cases as { id: string; name: string }[]) || []).map((c, i) => (
+            <div
+              key={c.id || i}
+              className="relative flex items-center justify-end gap-1 rounded bg-white/70 px-2 py-0.5 text-[11px] text-gray-600"
+            >
+              <span className="truncate">{c.name || c.id || `分支${i + 1}`}</span>
+              <Handle
+                type="source"
+                position={Position.Right}
+                id={c.id}
+                className="!absolute !right-[-6px] !h-2.5 !w-2.5 !border-2 !border-amber-500 !bg-white"
+                style={{ top: "50%", transform: "translateY(-50%)" }}
+              />
+            </div>
+          ))}
+          <div className="relative flex items-center justify-end gap-1 rounded bg-white/70 px-2 py-0.5 text-[11px] text-gray-500">
+            <span>{(nodeData.config?.default_name as string) || "默认"}</span>
+            <Handle
+              type="source"
+              position={Position.Right}
+              id="default"
+              className="!absolute !right-[-6px] !h-2.5 !w-2.5 !border-2 !border-gray-400 !bg-white"
+              style={{ top: "50%", transform: "translateY(-50%)" }}
+            />
+          </div>
+        </div>
+      ) : (
+        <Handle
+          type="source"
+          position={Position.Right}
+          className="!h-3 !w-3 !border-2 !border-gray-400 !bg-white"
+          isConnectable={!isEnd}
+        />
+      )}
     </div>
   )
 }
 
 /** 不同节点类型的配置摘要 */
 function NodeSummary({ type, config }: { type: NodeType; config: Record<string, unknown> }) {
+  if (type === "start") {
+    const inputs = (config.inputs as { name?: string }[]) || []
+    if (inputs.length === 0) return <p className="mt-0.5 text-xs text-gray-400">输入: {`{input}`}</p>
+    return (
+      <p className="mt-0.5 text-xs text-gray-400 truncate">
+        输入: {inputs.map((i) => i.name || "?").filter(Boolean).join(", ")}
+      </p>
+    )
+  }
+  if (type === "end") {
+    const out = (config.output as string) || ""
+    return (
+      <p className="mt-0.5 text-xs text-gray-400 truncate">
+        {out ? `输出: ${out}` : "输出: 最后节点"}
+      </p>
+    )
+  }
   if (type === "llm") {
     const model = (config.model as string) || "default"
     const prompt = (config.system_prompt as string) || ""
@@ -106,12 +172,8 @@ function NodeSummary({ type, config }: { type: NodeType; config: Record<string, 
     return <p className="mt-0.5 text-xs text-gray-400">Top-K: {topK}</p>
   }
   if (type === "condition") {
-    const expr = (config.expression as string) || ""
-    return (
-      <p className="mt-0.5 text-xs text-gray-400 truncate" title={expr}>
-        {expr || "未配置条件"}
-      </p>
-    )
+    const cases = (config.cases as unknown[]) || []
+    return <p className="mt-0.5 text-xs text-gray-400">{cases.length} 个分支</p>
   }
   if (type === "notify") {
     const channels = (config.channels as unknown[]) || []
@@ -135,6 +197,8 @@ function NodeSummary({ type, config }: { type: NodeType; config: Record<string, 
   )
 }
 
+export const StartNode = memo(BaseNode)
+export const EndNode = memo(BaseNode)
 export const LLMNode = memo(BaseNode)
 export const RetrievalNode = memo(BaseNode)
 export const ConditionNode = memo(BaseNode)
@@ -143,6 +207,8 @@ export const NotifyNode = memo(BaseNode)
 export const MemoryNode = memo(BaseNode)
 
 export const nodeTypes = {
+  start: StartNode,
+  end: EndNode,
   llm: LLMNode,
   retrieval: RetrievalNode,
   condition: ConditionNode,
@@ -150,3 +216,49 @@ export const nodeTypes = {
   notify: NotifyNode,
   memory: MemoryNode,
 }
+
+/** 可删除的连线: 中点显示 × 按钮, 点击删除; 选中后高亮 */
+function DeletableEdge({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  selected,
+}: EdgeProps) {
+  const [edgePath, labelX, labelY] = getBezierPath({
+    sourceX,
+    sourceY,
+    sourcePosition,
+    targetX,
+    targetY,
+    targetPosition,
+  })
+  const { setEdges } = useReactFlow()
+  return (
+    <>
+      <BaseEdge
+        id={id}
+        path={edgePath}
+        style={{ stroke: selected ? "#3b82f6" : "#9ca3af", strokeWidth: selected ? 2.5 : 1.5 }}
+      />
+      <EdgeLabelRenderer>
+        <button
+          className="nodrag nopan flex h-5 w-5 items-center justify-center rounded-full border border-gray-300 bg-white text-xs text-gray-500 shadow hover:bg-red-50 hover:text-red-600"
+          style={{
+            transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+            pointerEvents: "all",
+          }}
+          title="删除连线"
+          onClick={() => setEdges((eds) => eds.filter((e) => e.id !== id))}
+        >
+          ×
+        </button>
+      </EdgeLabelRenderer>
+    </>
+  )
+}
+
+export const edgeTypes = { deletable: DeletableEdge }

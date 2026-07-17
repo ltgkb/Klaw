@@ -79,14 +79,35 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
             logger.info("工作流执行: flow=%s execution=%s nodes=%d", flow_id, execution_id, len(ordered))
 
             # ── 4. 逐节点执行 ──
-            context = dict(execution.input or {})  # 上下文: 节点输出累积
+            # context: 变量上下文, 同时按 节点id / 节点label / 命名变量 三种键存, 供 {label} {label@var} {var} 引用
+            context = dict(execution.input or {})
+            # 兼容 {input} / {sys.query}: 取执行输入的 input 字段 (或首个值)
+            _primary_input = context.get("input")
+            if _primary_input is None and context:
+                _first = next(iter(context.values()))
+                _primary_input = _first if isinstance(_first, str) else ""
+            context.setdefault("input", _primary_input or "")
+            context.setdefault("sys.query", context.get("input", ""))
+            context.setdefault("history", "")
             node_outputs = {}
+
+            # 可达性集合 (支持条件分支: 只执行匹配分支上的节点)
+            in_degree = {n["id"]: 0 for n in nodes}
+            for edge in edges:
+                if edge.get("target") in in_degree:
+                    in_degree[edge["target"]] += 1
+            reachable = {nid for nid, deg in in_degree.items() if deg == 0}
 
             for node in ordered:
                 node_id = node["id"]
                 node_type = node.get("type", "text")
                 node_data = node.get("data", {})
                 config = node_data.get("config", {})
+                label = node_data.get("label", node_id)
+
+                # 条件分支: 不在匹配路径上的节点跳过
+                if node_id not in reachable:
+                    continue
 
                 # ── 暂停检查 (人机交互) ──
                 await db.refresh(execution)
@@ -105,7 +126,7 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
                 node_states[node_id] = {
                     "status": "running",
                     "started_at": datetime.now(timezone.utc).isoformat(),
-                    "label": node_data.get("label", node_id),
+                    "label": label,
                     "type": node_type,
                 }
                 execution.node_states = node_states
@@ -113,9 +134,32 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
                 await db.commit()
 
                 try:
-                    output = await _execute_node(node_type, config, context, user, node_outputs)
+                    # 条件分支节点: 评估各 case, 取匹配分支 id (用于路由)
+                    matched_case_id = None
+                    if node_type == "condition" and config.get("cases"):
+                        matched_case_id, case_name = _evaluate_condition_cases(config, context)
+                        output = case_name
+                    else:
+                        output = await _execute_node(node_type, config, context, user, node_outputs, label=label)
                     node_outputs[node_id] = output
+                    # 按节点 id + label 都存, 支持引用 {label} / {node_id}; @content 为别名
                     context[node_id] = output
+                    context[label] = output
+                    context[f"{label}@content"] = output
+                    context[f"{node_id}@content"] = output
+
+                    # 标记下游可达 (条件节点只标记匹配分支)
+                    out_edges = [e for e in edges if e.get("source") == node_id]
+                    if matched_case_id is not None:
+                        for e in out_edges:
+                            sh = e.get("sourceHandle")
+                            if sh == matched_case_id or (
+                                matched_case_id == "default" and sh in (None, "", "default")
+                            ):
+                                reachable.add(e.get("target"))
+                    else:
+                        for e in out_edges:
+                            reachable.add(e.get("target"))
 
                     # 更新节点状态为成功
                     node_states = dict(execution.node_states or {})
@@ -125,6 +169,8 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
                         "output": output if isinstance(output, str) else str(output),
                         "ended_at": datetime.now(timezone.utc).isoformat(),
                     }
+                    if matched_case_id is not None:
+                        node_states[node_id]["matched_case"] = matched_case_id
                     execution.node_states = node_states
                     flag_modified(execution, "node_states")
                     await db.commit()
@@ -204,17 +250,23 @@ async def _execute_node(
     context: dict,
     user=None,
     node_outputs: dict | None = None,
+    label: str = "",
 ) -> str:
     """执行单个节点, 返回输出文本。
 
     Args:
-        node_type: llm / retrieval / condition / text / notify / memory
+        node_type: start / end / llm / retrieval / condition / text / notify / memory
         config: 节点配置 (从 dag.data.config 读取)
-        context: 累积上下文 (所有上游节点输出 + 初始输入)
+        context: 累积上下文 (按 节点id / label / 命名变量 存)
         user: User 对象 (LLM API Key)
         node_outputs: 已执行节点的输出 {node_id: output}
+        label: 当前节点 label (用于命名输出)
     """
-    if node_type == "llm":
+    if node_type == "start":
+        return _execute_start_node(config, context)
+    elif node_type == "end":
+        return _execute_end_node(config, context, node_outputs)
+    elif node_type == "llm":
         return await _execute_llm_node(config, context, user)
     elif node_type == "retrieval":
         return await _execute_retrieval_node(config, context)
@@ -231,6 +283,47 @@ async def _execute_node(
         return _execute_text_node(config, context)
 
 
+def _execute_start_node(config: dict, context: dict) -> str:
+    """开始节点: 输出执行输入。
+
+    支持命名输入 (config.inputs = [{name, value}]): 把每个命名变量写入 context,
+    供下游用 {name} 引用。主输出 = {input}/{sys.query}。
+    """
+    inputs = config.get("inputs")
+    if isinstance(inputs, list):
+        for inp in inputs:
+            if not isinstance(inp, dict):
+                continue
+            name = inp.get("name") or "input"
+            # 不覆盖已存在的值 (如对话模式下由用户消息注入的命名输入)
+            if context.get(name):
+                continue
+            value = inp.get("value") or ""
+            context[name] = value
+            context[f"start@{name}"] = value
+            # 若尚未设置 input, 用首个命名输入填充
+            if not context.get("input"):
+                context["input"] = value
+                context["sys.query"] = value
+    return context.get("input", "")
+
+
+def _execute_end_node(config: dict, context: dict, node_outputs: dict | None) -> str:
+    """结束节点: 输出「选择的变量」; 未配置则取最后一个上游节点输出 (工作流最终结果)。"""
+    out_ref = (config.get("output") or "").strip()
+    if out_ref:
+        # 支持纯变量名 (如 "LLM"/"input"/"query") 或 {var} 形式
+        if out_ref in context:
+            return _unwrap(context[out_ref])
+        rendered = _render_template(out_ref, context)
+        if rendered.strip():
+            return rendered
+    if node_outputs:
+        last = next(reversed(node_outputs))
+        return node_outputs[last]
+    return context.get("input", "")
+
+
 async def _execute_llm_node(config: dict, context: dict, user=None) -> str:
     """LLM 对话节点。
 
@@ -245,6 +338,10 @@ async def _execute_llm_node(config: dict, context: dict, user=None) -> str:
 
     # 模板替换: {var} → context 中的值
     user_content = _render_template(user_template, context)
+
+    # 兜底: 渲染为空时 (未填输入 / 模板变量未匹配), 用执行输入; 仍空则占位 — 避免空 prompt 400
+    if not user_content.strip():
+        user_content = context.get("input") or context.get("sys.query") or "(空输入，请在开始节点或对话中提供输入)"
 
     messages = []
     if system_prompt:
@@ -287,35 +384,64 @@ async def _execute_retrieval_node(config: dict, context: dict) -> str:
 
 
 async def _execute_condition_node(config: dict, context: dict) -> str:
-    """条件分支节点。
-
-    评估表达式, 返回 "true" 或 "false", 用于下游边的选择。
-    (简化: 表达式为 {var} == "value" 格式)
-
-    config:
-      - expression: 条件表达式 (如 "{input} == '是'")
-    """
+    """条件节点 (无 cases 的旧式单表达式): 评估 expression, 返回 "true"/"false"。"""
     expression = config.get("expression", "true")
     rendered = _render_template(expression, context).strip()
+    return "true" if _eval_expression(rendered) else "false"
 
-    # 简单条件评估: 支持 == 和 != 和 contains
+
+def _eval_expression(rendered: str) -> bool:
+    """评估已渲染的条件表达式。支持 == != > >= < <= contains。"""
+    rendered = rendered.strip()
+    if not rendered:
+        return False
     try:
-        if "==" in rendered:
-            left, right = rendered.split("==", 1)
-            result = left.strip() == right.strip().strip("'\"")
-        elif "!=" in rendered:
-            left, right = rendered.split("!=", 1)
-            result = left.strip() != right.strip().strip("'\"")
-        elif "contains" in rendered:
+        for op in (">=", "<=", "==", "!=", ">", "<"):
+            if op in rendered:
+                left, right = rendered.split(op, 1)
+                l, r = left.strip(), right.strip().strip("'\"")
+                if op == "==":
+                    return l == r
+                if op == "!=":
+                    return l != r
+                # 数值比较
+                try:
+                    lf, rf = float(l), float(r)
+                except ValueError:
+                    return False
+                if op == ">":
+                    return lf > rf
+                if op == "<":
+                    return lf < rf
+                if op == ">=":
+                    return lf >= rf
+                if op == "<=":
+                    return lf <= rf
+        if "contains" in rendered:
             parts = rendered.split("contains", 1)
-            result = parts[1].strip().strip("'\"") in parts[0].strip()
-        else:
-            # 非空即为 true
-            result = bool(rendered)
+            return parts[1].strip().strip("'\"") in parts[0].strip()
+        # 非空即为 true
+        return bool(rendered) and rendered.lower() not in ("false", "0", "no", "否", "空")
     except Exception:
-        result = False
+        return False
 
-    return "true" if result else "false"
+
+def _evaluate_condition_cases(config: dict, context: dict) -> tuple[str, str]:
+    """评估多条件分支, 返回 (匹配 case id, case 名称); 都不匹配则返回默认分支。
+
+    config.cases = [{id, name, expression}, ...] (按顺序匹配, 首个为真即命中)。
+    """
+    cases = config.get("cases") or []
+    for case in cases:
+        expr = case.get("expression", "")
+        rendered = _render_template(expr, context).strip()
+        if _eval_expression(rendered):
+            cid = case.get("id") or case.get("name") or "case"
+            return cid, case.get("name", cid)
+    # 默认分支
+    default_name = config.get("default_name", "默认")
+    return "default", default_name
+
 
 
 def _execute_text_node(config: dict, context: dict) -> str:
@@ -329,24 +455,52 @@ def _execute_text_node(config: dict, context: dict) -> str:
 
 
 def _render_template(template: str, context: dict) -> str:
-    """渲染模板: 替换 {var} 为 context 中的值。
+    """渲染模板: 替换 {var} 为 context 中的值 (RAGFlow 式变量引用)。
 
-    支持嵌套: {node-1.output} → context["node-1"]
-    支持特殊键: {input} → context.get("input", "")
+    支持的引用形式:
+      - {input} / {sys.query} : 执行输入 (对话模式下为用户消息)
+      - {history}             : 对话历史 (多轮)
+      - {env.NAME}            : 环境变量
+      - {NodeLabel}           : 上游节点的主输出 (按节点名引用, 不再用内部 id)
+      - {NodeLabel@content}   : 上游节点输出的别名
+      - {name}                : 开始节点定义的命名输入变量
     """
     if not template:
         return ""
 
+    def resolve(key: str) -> str:
+        key = key.strip()
+        if not key:
+            return ""
+        # env.NAME
+        if key.startswith("env."):
+            import os
+            return os.environ.get(key[4:], "")
+        # 直接命中 (含 @content 别名 / 命名变量 / label / input / sys.query / history)
+        if key in context:
+            return _unwrap(context[key])
+        # {label@var}: 拆分后尝试 var 名与 label
+        if "@" in key:
+            label_part, var_part = key.split("@", 1)
+            for cand in (f"{label_part}@{var_part}", var_part, label_part, f"{var_part}@content"):
+                if cand in context:
+                    return _unwrap(context[cand])
+            return ""
+        return ""
+
     def replacer(match):
-        key = match.group(1)
-        # 支持 key.subkey 格式 (取 context[key] 的前100字符)
-        main_key = key.split(".")[0]
-        value = context.get(main_key, context.get(key, ""))
-        if isinstance(value, dict):
-            return str(value.get("output", value))
-        return str(value)
+        return resolve(match.group(1))
 
     return re.sub(r"\{([^}]+)\}", replacer, template)
+
+
+def _unwrap(value) -> str:
+    """把上下文值解包为字符串 (dict 取 output/content, None→空)。"""
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        return str(value.get("output") or value.get("content") or "")
+    return str(value)
 
 
 # ── 推送节点 (M4) ──

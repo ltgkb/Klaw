@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from "react-router-dom"
-import { LayoutDashboard, BookOpen, Workflow, Settings, Clock, Brain, LogOut } from "lucide-react"
+import { LayoutDashboard, BookOpen, Workflow, Settings, Clock, Brain, LogOut, Bot } from "lucide-react"
 import { useAuthStore } from "@/store/auth"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -8,6 +8,7 @@ const navItems = [
   { to: "/", label: "仪表盘", icon: LayoutDashboard },
   { to: "/kb", label: "知识库", icon: BookOpen },
   { to: "/flows", label: "Agent 画布", icon: Workflow },
+  { to: "/agents", label: "对话 Agent", icon: Bot },
   { to: "/schedules", label: "定时任务", icon: Clock },
   { to: "/memories", label: "记忆系统", icon: Brain },
   { to: "/settings", label: "系统配置", icon: Settings },

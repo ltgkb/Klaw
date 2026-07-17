@@ -162,7 +162,7 @@ export type TriggerType = "manual" | "scheduled" | "webhook"
 export type ExecutionStatus = "pending" | "running" | "paused" | "success" | "failed" | "cancelled"
 
 /** XYFlow 节点类型 */
-export type NodeType = "llm" | "retrieval" | "condition" | "text" | "notify" | "memory"
+export type NodeType = "start" | "end" | "llm" | "retrieval" | "condition" | "text" | "notify" | "memory"
 
 /** XYFlow 兼容的 DAG 格式 */
 export interface FlowDag {
@@ -329,8 +329,8 @@ export const memoryApi = {
   update: (id: string, data: { value: Record<string, unknown> }) =>
     api.put<MemoryRead>(`/memories/${id}`, data),
   delete: (id: string) => api.delete(`/memories/${id}`),
-  search: (query: string) =>
-    api.get<MemoryRead[]>("/memories/search", { data: { query } }),
+  search: (q: string, params?: { top_k?: number; session_id?: string }) =>
+    api.get<MemoryRead[]>("/memories/search", { params: { q, ...params } }),
 }
 
 // ── 定时任务 API (M4) ──
@@ -381,6 +381,134 @@ export interface NotifyResponse {
 }
 
 export const notifyApi = {
-  send: (data: { title: string; content: string; channels: NotifyChannelConfig[] }) =>
+  send: (data: { title: string; content: string; channels: NotifyChannelConfig[]; channel_ids?: string[] }) =>
     api.post<NotifyResponse>("/notifications/send", data),
+}
+
+// ── 用户 API (API Key 管理) ──
+
+export const userApi = {
+  updateMe: (data: { name?: string; openai_api_key?: string; openclaw_config?: Record<string, unknown> }) =>
+    api.put<UserRead>("/users/me", data),
+}
+
+// ── 系统配置 (embedding 模型 API 等, admin) ──
+
+export interface EmbeddingConfig {
+  base_url: string
+  model: string
+  has_key: boolean
+  configured: boolean
+  source: string // api / tei / hash
+}
+
+export const systemApi = {
+  getEmbedding: () => api.get<EmbeddingConfig>("/system/embedding-config"),
+  setEmbedding: (data: { base_url?: string; api_key?: string; model?: string }) =>
+    api.put<EmbeddingConfig>("/system/embedding-config", data),
+  getLlmDefault: () => api.get<{ default_model: string }>("/system/llm-config"),
+  setLlmDefault: (default_model: string) =>
+    api.put<{ default_model: string }>("/system/llm-config", { default_model }),
+}
+
+// ── 本地 Agent 工具 API (PRD 6.4) ──
+
+export interface ToolInfo {
+  id: string
+  name: string
+  description: string | null
+  source: string
+  parameters: Record<string, unknown> | null
+}
+
+export interface ToolCallResponse {
+  tool_id: string
+  success: boolean
+  result: unknown
+  error: string | null
+  source: string
+}
+
+export interface LocalAgentHealth {
+  openclaw: boolean
+  hermes: boolean
+  openclaw_url: string
+  hermes_url: string
+}
+
+export const localAgentApi = {
+  listTools: () => api.get<ToolInfo[]>("/local-agent/tools"),
+  callTool: (toolId: string, parameters: Record<string, unknown>) =>
+    api.post<ToolCallResponse>(`/local-agent/tools/${toolId}/call`, { parameters }),
+  health: () => api.get<LocalAgentHealth>("/local-agent/health"),
+}
+
+// ── 文件工作区 API (PRD 6.7) ──
+
+export interface WorkspaceFile {
+  id: string
+  filename: string
+  file_size: number
+  content_type: string
+  created_at: string
+}
+
+export interface FileShare {
+  url: string
+  expires_hours: number
+}
+
+export const fileApi = {
+  list: () => api.get<WorkspaceFile[]>("/files"),
+  upload: (file: File) => {
+    const formData = new FormData()
+    formData.append("file", file)
+    return api.post<WorkspaceFile>("/files", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    })
+  },
+  downloadUrl: (id: string) => `/api/v1/files/${id}`,
+  delete: (id: string) => api.delete(`/files/${id}`),
+  share: (id: string) => api.get<FileShare>(`/files/${id}/share`),
+}
+
+// ── 推送渠道配置 API (PRD 6.6) ──
+
+export type PushChannelType = "feishu" | "wechat" | "telegram" | "hermes"
+
+export interface PushChannelRead {
+  id: string
+  name: string
+  type: PushChannelType
+  config: Record<string, string | null>
+  created_at: string
+}
+
+export const pushChannelApi = {
+  list: () => api.get<PushChannelRead[]>("/push/channels"),
+  create: (data: {
+    name: string
+    type: PushChannelType
+    config: { webhook_url?: string; bot_token?: string; chat_id?: string; channel?: string }
+  }) => api.post<PushChannelRead>("/push/channels", data),
+  delete: (id: string) => api.delete(`/push/channels/${id}`),
+}
+
+// ── 对话式 Agent API ──
+
+export interface ConversationMessage {
+  id: string
+  role: "user" | "assistant"
+  content: string
+  created_at: string
+}
+
+export const chatApi = {
+  messages: (flowId: string) => api.get<ConversationMessage[]>(`/agent-flows/${flowId}/chat/messages`),
+  /** 发起一轮对话 (异步触发, 返回 execution_id; 需轮询 messages 获取回答) */
+  send: (flowId: string, message: string) =>
+    api.post<{ execution_id: string; conversation_id: string; status: string }>(
+      `/agent-flows/${flowId}/chat`,
+      { message },
+    ),
 }

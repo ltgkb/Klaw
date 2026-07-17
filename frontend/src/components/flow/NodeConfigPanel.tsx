@@ -1,5 +1,6 @@
-import { Brain, Database, GitBranch, Type, Bell, BrainCog, Trash2, Plus, X } from "lucide-react"
-import type { NodeType } from "@/lib/api"
+import { useEffect, useRef, useState } from "react"
+import { Brain, Database, GitBranch, Type, Bell, BrainCog, Trash2, Plus, X, Play, Square } from "lucide-react"
+import { providerApi, type NodeType, type ModelInfo } from "@/lib/api"
 import type { Node } from "@xyflow/react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -8,6 +9,8 @@ import { cn } from "@/lib/utils"
 import type { FlowNodeData } from "@/components/flow/nodes"
 
 const NODE_ICONS: Record<NodeType, typeof Brain> = {
+  start: Play,
+  end: Square,
   llm: Brain,
   retrieval: Database,
   condition: GitBranch,
@@ -17,6 +20,8 @@ const NODE_ICONS: Record<NodeType, typeof Brain> = {
 }
 
 const NODE_LABELS: Record<NodeType, string> = {
+  start: "开始",
+  end: "结束",
   llm: "LLM 对话",
   retrieval: "知识库检索",
   condition: "条件分支",
@@ -25,13 +30,116 @@ const NODE_LABELS: Record<NodeType, string> = {
   memory: "记忆读写",
 }
 
+/** 模型选择器: 从 /providers/models 拉取真实模型列表 */
+function ModelSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [models, setModels] = useState<ModelInfo[]>([])
+  const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => {
+    providerApi
+      .listModels()
+      .then((r) => setModels(r.data))
+      .catch(() => setModels([]))
+      .finally(() => setLoaded(true))
+  }, [])
+
+  // 当前值不在列表里也保留显示
+  const options = [{ id: "default", name: "default (Kaiweb 优先)", provider: "auto" }, ...models]
+  if (value && !options.some((m) => m.id === value)) {
+    options.unshift({ id: value, name: value, provider: "自定义" })
+  }
+
+  return (
+    <>
+      <select
+        id="llm-model"
+        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
+        value={value || "default"}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {!loaded && <option value="default">加载模型中…</option>}
+        {options.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.name} ({m.provider})
+          </option>
+        ))}
+      </select>
+      <p className="text-xs text-muted-foreground">
+        default → Kaiweb → OpenClaw → OpenAI → Anthropic fallback
+      </p>
+    </>
+  )
+}
+
 interface Props {
   node: Node | null
+  allNodes?: Node[]
   onChange: (id: string, data: Partial<Node["data"]>) => void
   onDelete: (id: string) => void
 }
 
-export function NodeConfigPanel({ node, onChange, onDelete }: Props) {
+/** 变量选项 */
+interface VarOpt {
+  token: string
+  label: string
+}
+
+/** 变量选择器: 按钮弹下拉, 列出可引用变量, 选中后插入到模板。
+ *  下拉用 fixed 定位, 避免被配置面板的 overflow-auto 裁切。 */
+function VarPicker({ vars, onInsert }: { vars: VarOpt[]; onInsert: (token: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState({ x: 0, y: 0 })
+  const btnRef = useRef<HTMLButtonElement | null>(null)
+  if (vars.length === 0) return null
+
+  const toggle = () => {
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect()
+      // 下拉向左展开 (宽 208px), 避免超出右边界
+      setPos({ x: Math.max(8, r.right - 208), y: r.bottom + 4 })
+    }
+    setOpen((o) => !o)
+  }
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        className="inline-flex h-8 items-center gap-1 rounded-md border border-input bg-background px-2 text-xs hover:bg-accent"
+        onClick={toggle}
+      >
+        <Plus className="h-3 w-3" />
+        插入变量
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div
+            className="fixed z-50 max-h-60 w-52 overflow-auto rounded-md border bg-background p-1 shadow-lg"
+            style={{ top: pos.y, left: pos.x }}
+          >
+            {vars.map((v) => (
+              <button
+                key={v.token}
+                type="button"
+                className="block w-full rounded px-2 py-1 text-left text-xs hover:bg-accent"
+                onClick={() => {
+                  onInsert(v.token)
+                  setOpen(false)
+                }}
+              >
+                {v.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </>
+  )
+}
+
+export function NodeConfigPanel({ node, allNodes = [], onChange, onDelete }: Props) {
   if (!node) {
     return (
       <div className="flex h-full flex-col items-center justify-center p-6 text-center">
@@ -56,6 +164,33 @@ export function NodeConfigPanel({ node, onChange, onDelete }: Props) {
       config: { ...config, [key]: value },
     })
   }
+
+  // 在某个模板字段末尾追加变量 token
+  const insertVar = (key: string, token: string) => {
+    const cur = (config[key as keyof typeof config] as string) || ""
+    updateConfig(key, cur + token)
+  }
+
+  // 可引用变量: 系统变量 + 各节点输出(按 label) + 开始节点命名输入
+  const availableVars: VarOpt[] = [
+    { token: "{input}", label: "{input} 执行输入" },
+    { token: "{sys.query}", label: "{sys.query} 用户消息" },
+    { token: "{history}", label: "{history} 对话历史" },
+    ...allNodes
+      .filter((n) => n.id !== node.id)
+      .map((n) => ({
+        token: `{${(n.data as { label?: string }).label || n.id}}`,
+        label: `{${(n.data as { label?: string }).label || n.id}} 节点输出`,
+      })),
+    ...allNodes
+      .filter((n) => n.type === "start")
+      .flatMap((n) => {
+        const inputs = (n.data as { config?: { inputs?: { name?: string }[] } }).config?.inputs || []
+        return inputs
+          .filter((i) => i.name)
+          .map((i) => ({ token: `{${i.name}}`, label: `{${i.name}} 开始输入` }))
+      }),
+  ]
 
   const updateLabel = (label: string) => {
     onChange(node.id, { ...nodeData, label })
@@ -84,19 +219,110 @@ export function NodeConfigPanel({ node, onChange, onDelete }: Props) {
         </div>
 
         {/* 节点类型特定配置 */}
+        {nodeType === "start" && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label>输入变量</Label>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => {
+                  const inputs = [...((config.inputs as { name: string; value: string; type?: string }[]) || []), { name: "", value: "", type: "string" }]
+                  updateConfig("inputs", inputs)
+                }}
+              >
+                <Plus className="h-3 w-3" /> 添加输入
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              定义工作流输入变量。下游可用 {`{变量名}`} 引用；留空则用执行时的 {`{input}`}。
+            </p>
+            <div className="space-y-2">
+              {(((config.inputs as { name: string; value: string }[]) || []).length === 0) && (
+                <p className="rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground">
+                  未定义输入变量，将使用执行输入 {`{input}`}。
+                </p>
+              )}
+              {((config.inputs as { name: string; value: string; type?: string }[]) || []).map((inp, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <Input
+                    className="h-8 w-28 text-xs"
+                    placeholder="变量名(如 query)"
+                    value={inp.name}
+                    onChange={(e) => {
+                      const inputs = [...((config.inputs as { name: string; value: string; type?: string }[]) || [])]
+                      inputs[i] = { ...inp, name: e.target.value }
+                      updateConfig("inputs", inputs)
+                    }}
+                  />
+                  <select
+                    className="h-8 w-24 rounded-md border border-input bg-background px-1 text-xs"
+                    value={inp.type || "string"}
+                    onChange={(e) => {
+                      const inputs = [...((config.inputs as { name: string; value: string; type?: string }[]) || [])]
+                      inputs[i] = { ...inp, type: e.target.value }
+                      updateConfig("inputs", inputs)
+                    }}
+                  >
+                    <option value="string">字符串</option>
+                    <option value="text">长文本</option>
+                    <option value="integer">整数</option>
+                    <option value="float">小数</option>
+                    <option value="bool">布尔</option>
+                  </select>
+                  <Input
+                    className="h-8 flex-1 text-xs"
+                    placeholder="默认值(可空, 对话时由用户消息填充)"
+                    value={inp.value}
+                    onChange={(e) => {
+                      const inputs = [...((config.inputs as { name: string; value: string; type?: string }[]) || [])]
+                      inputs[i] = { ...inp, value: e.target.value }
+                      updateConfig("inputs", inputs)
+                    }}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 px-2"
+                    onClick={() => {
+                      const inputs = [...((config.inputs as { name: string; value: string; type?: string }[]) || [])]
+                      inputs.splice(i, 1)
+                      updateConfig("inputs", inputs)
+                    }}
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {nodeType === "end" && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="end-output">输出变量</Label>
+              <VarPicker vars={availableVars} onInsert={(t) => updateConfig("output", t.replace(/^\{|\}$/g, ""))} />
+            </div>
+            <Input
+              id="end-output"
+              value={(config.output as string) || ""}
+              onChange={(e) => updateConfig("output", e.target.value)}
+              placeholder="选择要输出的变量, 如 LLM / input / query; 留空取最后节点输出"
+            />
+            <p className="text-xs text-muted-foreground">
+              工作流最终结果 = 此变量的值。点右上角插入变量; 对话 Agent 的回答即取自此。
+            </p>
+          </div>
+        )}
         {nodeType === "llm" && (
           <>
             <div className="space-y-2">
               <Label htmlFor="llm-model">模型</Label>
-              <Input
-                id="llm-model"
-                value={(config.model as string) || ""}
-                onChange={(e) => updateConfig("model", e.target.value)}
-                placeholder="default (OpenClaw 优先)"
+              <ModelSelect
+                value={(config.model as string) || "default"}
+                onChange={(v) => updateConfig("model", v)}
               />
-              <p className="text-xs text-muted-foreground">
-                default → OpenClaw → OpenAI → Anthropic fallback
-              </p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="llm-system">系统提示词</Label>
@@ -113,7 +339,10 @@ export function NodeConfigPanel({ node, onChange, onDelete }: Props) {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="llm-user">用户消息模板</Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="llm-user">用户消息模板</Label>
+                <VarPicker vars={availableVars} onInsert={(t) => insertVar("user_template", t)} />
+              </div>
               <textarea
                 id="llm-user"
                 className={cn(
@@ -123,10 +352,10 @@ export function NodeConfigPanel({ node, onChange, onDelete }: Props) {
                 )}
                 value={(config.user_template as string) || ""}
                 onChange={(e) => updateConfig("user_template", e.target.value)}
-                placeholder="问题: {input} / 上游: {node-1}"
+                placeholder="用 {节点名} 引用上游输出, {input} 引用输入; 可点右上角插入变量"
               />
               <p className="text-xs text-muted-foreground">
-                {"{node_id} 引用上游节点输出, {input} 引用执行输入"}
+                {`{节点名} 引用上游节点输出, {input}/{sys.query} 引用输入, {history} 引用对话历史`}
               </p>
             </div>
           </>
@@ -147,7 +376,10 @@ export function NodeConfigPanel({ node, onChange, onDelete }: Props) {
               </p>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="ret-query">查询模板</Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="ret-query">查询模板</Label>
+                <VarPicker vars={availableVars} onInsert={(t) => insertVar("query_template", t)} />
+              </div>
               <Input
                 id="ret-query"
                 value={(config.query_template as string) || ""}
@@ -170,23 +402,98 @@ export function NodeConfigPanel({ node, onChange, onDelete }: Props) {
         )}
 
         {nodeType === "condition" && (
-          <div className="space-y-2">
-            <Label htmlFor="cond-expr">条件表达式</Label>
-            <Input
-              id="cond-expr"
-              value={(config.expression as string) || ""}
-              onChange={(e) => updateConfig("expression", e.target.value)}
-              placeholder="{input} == '是'"
-            />
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <Label>分支条件</Label>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => {
+                  const cases = [
+                    ...((config.cases as { id: string; name: string; expression: string }[]) || []),
+                    { id: `case${Date.now()}`, name: `条件${(((config.cases as unknown[]) || []).length) + 1}`, expression: "" },
+                  ]
+                  updateConfig("cases", cases)
+                }}
+              >
+                <Plus className="h-3 w-3" /> 添加条件
+              </Button>
+            </div>
             <p className="text-xs text-muted-foreground">
-              支持 == / != / contains, 变量用 {"{node_id}"} 引用
+              按顺序匹配，首个为真的分支被执行。从节点右侧对应分支连线到下游；都不满足走「默认」分支。
+              支持 == != &gt; &gt;= &lt; &lt;= contains。
             </p>
+            <div className="space-y-2">
+              {(((config.cases as { id: string; name: string; expression: string }[]) || []).length === 0) && (
+                <p className="rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground">
+                  未添加条件，将直接走默认分支。
+                </p>
+              )}
+              {((config.cases as { id: string; name: string; expression: string }[]) || []).map((c, i) => (
+                <div key={c.id || i} className="space-y-1.5 rounded-md border p-2">
+                  <div className="flex items-center gap-2">
+                    <Input
+                      className="h-8 flex-1 text-xs"
+                      placeholder="分支名 (如 高分)"
+                      value={c.name}
+                      onChange={(e) => {
+                        const cases = [...((config.cases as { id: string; name: string; expression: string }[]) || [])]
+                        cases[i] = { ...c, name: e.target.value }
+                        updateConfig("cases", cases)
+                      }}
+                    />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 px-2"
+                      onClick={() => {
+                        const cases = [...((config.cases as { id: string; name: string; expression: string }[]) || [])]
+                        cases.splice(i, 1)
+                        updateConfig("cases", cases)
+                      }}
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <VarPicker vars={availableVars} onInsert={(t) => {
+                      const cases = [...((config.cases as { id: string; name: string; expression: string }[]) || [])]
+                      cases[i] = { ...c, expression: (c.expression || "") + t }
+                      updateConfig("cases", cases)
+                    }} />
+                    <Input
+                      className="h-8 flex-1 text-xs"
+                      placeholder="{score} > 80"
+                      value={c.expression}
+                      onChange={(e) => {
+                        const cases = [...((config.cases as { id: string; name: string; expression: string }[]) || [])]
+                        cases[i] = { ...c, expression: e.target.value }
+                        updateConfig("cases", cases)
+                      }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="space-y-2">
+              <Label>默认分支名 (都不满足时)</Label>
+              <Input
+                className="h-8 text-xs"
+                value={(config.default_name as string) || ""}
+                onChange={(e) => updateConfig("default_name", e.target.value)}
+                placeholder="默认"
+              />
+            </div>
           </div>
         )}
 
         {nodeType === "text" && (
           <div className="space-y-2">
-            <Label htmlFor="text-tmpl">文本模板</Label>
+            <div className="flex items-center justify-between">
+              <Label htmlFor="text-tmpl">文本模板</Label>
+              <VarPicker vars={availableVars} onInsert={(t) => insertVar("template", t)} />
+            </div>
             <textarea
               id="text-tmpl"
               className={cn(
@@ -196,7 +503,7 @@ export function NodeConfigPanel({ node, onChange, onDelete }: Props) {
               )}
               value={(config.template as string) || ""}
               onChange={(e) => updateConfig("template", e.target.value)}
-              placeholder="拼接文本: {input} + {node-1}"
+              placeholder="拼接文本: {input} + {节点名}"
             />
             <p className="text-xs text-muted-foreground">
               {"{node_id} 引用上游节点输出, {input} 引用执行输入"}
@@ -249,6 +556,7 @@ export function NodeConfigPanel({ node, onChange, onDelete }: Props) {
                       <option value="feishu">飞书</option>
                       <option value="wechat">企业微信</option>
                       <option value="telegram">Telegram</option>
+                      <option value="hermes">Hermes</option>
                     </select>
                     <Button
                       variant="ghost"
@@ -286,6 +594,17 @@ export function NodeConfigPanel({ node, onChange, onDelete }: Props) {
                         placeholder="Chat ID"
                       />
                     </>
+                  ) : ch.type === "hermes" ? (
+                    <Input
+                      className="h-8 text-xs"
+                      value={ch.channel || ""}
+                      onChange={(e) => {
+                        const channels = [...((config.channels as Array<Record<string, string>>) || [])]
+                        channels[i] = { ...ch, channel: e.target.value }
+                        updateConfig("channels", channels)
+                      }}
+                      placeholder="Hermes channel"
+                    />
                   ) : (
                     <Input
                       className="h-8 text-xs"

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react"
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type MouseEvent } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import {
   ReactFlow,
@@ -9,9 +9,13 @@ import {
   addEdge,
   useNodesState,
   useEdgesState,
+  useReactFlow,
   type Connection,
   type Node,
   type Edge,
+  type NodeTypes,
+  type OnConnectStart,
+  type OnConnectEnd,
   BackgroundVariant,
 } from "@xyflow/react"
 import "@xyflow/react/dist/style.css"
@@ -21,13 +25,22 @@ import {
   Play,
   Loader2,
   History,
+  Download,
+  Upload,
+  Brain,
+  Database,
+  GitBranch,
+  Type,
+  Bell,
+  BrainCog,
+  Square,
 } from "lucide-react"
-import { flowApi, type FlowRead, type NodeType, type ExecutionRead, type NodeState } from "@/lib/api"
+import { flowApi, systemApi, type FlowRead, type NodeType, type ExecutionRead, type NodeState } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { NodeToolbox } from "@/components/flow/NodeToolbox"
 import { NodeConfigPanel } from "@/components/flow/NodeConfigPanel"
-import { nodeTypes } from "@/components/flow/nodes"
+import { nodeTypes, edgeTypes } from "@/components/flow/nodes"
 import { cn } from "@/lib/utils"
 
 let nodeIdCounter = 0
@@ -37,15 +50,19 @@ function genNodeId() {
 }
 
 const DEFAULT_CONFIGS: Record<NodeType, Record<string, unknown>> = {
+  start: { template: "{input}" },
+  end: { template: "" },
   llm: { model: "default", system_prompt: "", user_template: "{input}" },
   retrieval: { kb_id: "", query_template: "{input}", top_k: 5 },
-  condition: { expression: "{input} == ''" },
+  condition: { cases: [{ id: "case1", name: "条件1", expression: "{input} == ''" }], default_name: "默认" },
   text: { template: "" },
   notify: { title_template: "Agent 通知", content_template: "{input}", channels: [] },
   memory: { action: "save", key: "", value_template: "{input}", session_id: "" },
 }
 
 const NODE_LABELS: Record<NodeType, string> = {
+  start: "开始",
+  end: "结束",
   llm: "LLM 对话",
   retrieval: "知识库检索",
   condition: "条件分支",
@@ -53,6 +70,17 @@ const NODE_LABELS: Record<NodeType, string> = {
   notify: "消息推送",
   memory: "记忆读写",
 }
+
+// 拖线弹出菜单可添加的节点 (不含 start, start 是入口)
+const ADDABLE_TYPES: { type: NodeType; label: string; icon: typeof Brain }[] = [
+  { type: "end", label: "结束", icon: Square },
+  { type: "llm", label: "LLM 对话", icon: Brain },
+  { type: "retrieval", label: "知识库检索", icon: Database },
+  { type: "condition", label: "条件分支", icon: GitBranch },
+  { type: "text", label: "文本拼接", icon: Type },
+  { type: "notify", label: "消息推送", icon: Bell },
+  { type: "memory", label: "记忆读写", icon: BrainCog },
+]
 
 function FlowCanvasInner() {
   const { flowId } = useParams<{ flowId: string }>()
@@ -75,6 +103,18 @@ function FlowCanvasInner() {
   const [execution, setExecution] = useState<ExecutionRead | null>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
 
+  // 系统默认 LLM 模型 (新建 LLM 节点默认使用)
+  const [defaultLlmModel, setDefaultLlmModel] = useState("")
+  useEffect(() => {
+    systemApi.getLlmDefault().then((r) => setDefaultLlmModel(r.data.default_model || "")).catch(() => {})
+  }, [])
+
+  // 拖线弹出节点菜单
+  const { screenToFlowPosition } = useReactFlow()
+  const connectingNodeId = useRef<string | null>(null)
+  const [addMenu, setAddMenu] = useState<{ open: boolean; x: number; y: number }>({ open: false, x: 0, y: 0 })
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+
   // ── 加载工作流 ──
   const fetchFlow = useCallback(async () => {
     if (!flowId) return
@@ -85,7 +125,7 @@ function FlowCanvasInner() {
       const dag = resp.data.dag || { nodes: [], edges: [] }
       // 转换为 XYFlow 格式 (后端节点 data 里没有 nodeState)
       setNodes(dag.nodes.map((n) => ({ ...n })) as Node[])
-      setEdges(dag.edges.map((e) => ({ ...e })) as Edge[])
+      setEdges(dag.edges.map((e) => ({ ...e, type: "deletable" })) as Edge[])
     } catch {
       // 错误由拦截器处理
     } finally {
@@ -107,6 +147,8 @@ function FlowCanvasInner() {
   // ── 添加节点 ──
   const handleAddNode = useCallback((type: NodeType) => {
     const id = genNodeId()
+    const config = { ...DEFAULT_CONFIGS[type] }
+    if (type === "llm" && defaultLlmModel) config.model = defaultLlmModel
     const newNode: Node = {
       id,
       type,
@@ -116,29 +158,83 @@ function FlowCanvasInner() {
       },
       data: {
         label: NODE_LABELS[type],
-        config: { ...DEFAULT_CONFIGS[type] },
+        config,
       },
     }
     setNodes((nds) => [...nds, newNode])
     setSelectedNodeId(id)
-  }, [setNodes])
+  }, [setNodes, defaultLlmModel])
 
   // ── 连线 ──
   const onConnect = useCallback(
     (connection: Connection) => {
-      setEdges((eds) => addEdge({ ...connection, id: `e-${connection.source}-${connection.target}` }, eds))
+      setEdges((eds) =>
+        addEdge({ ...connection, id: `e-${connection.source}-${connection.target}`, type: "deletable" }, eds),
+      )
     },
     [setEdges],
   )
 
+  // ── 拖线开始: 记录源节点 ──
+  const onConnectStart = useCallback<OnConnectStart>((_, { nodeId }) => {
+    connectingNodeId.current = nodeId
+  }, [])
+
+  // ── 拖线结束: 若松开在空白处, 弹出节点菜单 ──
+  const onConnectEnd = useCallback<OnConnectEnd>((event) => {
+    const sourceId = connectingNodeId.current
+    if (!sourceId) return
+    const target = event.target as HTMLElement | null
+    const isPane = !!target?.classList?.contains("react-flow__pane")
+    if (!isPane) {
+      connectingNodeId.current = null
+      return
+    }
+    const e = event as unknown as {
+      changedTouches?: { clientX: number; clientY: number }[]
+      clientX?: number
+      clientY?: number
+    }
+    const point =
+      e.changedTouches && e.changedTouches.length
+        ? { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY }
+        : { x: e.clientX ?? 0, y: e.clientY ?? 0 }
+    setAddMenu({ open: true, x: point.x, y: point.y })
+  }, [])
+
+  // ── 从菜单添加节点并自动连线 ──
+  const handleAddNodeFromMenu = useCallback((type: NodeType) => {
+    const sourceId = connectingNodeId.current
+    const position = screenToFlowPosition({ x: addMenu.x, y: addMenu.y })
+    const id = genNodeId()
+    const config = { ...DEFAULT_CONFIGS[type] }
+    if (type === "llm" && defaultLlmModel) config.model = defaultLlmModel
+    const newNode: Node = {
+      id,
+      type,
+      position,
+      data: { label: NODE_LABELS[type], config },
+    }
+    setNodes((nds) => [...nds, newNode])
+    if (sourceId) {
+      setEdges((eds) => addEdge({ source: sourceId, target: id, id: `e-${sourceId}-${id}`, type: "deletable" }, eds))
+    }
+    setSelectedNodeId(id)
+    setAddMenu({ open: false, x: 0, y: 0 })
+    connectingNodeId.current = null
+  }, [addMenu.x, addMenu.y, screenToFlowPosition, setEdges, setNodes, defaultLlmModel])
+
   // ── 选中节点 ──
   const onNodeClick = useCallback((_: MouseEvent, node: Node) => {
     setSelectedNodeId(node.id)
+    setAddMenu({ open: false, x: 0, y: 0 })
   }, [])
 
-  // ── 点击空白取消选中 ──
+  // ── 点击空白取消选中 + 关闭菜单 ──
   const onPaneClick = useCallback(() => {
     setSelectedNodeId(null)
+    setAddMenu({ open: false, x: 0, y: 0 })
+    connectingNodeId.current = null
   }, [])
 
   // ── 节点数据变更 ──
@@ -184,6 +280,90 @@ function FlowCanvasInner() {
     }
   }
 
+  // ── 导出画布为 JSON (对标 RAGFlow agent 导出) ──
+  const handleExport = () => {
+    const data = {
+      app: "claw-agent",
+      version: 1,
+      name: flow?.name || "agent",
+      exported_at: new Date().toISOString(),
+      nodes: nodes.map((n) => ({
+        id: n.id,
+        type: n.type as NodeType,
+        position: n.position,
+        data: {
+          label: (n.data as { label: string }).label,
+          config: (n.data as { config: Record<string, unknown> }).config,
+        },
+      })),
+      edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle ?? null })),
+    }
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `${flow?.name || "agent"}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  // ── 导入画布 JSON ──
+  const handleImportFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ""
+    if (!file || !flowId) return
+    const text = await file.text()
+    let parsed: { nodes?: Node[]; edges?: Edge[]; dag?: { nodes?: Node[]; edges?: Edge[] } }
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      alert("JSON 解析失败，请检查文件格式")
+      return
+    }
+    const impNodes = parsed.nodes || parsed.dag?.nodes || []
+    const impEdges = parsed.edges || parsed.dag?.edges || []
+    if (!impNodes.length) {
+      alert("文件中未找到节点")
+      return
+    }
+    // 重新生成节点 id, 避免与现有节点冲突; 重映射边
+    const idMap: Record<string, string> = {}
+    const newNodes: Node[] = impNodes.map((n) => {
+      const newId = genNodeId()
+      idMap[n.id] = newId
+      return { ...n, id: newId }
+    })
+    const newEdges: Edge[] = impEdges.map((edge) => {
+      const s = idMap[edge.source] || edge.source
+      const t = idMap[edge.target] || edge.target
+      return { ...edge, id: `e-${s}-${t}`, source: s, target: t }
+    })
+    setNodes(newNodes)
+    setEdges(newEdges)
+    // 自动保存
+    setSaving(true)
+    try {
+      const dag = {
+        nodes: newNodes.map((n) => ({
+          id: n.id,
+          type: n.type as NodeType,
+          position: n.position,
+          data: {
+            label: (n.data as { label: string }).label,
+            config: (n.data as { config: Record<string, unknown> }).config,
+          },
+        })),
+        edges: newEdges.map((edge) => ({ id: edge.id, source: edge.source, target: edge.target, sourceHandle: edge.sourceHandle ?? null })),
+      }
+      await flowApi.update(flowId, { dag })
+      await fetchFlow()
+    } catch {
+      // 错误由拦截器处理
+    } finally {
+      setSaving(false)
+    }
+  }
+
   // ── 执行工作流 ──
   const handleExecute = async () => {
     if (!flowId) return
@@ -197,7 +377,7 @@ function FlowCanvasInner() {
           position: n.position,
           data: { label: (n.data as { label: string }).label, config: (n.data as { config: Record<string, unknown> }).config },
         })),
-        edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
+        edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle ?? null })),
       }
       await flowApi.update(flowId, { dag })
     } catch {
@@ -209,7 +389,7 @@ function FlowCanvasInner() {
     setExecuting(true)
     setExecution(null)
     try {
-      // 解析执行输入 JSON
+      // 解析执行输入: 优先顶部输入框, 为空时取「开始」节点的命名输入变量
       let input: Record<string, unknown> = {}
       if (execInput.trim()) {
         try {
@@ -217,6 +397,19 @@ function FlowCanvasInner() {
         } catch {
           // 不是 JSON, 当作 {input: "text"}
           input = { input: execInput.trim() }
+        }
+      } else {
+        const startNode = nodes.find((n) => n.type === "start")
+        const inputs =
+          (startNode?.data as { config?: { inputs?: { name?: string; value?: string }[] } } | undefined)?.config
+            ?.inputs || []
+        if (inputs.length) {
+          for (const i of inputs) {
+            if (i.name) input[i.name] = i.value || ""
+          }
+          const firstVal = inputs.find((i) => i.value)?.value || ""
+          input["input"] = firstVal
+          input["sys.query"] = firstVal
         }
       }
       const resp = await flowApi.execute(flowId, input)
@@ -356,6 +549,27 @@ function FlowCanvasInner() {
           {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
           保存
         </Button>
+        <Button variant="outline" size="sm" onClick={handleExport} disabled={executing} title="导出画布 JSON">
+          <Download className="h-4 w-4" />
+          导出
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={executing || saving}
+          title="导入画布 JSON"
+        >
+          <Upload className="h-4 w-4" />
+          导入
+        </Button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={handleImportFile}
+        />
         <Button size="sm" onClick={handleExecute} disabled={executing || saving}>
           {executing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
           执行
@@ -398,9 +612,14 @@ function FlowCanvasInner() {
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
+            onConnectStart={onConnectStart}
+            onConnectEnd={onConnectEnd}
             onNodeClick={onNodeClick}
             onPaneClick={onPaneClick}
-            nodeTypes={nodeTypes}
+            nodeTypes={nodeTypes as unknown as NodeTypes}
+            edgeTypes={edgeTypes}
+            defaultEdgeOptions={{ type: "deletable" }}
+            deleteKeyCode={["Backspace", "Delete"]}
             fitView
             className="bg-secondary/10"
           >
@@ -417,12 +636,36 @@ function FlowCanvasInner() {
               }}
             />
           </ReactFlow>
+
+          {/* 拖线松开弹出的节点选择菜单 */}
+          {addMenu.open && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setAddMenu({ open: false, x: 0, y: 0 })} />
+              <div
+                className="fixed z-50 w-44 rounded-lg border bg-popover p-1 shadow-lg"
+                style={{ left: addMenu.x, top: addMenu.y }}
+              >
+                <p className="px-2 py-1 text-[11px] text-muted-foreground">添加并连接节点</p>
+                {ADDABLE_TYPES.map((item) => (
+                  <button
+                    key={item.type}
+                    onClick={() => handleAddNodeFromMenu(item.type)}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent"
+                  >
+                    <item.icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
         </div>
 
         {/* 右侧配置面板 */}
         <div className="w-72 border-l bg-background">
           <NodeConfigPanel
             node={selectedNode}
+            allNodes={nodes}
             onChange={handleNodeDataChange}
             onDelete={handleDeleteNode}
           />

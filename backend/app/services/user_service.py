@@ -55,11 +55,14 @@ def issue_tokens(user: User) -> tuple[str, str]:
 
 
 async def update_user(db: AsyncSession, user: User, data: UserUpdate) -> User:
-    """更新用户信息。API Key 加密后存储。"""
+    """更新用户信息。API Key 加密后存储。
+
+    openai_api_key: 传非空字符串 → 加密存储; 传空字符串 "" → 清除; None → 不变。
+    """
     if data.name is not None:
         user.name = data.name
     if data.openai_api_key is not None:
-        user.openai_api_key = encrypt(data.openai_api_key)
+        user.openai_api_key = encrypt(data.openai_api_key) if data.openai_api_key.strip() else None
     if data.openclaw_config is not None:
         user.openclaw_config = data.openclaw_config
     await db.commit()

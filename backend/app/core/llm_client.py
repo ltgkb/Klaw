@@ -42,7 +42,20 @@ async def chat(
     Returns:
         LLM 回复文本
     """
-    # 1. 尝试 OpenClaw (本地优先)
+    # 1. 尝试 Kaiweb (自建 OpenAI 兼容网关, 真实 LLM 优先)
+    if settings.kaiweb_api_key:
+        try:
+            result = await _call_openai_compatible(
+                messages, _resolve_kaiweb_model(model), settings.kaiweb_base_url, settings.kaiweb_api_key,
+                "kaiweb", temperature, max_tokens, timeout,
+            )
+            if result:
+                logger.info("LLM 调用成功: Kaiweb (model=%s)", model)
+                return result
+        except Exception as e:
+            logger.warning("Kaiweb 调用失败, 尝试 fallback: %s", e)
+
+    # 2. 尝试 OpenClaw (本地优先)
     try:
         result = await _call_openclaw(messages, model, temperature, max_tokens, timeout)
         if result:
@@ -51,7 +64,7 @@ async def chat(
     except Exception as e:
         logger.warning("OpenClaw 调用失败, 尝试 fallback: %s", e)
 
-    # 2. 尝试 OpenAI
+    # 3. 尝试 OpenAI
     openai_key = _get_openai_key(user)
     if openai_key:
         try:
@@ -62,7 +75,7 @@ async def chat(
         except Exception as e:
             logger.warning("OpenAI 调用失败, 尝试 fallback: %s", e)
 
-    # 3. 尝试 Anthropic
+    # 4. 尝试 Anthropic
     anthropic_key = settings.anthropic_api_key
     if anthropic_key:
         try:
@@ -73,7 +86,30 @@ async def chat(
         except Exception as e:
             logger.warning("Anthropic 调用失败: %s", e)
 
-    raise RuntimeError("所有 LLM 供应商均不可用。请检查 OpenClaw 服务状态或配置 API Key。")
+    # 5. dev 兜底: 所有真实供应商不可用时, 返回模板化回复 (仅开发环境)
+    if settings.environment == "dev":
+        logger.warning("所有真实 LLM 供应商不可用, dev 回退 mock 回复")
+        return _call_mock(messages, model)
+
+    raise RuntimeError("所有 LLM 供应商均不可用。请检查 Kaiweb/OpenClaw 服务状态或配置 API Key。")
+
+
+def _call_mock(messages: list[dict], model: str) -> str:
+    """dev 兜底 LLM: 基于最后一条用户消息生成模板化回复。
+
+    离线演示用, 保证工作流 LLM 节点可执行; 生产环境不应出现。
+    """
+    user_content = ""
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            user_content = msg.get("content", "")
+            break
+    preview = user_content[:200].replace("\n", " ")
+    return (
+        f"[Mock LLM · {model}] 已收到您的请求（离线兜底，非真实模型推理）。\n\n"
+        f"输入预览：{preview}\n\n"
+        "提示：配置 OpenAI/Anthropic API Key 或启动本地 OpenClaw 服务后，将获得真实模型回复。"
+    )
 
 
 def _get_openai_key(user) -> str:
@@ -118,12 +154,40 @@ async def _call_openai(
 ) -> str:
     """调用 OpenAI Chat Completions API。"""
     # 如果 model 是 "default" 或 OpenClaw 自定义名, 替换为 OpenAI 模型
-    if model in ("default", "openclaw", "hermes"):
+    if model in ("default", "openclaw", "hermes", "kaiweb", "mock"):
         model = "gpt-4o-mini"
 
+    return await _call_openai_compatible(
+        messages, model, "https://api.openai.com/v1", api_key,
+        "openai", temperature, max_tokens, timeout,
+    )
+
+
+def _resolve_kaiweb_model(model: str) -> str:
+    """将平台内部模型标识映射为 Kaiweb 网关实际可用的模型名。"""
+    if model in ("default", "openclaw", "hermes", "kaiweb", "mock", ""):
+        return settings.kaiweb_model
+    return model
+
+
+async def _call_openai_compatible(
+    messages: list[dict],
+    model: str,
+    base_url: str,
+    api_key: str,
+    provider: str,
+    temperature: float,
+    max_tokens: int,
+    timeout: float,
+) -> str:
+    """调用任意 OpenAI 兼容的 /v1/chat/completions 端点 (OpenAI / Kaiweb / 自建网关)。
+
+    兼容推理模型: 若 content 为空但 reasoning_content 有值 (finish_reason=length),
+    回退返回 reasoning_content, 避免被上层误判为失败。
+    """
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
-            "https://api.openai.com/v1/chat/completions",
+            f"{base_url.rstrip('/')}/chat/completions",
             headers={"Authorization": f"Bearer {api_key}"},
             json={
                 "model": model,
@@ -134,7 +198,13 @@ async def _call_openai(
         )
         resp.raise_for_status()
         data = resp.json()
-        return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        msg = data.get("choices", [{}])[0].get("message", {})
+        content = msg.get("content", "") or ""
+        if content:
+            return content
+        # 推理模型兜底: content 为空时返回 reasoning_content
+        reasoning = msg.get("reasoning_content", "") or ""
+        return reasoning
 
 
 async def _call_anthropic(
@@ -187,6 +257,21 @@ async def health_check() -> bool:
         return False
 
 
+async def kaiweb_health_check() -> bool:
+    """Kaiweb 网关连通性 + Key 有效性检查 (GET /v1/models)。"""
+    if not settings.kaiweb_api_key:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            resp = await client.get(
+                f"{settings.kaiweb_base_url.rstrip('/')}/models",
+                headers={"Authorization": f"Bearer {settings.kaiweb_api_key}"},
+            )
+            return resp.status_code < 400
+    except Exception:
+        return False
+
+
 async def chat_stream(
     messages: list[dict[str, str]],
     model: str = "default",
@@ -200,7 +285,19 @@ async def chat_stream(
     优先 OpenClaw SSE 流式, fallback 到 OpenAI 流式。
     如果流式不可用, 降级为非流式调用并一次性 yield 完整回复。
     """
-    # 1. 尝试 OpenClaw 流式
+    # 1. 尝试 Kaiweb 流式 (真实 LLM 优先)
+    if settings.kaiweb_api_key:
+        try:
+            async for chunk in _stream_openai_compatible(
+                messages, _resolve_kaiweb_model(model), settings.kaiweb_base_url, settings.kaiweb_api_key, "kaiweb",
+                temperature, max_tokens, timeout,
+            ):
+                yield chunk
+            return
+        except Exception as e:
+            logger.warning("Kaiweb 流式失败, 尝试 fallback: %s", e)
+
+    # 2. 尝试 OpenClaw 流式
     try:
         async for chunk in _stream_openclaw(messages, model, temperature, max_tokens, timeout):
             yield chunk
@@ -208,7 +305,7 @@ async def chat_stream(
     except Exception as e:
         logger.warning("OpenClaw 流式失败, 尝试 fallback: %s", e)
 
-    # 2. 尝试 OpenAI 流式
+    # 3. 尝试 OpenAI 流式
     openai_key = _get_openai_key(user)
     if openai_key:
         try:
@@ -218,7 +315,7 @@ async def chat_stream(
         except Exception as e:
             logger.warning("OpenAI 流式失败, 尝试非流式: %s", e)
 
-    # 3. 降级: 非流式调用, 一次性 yield
+    # 4. 降级: 非流式调用, 一次性 yield
     result = await chat(messages, model=model, user=user, temperature=temperature, max_tokens=max_tokens, timeout=timeout)
     yield result
 
@@ -264,13 +361,31 @@ async def _stream_openai(
     messages: list[dict], model: str, api_key: str, temperature: float, max_tokens: int, timeout: float
 ) -> AsyncGenerator[str, None]:
     """OpenAI SSE 流式调用。"""
-    if model in ("default", "openclaw", "hermes"):
+    if model in ("default", "openclaw", "hermes", "kaiweb", "mock"):
         model = "gpt-4o-mini"
 
+    async for chunk in _stream_openai_compatible(
+        messages, model, "https://api.openai.com/v1", api_key, "openai",
+        temperature, max_tokens, timeout,
+    ):
+        yield chunk
+
+
+async def _stream_openai_compatible(
+    messages: list[dict],
+    model: str,
+    base_url: str,
+    api_key: str,
+    provider: str,
+    temperature: float,
+    max_tokens: int,
+    timeout: float,
+) -> AsyncGenerator[str, None]:
+    """任意 OpenAI 兼容端点的 SSE 流式调用 (OpenAI / Kaiweb / 自建网关)。"""
     async with httpx.AsyncClient(timeout=timeout) as client:
         async with client.stream(
             "POST",
-            "https://api.openai.com/v1/chat/completions",
+            f"{base_url.rstrip('/')}/chat/completions",
             headers={"Authorization": f"Bearer {api_key}"},
             json={
                 "model": model,
@@ -297,7 +412,28 @@ async def _stream_openai(
 
 
 async def list_models() -> list[dict]:
-    """列出 OpenClaw 可用模型。失败返回预定义列表。"""
+    """列出可用模型。优先 Kaiweb (真实网关), 其次 OpenClaw, 最后预定义列表。"""
+    # 1. Kaiweb (配置 Key 时拉取真实模型列表)
+    if settings.kaiweb_api_key:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    f"{settings.kaiweb_base_url.rstrip('/')}/models",
+                    headers={"Authorization": f"Bearer {settings.kaiweb_api_key}"},
+                )
+                if resp.status_code < 400:
+                    data = resp.json()
+                    models = data.get("data", [])
+                    kaiweb_models = [
+                        {"id": m.get("id", ""), "provider": "kaiweb", "name": m.get("id", "")}
+                        for m in models
+                    ]
+                    if kaiweb_models:
+                        return kaiweb_models
+        except Exception as e:
+            logger.warning("Kaiweb 模型列表拉取失败: %s", e)
+
+    # 2. OpenClaw
     try:
         headers = {}
         if settings.openclaw_token:
@@ -311,9 +447,11 @@ async def list_models() -> list[dict]:
     except Exception:
         pass
 
-    # 预定义模型列表
+    # 3. 预定义模型列表
     return [
-        {"id": "default", "provider": "openclaw", "name": "默认 (OpenClaw 优先)"},
+        {"id": "default", "provider": "kaiweb", "name": "默认 (Kaiweb 网关)"},
+        {"id": settings.kaiweb_model, "provider": "kaiweb", "name": settings.kaiweb_model},
         {"id": "gpt-4o-mini", "provider": "openai", "name": "GPT-4o mini"},
         {"id": "claude-sonnet-4-20250514", "provider": "anthropic", "name": "Claude Sonnet 4"},
+        {"id": "mock", "provider": "mock", "name": "Mock (开发兜底)"},
     ]

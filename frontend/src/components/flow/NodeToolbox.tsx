@@ -1,8 +1,10 @@
-import { Brain, Database, GitBranch, Type, Bell, BrainCog } from "lucide-react"
+import { Brain, Database, GitBranch, Type, Bell, BrainCog, Play, Square } from "lucide-react"
 import type { NodeType } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
 const TOOLBOX_ITEMS: { type: NodeType; label: string; icon: typeof Brain; color: string }[] = [
+  { type: "start", label: "开始", icon: Play, color: "border-green-400 bg-green-50 hover:bg-green-100" },
+  { type: "end", label: "结束", icon: Square, color: "border-red-300 bg-red-50 hover:bg-red-100" },
   { type: "llm", label: "LLM 对话", icon: Brain, color: "border-blue-300 bg-blue-50 hover:bg-blue-100" },
   { type: "retrieval", label: "知识库检索", icon: Database, color: "border-purple-300 bg-purple-50 hover:bg-purple-100" },
   { type: "condition", label: "条件分支", icon: GitBranch, color: "border-amber-300 bg-amber-50 hover:bg-amber-100" },

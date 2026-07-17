@@ -11,7 +11,6 @@ from app.models.memory import Memory, MemoryType
 from app.schemas.memory import (
     MemoryCreate,
     MemoryRead,
-    MemorySearchRequest,
     MemoryUpdate,
 )
 from app.services import memory_service
@@ -41,10 +40,16 @@ async def list_memories(
 
 
 @router.get("/search", response_model=list[MemoryRead])
-async def search_memories(data: MemorySearchRequest, current_user: CurrentUser, db: DBSession):
-    """关键词搜索记忆。"""
+async def search_memories(
+    current_user: CurrentUser,
+    db: DBSession,
+    q: str = Query(..., min_length=1, description="搜索关键词"),
+    top_k: int = Query(5, ge=1, le=50),
+    session_id: str | None = Query(None),
+):
+    """关键词搜索记忆 (GET, 查询参数 q)。"""
     memories = await memory_service.search_memories(
-        db, current_user.id, data.query, data.top_k, data.session_id
+        db, current_user.id, q, top_k, session_id
     )
     return [MemoryRead.model_validate(m) for m in memories]
 

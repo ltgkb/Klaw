@@ -13,6 +13,7 @@ import { ExecutionList, ExecutionDetail } from "@/pages/ExecutionDetail"
 import { Settings } from "@/pages/Settings"
 import { ScheduleList } from "@/pages/ScheduleList"
 import { MemoryList } from "@/pages/MemoryList"
+import { AgentChat } from "@/pages/AgentChat"
 
 /** 路由守卫：未登录跳转 /login */
 function ProtectedRoute({ children }: { children: ReactNode }) {
@@ -131,6 +132,14 @@ function App() {
               <AppLayout>
                 <MemoryList />
               </AppLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/agents"
+          element={
+            <ProtectedRoute>
+              <AgentChat />
             </ProtectedRoute>
           }
         />

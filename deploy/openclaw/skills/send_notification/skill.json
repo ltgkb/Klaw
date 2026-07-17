@@ -1,0 +1,14 @@
+{
+  "id": "send_notification",
+  "name": "发送通知",
+  "description": "向飞书/企微/Telegram 等渠道推送一条消息。本地 OpenClaw Skill。",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "channel": { "type": "string", "description": "推送渠道: feishu/wechat/telegram" },
+      "title": { "type": "string" },
+      "content": { "type": "string" }
+    },
+    "required": ["channel", "content"]
+  }
+}

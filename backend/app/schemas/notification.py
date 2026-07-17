@@ -1,5 +1,6 @@
 """推送通知 Pydantic 模型。对齐 PRD M4。"""
 
+import uuid
 from typing import Any
 
 from pydantic import BaseModel
@@ -18,10 +19,16 @@ class NotifyChannelConfig(BaseModel):
 
 
 class NotifyRequest(BaseModel):
-    """推送请求。"""
+    """推送请求。
+
+    channels: 内联渠道配置 (一次性推送)
+    channel_ids: 已持久化渠道的 id 列表 (由 /push/channels 配置, 自动解密解析)
+    二者至少提供一个。
+    """
     title: str
     content: str
-    channels: list[NotifyChannelConfig]
+    channels: list[NotifyChannelConfig] = []
+    channel_ids: list[uuid.UUID] = []
 
 
 class NotifyResult(BaseModel):

@@ -27,6 +27,16 @@ async def list_providers():
     """列出已配置的模型供应商及其运行时状态。"""
     providers: list[ProviderInfo] = []
 
+    # Kaiweb (自建 OpenAI 兼容网关, 真实 LLM 优先)
+    kaiweb_ok = await llm_client.kaiweb_health_check()
+    providers.append(ProviderInfo(
+        name="kaiweb",
+        status="ok" if kaiweb_ok else ("not_configured" if not settings.kaiweb_api_key else "unavailable"),
+        deploy="cloud",
+        priority="P0",
+        detail=settings.kaiweb_base_url,
+    ))
+
     # OpenClaw (本地优先)
     openclaw_ok = await llm_client.health_check()
     providers.append(ProviderInfo(
@@ -70,6 +80,16 @@ async def list_providers():
         priority="P1",
         detail="需要 API Key",
     ))
+
+    # Mock (dev 兜底, 离线演示)
+    if settings.environment == "dev":
+        providers.append(ProviderInfo(
+            name="mock",
+            status="ok",
+            deploy="local",
+            priority="P2",
+            detail="开发兜底 (真实供应商不可用时启用)",
+        ))
 
     return providers
 
