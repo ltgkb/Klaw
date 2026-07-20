@@ -246,6 +246,136 @@ async def test_execute_flow_condition(client, mock_llm, db_engine, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_execute_flow_loop_runs_detached_body_for_each_item(
+    client, mock_llm, db_engine, monkeypatch
+):
+    """循环节点逐项执行循环体、聚合结果，并遵守最大次数。"""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    import app.core.database as db_module
+
+    test_factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    monkeypatch.setattr(db_module, "async_session_factory", test_factory)
+
+    token = await _register_and_login(client, "loop@test.com")
+    dag = {
+        "nodes": [
+            {
+                "id": "loop",
+                "type": "loop",
+                "position": {"x": 100, "y": 0},
+                "data": {
+                    "label": "批量处理",
+                    "config": {
+                        "items_template": "{items}",
+                        "body_node_id": "body",
+                        "item_variable": "item",
+                        "index_variable": "index",
+                        "max_iterations": 2,
+                        "continue_on_error": False,
+                    },
+                },
+            },
+            {
+                "id": "body",
+                "type": "text",
+                "position": {"x": 100, "y": 180},
+                "data": {"label": "格式化", "config": {"template": "{index}:{item.name}"}},
+            },
+            {
+                "id": "end",
+                "type": "end",
+                "position": {"x": 400, "y": 0},
+                "data": {"label": "结束", "config": {"output": "{批量处理}"}},
+            },
+        ],
+        "edges": [{"id": "e1", "source": "loop", "target": "end"}],
+    }
+    flow = (
+        await client.post(
+            "/api/v1/agent-flows",
+            json={"name": "Loop Flow", "dag": dag},
+            headers=_auth_headers(token),
+        )
+    ).json()
+
+    response = await client.post(
+        f"/api/v1/agent-flows/{flow['id']}/execute",
+        json={"input": {"items": [{"name": "alpha"}, {"name": "beta"}, {"name": "gamma"}]}},
+        headers=_auth_headers(token),
+    )
+    execution_id = response.json()["execution_id"]
+    detail = (
+        await client.get(
+            f"/api/v1/agent-flows/{flow['id']}/executions/{execution_id}",
+            headers=_auth_headers(token),
+        )
+    ).json()
+
+    assert detail["status"] == "success"
+    assert detail["output"]["loop"] == ["0:alpha", "1:beta"]
+    assert detail["output"]["end"] == '["0:alpha", "1:beta"]'
+    assert detail["node_states"]["body"]["status"] == "success"
+    assert detail["node_states"]["body"]["iterations"] == 2
+    assert detail["node_states"]["loop"]["output"] == '["0:alpha", "1:beta"]'
+
+
+@pytest.mark.asyncio
+async def test_execute_flow_loop_rejects_connected_body(client, db_engine, monkeypatch):
+    """循环体必须由循环节点独占，避免在主 DAG 中被重复执行。"""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    import app.core.database as db_module
+
+    test_factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    monkeypatch.setattr(db_module, "async_session_factory", test_factory)
+
+    token = await _register_and_login(client, "loop-invalid@test.com")
+    dag = {
+        "nodes": [
+            {
+                "id": "loop",
+                "type": "loop",
+                "position": {"x": 0, "y": 0},
+                "data": {
+                    "label": "循环",
+                    "config": {"items_template": "[1]", "body_node_id": "body"},
+                },
+            },
+            {
+                "id": "body",
+                "type": "text",
+                "position": {"x": 200, "y": 0},
+                "data": {"label": "循环体", "config": {"template": "{item}"}},
+            },
+        ],
+        "edges": [{"id": "e1", "source": "loop", "target": "body"}],
+    }
+    flow = (
+        await client.post(
+            "/api/v1/agent-flows",
+            json={"name": "Invalid Loop", "dag": dag},
+            headers=_auth_headers(token),
+        )
+    ).json()
+    response = await client.post(
+        f"/api/v1/agent-flows/{flow['id']}/execute",
+        json={"input": {}},
+        headers=_auth_headers(token),
+    )
+    execution_id = response.json()["execution_id"]
+    detail = (
+        await client.get(
+            f"/api/v1/agent-flows/{flow['id']}/executions/{execution_id}",
+            headers=_auth_headers(token),
+        )
+    ).json()
+
+    assert detail["status"] == "failed"
+    assert "必须保持未连线" in detail["error_message"]
+
+
+@pytest.mark.asyncio
 async def test_list_executions(client, mock_llm, db_engine, monkeypatch):
     """测试执行历史列表。"""
     from sqlalchemy.ext.asyncio import async_sessionmaker

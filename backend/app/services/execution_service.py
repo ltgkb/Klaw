@@ -10,11 +10,14 @@
 """
 
 import asyncio
+import json
 import logging
 import re
 import uuid
 from collections import defaultdict, deque
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
@@ -27,6 +30,10 @@ from app.schemas.knowledge_base import SearchRequest
 from app.services import document_service
 
 logger = logging.getLogger("claw.execution")
+
+
+class _ExecutionCancelled(Exception):
+    """Internal signal used when cancellation is observed between loop iterations."""
 
 
 async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
@@ -79,6 +86,8 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
 
             # ── 3. 拓扑排序 ──
             ordered = _topological_sort(nodes, edges)
+            node_map = {node["id"]: node for node in nodes}
+            loop_body_ids = _validate_loop_bodies(nodes, edges)
             logger.info("工作流执行: flow=%s execution=%s nodes=%d", flow_id, execution_id, len(ordered))
 
             # ── 4. 逐节点执行 ──
@@ -107,6 +116,10 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
                 node_data = node.get("data", {})
                 config = node_data.get("config", {})
                 label = node_data.get("label", node_id)
+
+                # 循环体由所属 loop 节点按迭代执行, 不参与 DAG 的单次主流程。
+                if node_id in loop_body_ids:
+                    continue
 
                 # 条件分支: 不在匹配路径上的节点跳过
                 if node_id not in reachable:
@@ -146,6 +159,65 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
                     if node_type == "condition" and config.get("cases"):
                         matched_case_id, case_name = _evaluate_condition_cases(config, context)
                         output = case_name
+                    elif node_type == "loop":
+                        body_id = config.get("body_node_id")
+                        body_node = node_map[body_id]
+                        body_data = body_node.get("data", {})
+                        body_label = body_data.get("label", body_id)
+                        body_started_at = datetime.now(timezone.utc).isoformat()
+
+                        node_states = dict(execution.node_states or {})
+                        node_states[body_id] = {
+                            "status": "running",
+                            "started_at": body_started_at,
+                            "label": body_label,
+                            "type": body_node.get("type", "text"),
+                            "iteration": 0,
+                        }
+                        execution.node_states = node_states
+                        flag_modified(execution, "node_states")
+                        await db.commit()
+
+                        async def on_iteration(index: int, total: int, result: Any) -> None:
+                            await db.refresh(execution)
+                            while execution.status == ExecutionStatus.paused:
+                                await asyncio.sleep(2)
+                                await db.refresh(execution)
+                            if execution.status == ExecutionStatus.cancelled:
+                                raise _ExecutionCancelled()
+
+                            states = dict(execution.node_states or {})
+                            states[body_id] = {
+                                **states.get(body_id, {}),
+                                "status": "running",
+                                "iteration": index + 1,
+                                "total_iterations": total,
+                                "output": _stringify_output(result),
+                            }
+                            execution.node_states = states
+                            flag_modified(execution, "node_states")
+                            await db.commit()
+
+                        output = await _execute_loop_node(
+                            config,
+                            context,
+                            user,
+                            node_outputs,
+                            body_node,
+                            on_iteration=on_iteration,
+                        )
+
+                        node_states = dict(execution.node_states or {})
+                        node_states[body_id] = {
+                            **node_states.get(body_id, {}),
+                            "status": "success",
+                            "iterations": len(output),
+                            "output": _stringify_output(output),
+                            "ended_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                        execution.node_states = node_states
+                        flag_modified(execution, "node_states")
+                        await db.commit()
                     else:
                         output = await _execute_node(node_type, config, context, user, node_outputs, label=label)
 
@@ -190,7 +262,7 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
                     node_states[node_id] = {
                         **node_states[node_id],
                         "status": "success",
-                        "output": output if isinstance(output, str) else str(output),
+                        "output": _stringify_output(output),
                         "ended_at": datetime.now(timezone.utc).isoformat(),
                     }
                     if matched_case_id is not None:
@@ -200,6 +272,27 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
                     await db.commit()
 
                     logger.info("节点执行成功: %s (%s)", node_id, node_type)
+
+                except _ExecutionCancelled:
+                    node_states = dict(execution.node_states or {})
+                    ended_at = datetime.now(timezone.utc).isoformat()
+                    node_states[node_id] = {
+                        **node_states.get(node_id, {}),
+                        "status": "cancelled",
+                        "ended_at": ended_at,
+                    }
+                    if node_type == "loop" and config.get("body_node_id"):
+                        body_id = config["body_node_id"]
+                        node_states[body_id] = {
+                            **node_states.get(body_id, {}),
+                            "status": "cancelled",
+                            "ended_at": ended_at,
+                        }
+                    execution.node_states = node_states
+                    execution.output = node_outputs
+                    flag_modified(execution, "node_states")
+                    await db.commit()
+                    return
 
                 except Exception as node_err:
                     await db.refresh(execution)
@@ -216,6 +309,14 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
                         "error": str(node_err),
                         "ended_at": datetime.now(timezone.utc).isoformat(),
                     }
+                    if node_type == "loop" and config.get("body_node_id"):
+                        body_id = config["body_node_id"]
+                        node_states[body_id] = {
+                            **node_states.get(body_id, {}),
+                            "status": "failed",
+                            "error": str(node_err),
+                            "ended_at": datetime.now(timezone.utc).isoformat(),
+                        }
                     execution.node_states = node_states
                     flag_modified(execution, "node_states")
                     execution.status = ExecutionStatus.failed
@@ -282,6 +383,43 @@ def _topological_sort(nodes: list[dict], edges: list[dict]) -> list[dict]:
     return ordered
 
 
+def _validate_loop_bodies(nodes: list[dict], edges: list[dict]) -> set[str]:
+    """Validate loop/body ownership and return nodes executed only by loops.
+
+    A loop body is deliberately detached from DAG edges. The loop node supplies
+    its context and controls repeated execution; normal edges continue from the
+    loop node after all iterations have completed.
+    """
+    node_map = {node["id"]: node for node in nodes}
+    connected_ids = {
+        node_id
+        for edge in edges
+        for node_id in (edge.get("source"), edge.get("target"))
+        if node_id
+    }
+    owners: dict[str, str] = {}
+
+    for node in nodes:
+        if node.get("type") != "loop":
+            continue
+        config = node.get("data", {}).get("config", {})
+        body_id = config.get("body_node_id")
+        if not body_id:
+            raise ValueError(f"循环节点 {node['id']} 未选择循环体节点")
+        body = node_map.get(body_id)
+        if body is None:
+            raise ValueError(f"循环节点 {node['id']} 引用了不存在的循环体节点 {body_id}")
+        if body.get("type") in {"start", "end", "condition", "loop"}:
+            raise ValueError("循环体仅支持 LLM、检索、文本、推送或记忆节点")
+        if body_id in connected_ids:
+            raise ValueError(f"循环体节点 {body_id} 必须保持未连线")
+        if body_id in owners:
+            raise ValueError(f"循环体节点 {body_id} 已被循环节点 {owners[body_id]} 使用")
+        owners[body_id] = node["id"]
+
+    return set(owners)
+
+
 async def _execute_node(
     node_type: str,
     config: dict,
@@ -289,7 +427,7 @@ async def _execute_node(
     user=None,
     node_outputs: dict | None = None,
     label: str = "",
-) -> str:
+) -> Any:
     """执行单个节点, 返回输出文本。
 
     Args:
@@ -319,6 +457,96 @@ async def _execute_node(
     else:
         # 未知类型按文本处理
         return _execute_text_node(config, context)
+
+
+async def _execute_loop_node(
+    config: dict,
+    context: dict,
+    user,
+    node_outputs: dict,
+    body_node: dict,
+    on_iteration: Callable[[int, int, Any], Awaitable[None]] | None = None,
+) -> list[Any]:
+    """Execute one detached canvas node for every item in a resolved array."""
+    items = _resolve_loop_items(config.get("items_template", "{input}"), context)
+    try:
+        max_iterations = int(config.get("max_iterations", 20))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("循环最大次数必须是整数") from exc
+    if not 1 <= max_iterations <= 100:
+        raise ValueError("循环最大次数必须在 1 到 100 之间")
+
+    items = items[:max_iterations]
+    item_variable = str(config.get("item_variable") or "item").strip()
+    index_variable = str(config.get("index_variable") or "index").strip()
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*", item_variable):
+        raise ValueError("循环项变量名格式无效")
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*", index_variable):
+        raise ValueError("循环索引变量名格式无效")
+
+    body_type = body_node.get("type", "text")
+    body_data = body_node.get("data", {})
+    body_config = body_data.get("config", {})
+    body_label = body_data.get("label", body_node["id"])
+    continue_on_error = bool(config.get("continue_on_error", False))
+    results: list[Any] = []
+
+    for index, item in enumerate(items):
+        iteration_context = dict(context)
+        iteration_context[item_variable] = item
+        iteration_context[index_variable] = index
+        iteration_context["loop.item"] = item
+        iteration_context["loop.index"] = index
+
+        try:
+            result = await _execute_node(
+                body_type,
+                body_config,
+                iteration_context,
+                user,
+                node_outputs,
+                label=body_label,
+            )
+        except Exception as exc:
+            if not continue_on_error:
+                raise RuntimeError(f"第 {index + 1} 次循环失败: {exc}") from exc
+            result = {"index": index, "error": str(exc)}
+
+        results.append(result)
+        if on_iteration:
+            await on_iteration(index, len(items), result)
+
+    return results
+
+
+def _resolve_loop_items(template: Any, context: dict) -> list[Any]:
+    """Resolve a loop source while preserving typed list inputs when possible."""
+    raw: Any = template
+    if isinstance(template, str):
+        token_match = re.fullmatch(r"\s*\{([^{}]+)\}\s*", template)
+        key = token_match.group(1).strip() if token_match else ""
+        if key and key in context:
+            raw = context[key]
+        else:
+            rendered = _render_template(template, context).strip()
+            if not rendered:
+                return []
+            try:
+                raw = json.loads(rendered)
+            except json.JSONDecodeError:
+                raw = [line.strip() for line in rendered.splitlines() if line.strip()]
+
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, tuple):
+        return list(raw)
+    if isinstance(raw, dict):
+        return [{"key": key, "value": value} for key, value in raw.items()]
+    if isinstance(raw, str):
+        return [raw] if raw.strip() else []
+    raise ValueError("循环输入必须是数组、对象、JSON 数组或非空文本")
 
 
 def _execute_start_node(config: dict, context: dict) -> str:
@@ -437,14 +665,15 @@ def _eval_expression(rendered: str) -> bool:
         for op in (">=", "<=", "==", "!=", ">", "<"):
             if op in rendered:
                 left, right = rendered.split(op, 1)
-                l, r = left.strip(), right.strip().strip("'\"")
+                left_value = left.strip()
+                right_value = right.strip().strip("'\"")
                 if op == "==":
-                    return l == r
+                    return left_value == right_value
                 if op == "!=":
-                    return l != r
+                    return left_value != right_value
                 # 数值比较
                 try:
-                    lf, rf = float(l), float(r)
+                    lf, rf = float(left_value), float(right_value)
                 except ValueError:
                     return False
                 if op == ">":
@@ -517,6 +746,20 @@ def _render_template(template: str, context: dict) -> str:
         # 直接命中 (含 @content 别名 / 命名变量 / label / input / sys.query / history)
         if key in context:
             return _unwrap(context[key])
+        # 循环对象字段: {item.key} / {item.value.name}; 精确键优先以兼容 sys.query。
+        path = key.split(".")
+        if len(path) > 1 and path[0] in context:
+            value: Any = context[path[0]]
+            for part in path[1:]:
+                if isinstance(value, dict) and part in value:
+                    value = value[part]
+                elif isinstance(value, (list, tuple)) and part.isdigit() and int(part) < len(value):
+                    value = value[int(part)]
+                else:
+                    value = None
+                    break
+            if value is not None:
+                return _unwrap(value)
         # {label@var}: 拆分后尝试 var 名与 label
         if "@" in key:
             label_part, var_part = key.split("@", 1)
@@ -537,7 +780,20 @@ def _unwrap(value) -> str:
     if value is None:
         return ""
     if isinstance(value, dict):
-        return str(value.get("output") or value.get("content") or "")
+        if "output" in value or "content" in value:
+            return str(value.get("output") or value.get("content") or "")
+        return _stringify_output(value)
+    if isinstance(value, (list, tuple)):
+        return _stringify_output(value)
+    return str(value)
+
+
+def _stringify_output(value: Any) -> str:
+    """Serialize structured node output deterministically for UI and templates."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, ensure_ascii=False, default=str)
     return str(value)
 
 

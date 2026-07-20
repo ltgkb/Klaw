@@ -9,7 +9,7 @@ import {
   type NodeProps,
   type EdgeProps,
 } from "@xyflow/react"
-import { Brain, Database, GitBranch, Type, Bell, BrainCog, Play, Square } from "lucide-react"
+import { Brain, Database, GitBranch, Type, Bell, BrainCog, Play, Repeat2, Square } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { NodeType, NodeState } from "@/lib/api"
 
@@ -20,6 +20,7 @@ const NODE_META: Record<NodeType, { icon: typeof Brain; color: string; label: st
   llm: { icon: Brain, color: "border-blue-400 bg-blue-50", label: "LLM 对话" },
   retrieval: { icon: Database, color: "border-purple-400 bg-purple-50", label: "知识库检索" },
   condition: { icon: GitBranch, color: "border-amber-400 bg-amber-50", label: "条件分支" },
+  loop: { icon: Repeat2, color: "border-cyan-400 bg-cyan-50", label: "循环" },
   text: { icon: Type, color: "border-gray-400 bg-gray-50", label: "文本拼接" },
   notify: { icon: Bell, color: "border-pink-400 bg-pink-50", label: "消息推送" },
   memory: { icon: BrainCog, color: "border-teal-400 bg-teal-50", label: "记忆读写" },
@@ -175,6 +176,10 @@ function NodeSummary({ type, config }: { type: NodeType; config: Record<string, 
     const cases = (config.cases as unknown[]) || []
     return <p className="mt-0.5 text-xs text-gray-400">{cases.length} 个分支</p>
   }
+  if (type === "loop") {
+    const maxIterations = (config.max_iterations as number) || 20
+    return <p className="mt-0.5 text-xs text-gray-400">最多 {maxIterations} 次</p>
+  }
   if (type === "notify") {
     const channels = (config.channels as unknown[]) || []
     return <p className="mt-0.5 text-xs text-gray-400">{channels.length} 渠道</p>
@@ -202,6 +207,7 @@ export const EndNode = memo(BaseNode)
 export const LLMNode = memo(BaseNode)
 export const RetrievalNode = memo(BaseNode)
 export const ConditionNode = memo(BaseNode)
+export const LoopNode = memo(BaseNode)
 export const TextNode = memo(BaseNode)
 export const NotifyNode = memo(BaseNode)
 export const MemoryNode = memo(BaseNode)
@@ -212,6 +218,7 @@ export const nodeTypes = {
   llm: LLMNode,
   retrieval: RetrievalNode,
   condition: ConditionNode,
+  loop: LoopNode,
   text: TextNode,
   notify: NotifyNode,
   memory: MemoryNode,

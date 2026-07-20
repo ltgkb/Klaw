@@ -33,6 +33,7 @@ import {
   Type,
   Bell,
   BrainCog,
+  Repeat2,
   Square,
 } from "lucide-react"
 import { flowApi, systemApi, type FlowRead, type NodeType, type ExecutionRead, type NodeState } from "@/lib/api"
@@ -55,6 +56,7 @@ const DEFAULT_CONFIGS: Record<NodeType, Record<string, unknown>> = {
   llm: { model: "default", system_prompt: "", user_template: "{input}" },
   retrieval: { kb_id: "", query_template: "{input}", top_k: 5 },
   condition: { cases: [{ id: "case1", name: "条件1", expression: "{input} == ''" }], default_name: "默认" },
+  loop: { items_template: "{input}", body_node_id: "", item_variable: "item", index_variable: "index", max_iterations: 20, continue_on_error: false },
   text: { template: "" },
   notify: { title_template: "Agent 通知", content_template: "{input}", channels: [] },
   memory: { action: "save", key: "", value_template: "{input}", session_id: "" },
@@ -66,6 +68,7 @@ const NODE_LABELS: Record<NodeType, string> = {
   llm: "LLM 对话",
   retrieval: "知识库检索",
   condition: "条件分支",
+  loop: "循环",
   text: "文本拼接",
   notify: "消息推送",
   memory: "记忆读写",
@@ -77,6 +80,7 @@ const ADDABLE_TYPES: { type: NodeType; label: string; icon: typeof Brain }[] = [
   { type: "llm", label: "LLM 对话", icon: Brain },
   { type: "retrieval", label: "知识库检索", icon: Database },
   { type: "condition", label: "条件分支", icon: GitBranch },
+  { type: "loop", label: "循环", icon: Repeat2 },
   { type: "text", label: "文本拼接", icon: Type },
   { type: "notify", label: "消息推送", icon: Bell },
   { type: "memory", label: "记忆读写", icon: BrainCog },
@@ -248,7 +252,16 @@ function FlowCanvasInner() {
 
   // ── 删除节点 ──
   const handleDeleteNode = useCallback((id: string) => {
-    setNodes((nds) => nds.filter((n) => n.id !== id))
+    setNodes((nds) =>
+      nds
+        .filter((n) => n.id !== id)
+        .map((n) => {
+          if (n.type !== "loop") return n
+          const data = n.data as { label: string; config: Record<string, unknown> }
+          if (data.config.body_node_id !== id) return n
+          return { ...n, data: { ...data, config: { ...data.config, body_node_id: "" } } }
+        }),
+    )
     setEdges((eds) => eds.filter((e) => e.source !== id && e.target !== id))
     setSelectedNodeId(null)
   }, [setNodes, setEdges])
@@ -328,10 +341,14 @@ function FlowCanvasInner() {
     }
     // 重新生成节点 id, 避免与现有节点冲突; 重映射边
     const idMap: Record<string, string> = {}
+    for (const n of impNodes) idMap[n.id] = genNodeId()
     const newNodes: Node[] = impNodes.map((n) => {
-      const newId = genNodeId()
-      idMap[n.id] = newId
-      return { ...n, id: newId }
+      const data = n.data as { label?: string; config?: Record<string, unknown> }
+      const config = { ...(data?.config || {}) }
+      if (n.type === "loop" && typeof config.body_node_id === "string") {
+        config.body_node_id = idMap[config.body_node_id] || ""
+      }
+      return { ...n, id: idMap[n.id], data: { ...data, config } }
     })
     const newEdges: Edge[] = impEdges.map((edge) => {
       const s = idMap[edge.source] || edge.source

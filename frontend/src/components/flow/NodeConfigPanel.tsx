@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { Brain, Database, GitBranch, Type, Bell, BrainCog, Trash2, Plus, X, Play, Square } from "lucide-react"
+import { Brain, Database, GitBranch, Type, Bell, BrainCog, Trash2, Plus, X, Play, Repeat2, Square } from "lucide-react"
 import { providerApi, type NodeType, type ModelInfo } from "@/lib/api"
 import type { Node } from "@xyflow/react"
 import { Button } from "@/components/ui/button"
@@ -14,6 +14,7 @@ const NODE_ICONS: Record<NodeType, typeof Brain> = {
   llm: Brain,
   retrieval: Database,
   condition: GitBranch,
+  loop: Repeat2,
   text: Type,
   notify: Bell,
   memory: BrainCog,
@@ -25,6 +26,7 @@ const NODE_LABELS: Record<NodeType, string> = {
   llm: "LLM 对话",
   retrieval: "知识库检索",
   condition: "条件分支",
+  loop: "循环",
   text: "文本拼接",
   notify: "消息推送",
   memory: "记忆读写",
@@ -190,7 +192,26 @@ export function NodeConfigPanel({ node, allNodes = [], onChange, onDelete }: Pro
           .filter((i) => i.name)
           .map((i) => ({ token: `{${i.name}}`, label: `{${i.name}} 开始输入` }))
       }),
+    ...allNodes
+      .filter((n) => {
+        if (n.type !== "loop") return false
+        const loopConfig = (n.data as { config?: Record<string, unknown> }).config || {}
+        return loopConfig.body_node_id === node.id
+      })
+      .flatMap((n) => {
+        const loopConfig = (n.data as { config?: Record<string, unknown> }).config || {}
+        const itemVar = (loopConfig.item_variable as string) || "item"
+        const indexVar = (loopConfig.index_variable as string) || "index"
+        return [
+          { token: `{${itemVar}}`, label: `{${itemVar}} 当前循环项` },
+          { token: `{${indexVar}}`, label: `{${indexVar}} 当前索引` },
+        ]
+      }),
   ]
+
+  const loopBodyOptions = allNodes.filter(
+    (n) => n.id !== node.id && ["llm", "retrieval", "text", "notify", "memory"].includes(n.type || ""),
+  )
 
   const updateLabel = (label: string) => {
     onChange(node.id, { ...nodeData, label })
@@ -486,6 +507,88 @@ export function NodeConfigPanel({ node, allNodes = [], onChange, onDelete }: Pro
               />
             </div>
           </div>
+        )}
+
+        {nodeType === "loop" && (
+          <>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="loop-items">循环输入</Label>
+                <VarPicker vars={availableVars} onInsert={(t) => insertVar("items_template", t)} />
+              </div>
+              <textarea
+                id="loop-items"
+                className={cn(
+                  "flex min-h-[72px] w-full rounded-md border border-input bg-background px-3 py-2",
+                  "text-sm ring-offset-background placeholder:text-muted-foreground",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                )}
+                value={(config.items_template as string) || ""}
+                onChange={(e) => updateConfig("items_template", e.target.value)}
+                placeholder={'{items} 或 ["北京", "上海"]'}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="loop-body">循环体节点（需未连线）</Label>
+              <select
+                id="loop-body"
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
+                value={(config.body_node_id as string) || ""}
+                onChange={(e) => updateConfig("body_node_id", e.target.value)}
+              >
+                <option value="">选择节点</option>
+                {loopBodyOptions.map((n) => {
+                  const type = n.type as NodeType
+                  const label = (n.data as { label?: string }).label || n.id
+                  return <option key={n.id} value={n.id}>{label} · {NODE_LABELS[type]}</option>
+                })}
+              </select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-2">
+                <Label htmlFor="loop-item-var">循环项变量</Label>
+                <Input
+                  id="loop-item-var"
+                  value={(config.item_variable as string) || "item"}
+                  onChange={(e) => updateConfig("item_variable", e.target.value)}
+                  placeholder="item"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="loop-index-var">索引变量</Label>
+                <Input
+                  id="loop-index-var"
+                  value={(config.index_variable as string) || "index"}
+                  onChange={(e) => updateConfig("index_variable", e.target.value)}
+                  placeholder="index"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="loop-max">最大次数</Label>
+              <Input
+                id="loop-max"
+                type="number"
+                min={1}
+                max={100}
+                value={(config.max_iterations as number) ?? 20}
+                onChange={(e) => updateConfig("max_iterations", Number(e.target.value))}
+              />
+            </div>
+
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-input"
+                checked={Boolean(config.continue_on_error)}
+                onChange={(e) => updateConfig("continue_on_error", e.target.checked)}
+              />
+              单次失败后继续
+            </label>
+          </>
         )}
 
         {nodeType === "text" && (

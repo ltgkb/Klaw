@@ -1,4 +1,4 @@
-import { Brain, Database, GitBranch, Type, Bell, BrainCog, Play, Square } from "lucide-react"
+import { Brain, Database, GitBranch, Type, Bell, BrainCog, Play, Repeat2, Square } from "lucide-react"
 import type { NodeType } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
@@ -8,6 +8,7 @@ const TOOLBOX_ITEMS: { type: NodeType; label: string; icon: typeof Brain; color:
   { type: "llm", label: "LLM 对话", icon: Brain, color: "border-blue-300 bg-blue-50 hover:bg-blue-100" },
   { type: "retrieval", label: "知识库检索", icon: Database, color: "border-purple-300 bg-purple-50 hover:bg-purple-100" },
   { type: "condition", label: "条件分支", icon: GitBranch, color: "border-amber-300 bg-amber-50 hover:bg-amber-100" },
+  { type: "loop", label: "循环", icon: Repeat2, color: "border-cyan-300 bg-cyan-50 hover:bg-cyan-100" },
   { type: "text", label: "文本拼接", icon: Type, color: "border-gray-300 bg-gray-50 hover:bg-gray-100" },
   { type: "notify", label: "消息推送", icon: Bell, color: "border-pink-300 bg-pink-50 hover:bg-pink-100" },
   { type: "memory", label: "记忆读写", icon: BrainCog, color: "border-teal-300 bg-teal-50 hover:bg-teal-100" },

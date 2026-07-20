@@ -70,7 +70,8 @@ v1.1 是设计草案。v2.0 以**已落地代码**为准重新对齐：保留 v1
 
 ### 3.2 Agent 画布 — ✅
 - **画布引擎**：@xyflow/react；节点拖拽/连线/删除、缩放/平移/minimap、序列化为 DAG JSON。
-- **节点类型**（6 类）：`text` / `llm` / `retrieval` / `condition` / `notify` / `memory`。
+- **节点类型**（9 类）：`start` / `end` / `text` / `llm` / `retrieval` / `condition` / `loop` / `notify` / `memory`。
+- **循环节点**：数组、对象、JSON 或多行文本输入；选择一个未连线节点作为循环体，注入循环项与索引变量，顺序执行并聚合结构化结果；支持 1-100 次上限、单次失败后继续及迭代状态。
 - **执行引擎**：自研 asyncio DAG（Kahn 拓扑排序，逐节点执行，每步写 `node_states`）；后台任务 + SSE 实时状态推送（`progress`/`complete`）；暂停/恢复/取消（DB 状态轮询）；节点失败即终止。
 - **模板与复用**：CRUD 已就绪，预设模板留作路线图。
 - **MCP**：二期。
