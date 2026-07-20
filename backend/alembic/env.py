@@ -1,7 +1,15 @@
 """Alembic 环境配置 — 使用项目的 async engine 与 settings。"""
 
 import asyncio
+import sys
 from logging.config import fileConfig
+from pathlib import Path
+
+# Alembic's console entrypoint does not consistently include the project root
+# in sys.path. Make `cd backend && uv run alembic ...` work without PYTHONPATH.
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
 
 from alembic import context
 from sqlalchemy import pool

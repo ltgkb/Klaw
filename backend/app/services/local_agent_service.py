@@ -2,9 +2,10 @@
 
 工具来源:
   1. 本地 Skills 目录扫描 (deploy/openclaw/skills, deploy/hermes/skills) — 读取 skill.json
-  2. OpenClaw gateway HTTP API (GET /v1/tools) — 若可用则合并
+  2. OpenClaw gateway HTTP API (POST /tools/invoke) — 直接调用工具
 
-dev 环境: OpenClaw 不可达时, 调用返回 mock 结构化结果, 保证画布「工具调用」节点可演示。
+OpenClaw 没有工具列表 HTTP API。本地清单用于展示可配置的工具，调用时由
+Gateway 的策略和实际工具注册情况决定是否可执行。
 """
 
 import json
@@ -74,35 +75,13 @@ def _scan_skills_dir(source: str, skills_dir: Path) -> list[ToolInfo]:
 
 
 async def discover_tools() -> list[ToolInfo]:
-    """发现本地工具: Skills 目录扫描 + OpenClaw HTTP 合并。"""
+    """发现本地工具清单。"""
     root = _project_root()
     tools: list[ToolInfo] = []
 
     # 1. 扫描本地 Skills 目录
     tools += _scan_skills_dir("openclaw", root / "deploy" / "openclaw" / "skills")
     tools += _scan_skills_dir("hermes", root / "deploy" / "hermes" / "skills")
-
-    # 2. 合并 OpenClaw gateway 在线工具 (若可用)
-    try:
-        headers = {}
-        if settings.openclaw_token:
-            headers["Authorization"] = f"Bearer {settings.openclaw_token}"
-        async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.get(f"{settings.openclaw_url}/v1/tools", headers=headers)
-            if resp.status_code < 400:
-                data = resp.json()
-                online = data if isinstance(data, list) else data.get("data", data.get("tools", []))
-                for t in online:
-                    if isinstance(t, dict):
-                        tools.append(ToolInfo(
-                            id=t.get("id") or t.get("name", "openclaw_tool"),
-                            name=t.get("name") or t.get("id", "openclaw_tool"),
-                            description=t.get("description"),
-                            source="openclaw",
-                            parameters=t.get("parameters") or t.get("input_schema"),
-                        ))
-    except Exception as e:
-        logger.debug("OpenClaw 在线工具发现不可用: %s", e)
 
     # 去重 (按 id, 保留首个)
     seen: set[str] = set()
@@ -118,33 +97,44 @@ async def discover_tools() -> list[ToolInfo]:
 
 
 async def call_tool(tool_id: str, parameters: dict) -> dict:
-    """调用本地工具。优先 OpenClaw HTTP, 不可达时 dev 返回 mock 结果。"""
-    # 1. 尝试 OpenClaw
+    """通过 OpenClaw Gateway 调用本地工具。"""
     try:
         headers = {"Content-Type": "application/json"}
         if settings.openclaw_token:
             headers["Authorization"] = f"Bearer {settings.openclaw_token}"
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
-                f"{settings.openclaw_url}/v1/tools/{tool_id}/call",
+                f"{settings.openclaw_url}/tools/invoke",
                 headers=headers,
-                json={"parameters": parameters},
+                json={"tool": tool_id, "args": parameters},
             )
             if resp.status_code < 400:
-                return {"tool_id": tool_id, "success": True, "result": resp.json(), "source": "openclaw"}
-            logger.warning("OpenClaw 工具调用返回 %s: %s", resp.status_code, resp.text[:200])
+                data = resp.json()
+                if isinstance(data, dict) and data.get("ok") is True:
+                    return {
+                        "tool_id": tool_id,
+                        "success": True,
+                        "result": data.get("result"),
+                        "source": "openclaw",
+                    }
+                logger.warning("OpenClaw 工具调用返回无效响应")
+                error = "OpenClaw 返回无效的工具调用响应"
+            else:
+                logger.warning("OpenClaw 工具调用返回 HTTP %s", resp.status_code)
+                error = f"OpenClaw 工具不可用 (HTTP {resp.status_code})"
     except Exception as e:
-        logger.debug("OpenClaw 工具调用不可用, 回退 mock: %s", e)
+        logger.debug("OpenClaw 工具调用不可用: %s", e)
+        error = f"OpenClaw 工具服务不可用 ({e.__class__.__name__})"
 
-    # 2. dev 兜底: mock 结构化结果
     return {
         "tool_id": tool_id,
-        "success": True,
+        "success": False,
         "result": {
             "mock": True,
-            "message": f"[Mock 工具调用] {tool_id} 已接收参数 (离线兜底)",
+            "message": f"{tool_id} 未执行",
             "echo_parameters": parameters,
         },
+        "error": error,
         "source": "mock",
     }
 
@@ -157,8 +147,8 @@ async def health() -> dict:
     hermes_ok = False
     try:
         async with httpx.AsyncClient(timeout=3) as client:
-            resp = await client.get(f"{settings.hermes_url}/")
-            hermes_ok = resp.status_code < 500
+            resp = await client.get(f"{settings.hermes_url}/health")
+            hermes_ok = resp.status_code == 200
     except Exception:
         hermes_ok = False
 

@@ -361,10 +361,14 @@ def mock_scheduler(monkeypatch):
     def mock_resume(job_id):
         return datetime.now(timezone.utc)
 
+    def mock_next_run(job_id):
+        return datetime(2030, 1, 1, tzinfo=timezone.utc)
+
     monkeypatch.setattr(sched_module, "schedule_flow", mock_schedule_flow)
     monkeypatch.setattr(sched_module, "unschedule_flow", mock_unschedule_flow)
     monkeypatch.setattr(sched_module, "pause_scheduled_job", mock_pause)
     monkeypatch.setattr(sched_module, "resume_scheduled_job", mock_resume)
+    monkeypatch.setattr(sched_module, "get_next_run_time", mock_next_run)
 
 
 @pytest.mark.asyncio
@@ -396,6 +400,7 @@ async def test_schedule_crud(client, mock_scheduler):
     resp = await client.get("/api/v1/schedules", headers=h)
     assert resp.status_code == 200
     assert len(resp.json()) == 1
+    assert resp.json()[0]["next_run_time"].startswith("2030-01-01")
 
     # 详情
     resp = await client.get(f"/api/v1/schedules/{sched_id}", headers=h)
@@ -460,3 +465,37 @@ async def test_schedule_invalid_flow(client, mock_scheduler):
         "cron": "0 9 * * *",
     }, headers=_auth_headers(token))
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_schedule_rejects_invalid_cron(client, mock_scheduler):
+    token = await _register_and_login(client, "badcron@test.com")
+    headers = _auth_headers(token)
+    flow = (await client.post(
+        "/api/v1/agent-flows", json={"name": "Bad Cron"}, headers=headers
+    )).json()
+
+    response = await client.post(
+        "/api/v1/schedules",
+        json={"flow_id": flow["id"], "name": "invalid", "cron": "bad cron"},
+        headers=headers,
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_notification_failure_includes_error(monkeypatch):
+    from app.core import notify_client
+
+    async def rejected(*args, **kwargs):
+        return False
+
+    monkeypatch.setattr(notify_client, "send_hermes", rejected)
+    results = await notify_client.notify(
+        [{"type": "hermes", "channel": "test"}], "title", "content"
+    )
+    assert results == [{
+        "channel": "hermes",
+        "success": False,
+        "error": "渠道返回失败状态",
+    }]

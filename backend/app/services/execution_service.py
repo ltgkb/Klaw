@@ -59,6 +59,9 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
 
         try:
             # ── 1. 标记为 running ──
+            await db.refresh(execution)
+            if execution.status == ExecutionStatus.cancelled:
+                return
             execution.status = ExecutionStatus.running
             execution.node_states = {}
             await db.commit()
@@ -111,6 +114,10 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
 
                 # ── 暂停检查 (人机交互) ──
                 await db.refresh(execution)
+                if execution.status == ExecutionStatus.cancelled:
+                    execution.output = node_outputs
+                    await db.commit()
+                    return
                 if execution.status == ExecutionStatus.paused:
                     # 等待恢复 (轮询 DB, 每 2s 检查一次)
                     while execution.status == ExecutionStatus.paused:
@@ -141,6 +148,23 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
                         output = case_name
                     else:
                         output = await _execute_node(node_type, config, context, user, node_outputs, label=label)
+
+                    # A running node cannot be forcefully interrupted, but cancellation
+                    # must win as soon as the node yields control back to the executor.
+                    await db.refresh(execution)
+                    if execution.status == ExecutionStatus.cancelled:
+                        node_states = dict(execution.node_states or {})
+                        node_states[node_id] = {
+                            **node_states[node_id],
+                            "status": "cancelled",
+                            "ended_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                        execution.node_states = node_states
+                        execution.output = node_outputs
+                        flag_modified(execution, "node_states")
+                        await db.commit()
+                        return
+
                     node_outputs[node_id] = output
                     # 按节点 id + label 都存, 支持引用 {label} / {node_id}; @content 为别名
                     context[node_id] = output
@@ -178,6 +202,12 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
                     logger.info("节点执行成功: %s (%s)", node_id, node_type)
 
                 except Exception as node_err:
+                    await db.refresh(execution)
+                    if execution.status == ExecutionStatus.cancelled:
+                        execution.output = node_outputs
+                        await db.commit()
+                        return
+
                     # 节点执行失败
                     node_states = dict(execution.node_states or {})
                     node_states[node_id] = {
@@ -196,6 +226,11 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
                     return
 
             # ── 5. 全部完成 ──
+            await db.refresh(execution)
+            if execution.status == ExecutionStatus.cancelled:
+                execution.output = node_outputs
+                await db.commit()
+                return
             execution.status = ExecutionStatus.success
             execution.output = node_outputs
             await db.commit()
@@ -204,6 +239,9 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
 
         except Exception as e:
             logger.exception("工作流执行异常: %s — %s", flow_id, e)
+            await db.refresh(execution)
+            if execution.status == ExecutionStatus.cancelled:
+                return
             execution.status = ExecutionStatus.failed
             execution.error_message = str(e)
             await db.commit()
@@ -595,7 +633,11 @@ async def cancel_execution(db, execution_id) -> bool:
     execution = result.scalar_one_or_none()
     if execution is None:
         return False
-    if execution.status in (ExecutionStatus.success, ExecutionStatus.failed):
+    if execution.status in (
+        ExecutionStatus.success,
+        ExecutionStatus.failed,
+        ExecutionStatus.cancelled,
+    ):
         return False
     execution.status = ExecutionStatus.cancelled
     await db.commit()

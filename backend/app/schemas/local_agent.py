@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ToolInfo(BaseModel):
@@ -18,7 +18,7 @@ class ToolInfo(BaseModel):
 class ToolCallRequest(BaseModel):
     """工具调用请求。"""
 
-    parameters: dict[str, Any] = {}
+    parameters: dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolCallResponse(BaseModel):
@@ -28,7 +28,7 @@ class ToolCallResponse(BaseModel):
     success: bool
     result: Any = None
     error: str | None = None
-    source: str = "mock"  # openclaw / mock
+    source: str = "openclaw"  # openclaw / mock
 
 
 class LocalAgentHealth(BaseModel):

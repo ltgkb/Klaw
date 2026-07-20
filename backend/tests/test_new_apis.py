@@ -24,7 +24,7 @@ async def test_local_agent_tools_discovery(client):
 
 @pytest.mark.asyncio
 async def test_local_agent_tool_call_mock(client):
-    """测试本地工具调用 (OpenClaw 不可达 → dev mock)。"""
+    """离线工具调用必须明确失败，不能把 mock 结果报告为执行成功。"""
     token = await _register_and_login(client, "toolcall@test.com")
     resp = await client.post(
         "/api/v1/local-agent/tools/web_search/call",
@@ -33,8 +33,13 @@ async def test_local_agent_tool_call_mock(client):
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert data["success"] is True
-    assert data["source"] in ("mock", "openclaw")
+    if data["source"] == "mock":
+        assert data["success"] is False
+        assert data["error"]
+        assert data["result"]["mock"] is True
+    else:
+        assert data["source"] == "openclaw"
+        assert data["success"] is True
 
 
 @pytest.mark.asyncio

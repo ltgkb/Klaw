@@ -14,17 +14,33 @@
 #  limitations under the License.
 #
 
-from .docx_parser import RAGFlowDocxParser as DocxParser
-from .epub_parser import RAGFlowEpubParser as EpubParser
-from .excel_parser import RAGFlowExcelParser as ExcelParser
-from .html_parser import RAGFlowHtmlParser as HtmlParser
-from .json_parser import RAGFlowJsonParser as JsonParser
-from .markdown_parser import MarkdownElementExtractor
-from .markdown_parser import RAGFlowMarkdownParser as MarkdownParser
-from .pdf_parser import PlainParser
-from .pdf_parser import RAGFlowPdfParser as PdfParser
-from .ppt_parser import RAGFlowPptParser as PptParser
-from .txt_parser import RAGFlowTxtParser as TxtParser
+from importlib import import_module
+
+
+_LAZY_IMPORTS = {
+    "PdfParser": (".pdf_parser", "RAGFlowPdfParser"),
+    "PlainParser": (".pdf_parser", "PlainParser"),
+    "DocxParser": (".docx_parser", "RAGFlowDocxParser"),
+    "EpubParser": (".epub_parser", "RAGFlowEpubParser"),
+    "ExcelParser": (".excel_parser", "RAGFlowExcelParser"),
+    "PptParser": (".ppt_parser", "RAGFlowPptParser"),
+    "HtmlParser": (".html_parser", "RAGFlowHtmlParser"),
+    "JsonParser": (".json_parser", "RAGFlowJsonParser"),
+    "MarkdownParser": (".markdown_parser", "RAGFlowMarkdownParser"),
+    "MarkdownElementExtractor": (".markdown_parser", "MarkdownElementExtractor"),
+    "TxtParser": (".txt_parser", "RAGFlowTxtParser"),
+}
+
+
+def __getattr__(name):
+    """Load only the parser needed for the current document type."""
+    target = _LAZY_IMPORTS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attribute = target
+    value = getattr(import_module(module_name, __name__), attribute)
+    globals()[name] = value
+    return value
 
 __all__ = [
     "PdfParser",

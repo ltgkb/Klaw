@@ -4,7 +4,9 @@ DB 层用 SQLite 内存库 (conftest.py)。
 ES/MinIO/TEI 外部服务通过 monkeypatch mock, 确保测试不依赖基础设施。
 """
 
+import asyncio
 import io
+import threading
 
 import pytest
 
@@ -385,3 +387,48 @@ async def test_parse_and_index_pipeline(client, mock_infra):
     chunks_resp = await client.get(f"/api/v1/knowledge-bases/{kb_id}/chunks", headers=_auth_headers(token))
     assert chunks_resp.status_code == 200
     assert chunks_resp.json()["total"] >= 1, "Should have chunks after parsing"
+
+
+@pytest.mark.asyncio
+async def test_document_background_parse_does_not_block_event_loop(
+    client, mock_infra, monkeypatch
+):
+    """A CPU-bound parser must not prevent unrelated API requests."""
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_parse(filename, file_data, chunk_token_num=128):
+        started.set()
+        release.wait(timeout=2)
+        return [{"content": "parsed", "content_type": "text", "page": 0}]
+
+    monkeypatch.setattr(
+        "app.services.deepdoc_service.parse_document", slow_parse
+    )
+
+    token = await _register_and_login(client, "nonblocking@test.com")
+    headers = _auth_headers(token)
+    kb = (await client.post(
+        "/api/v1/knowledge-bases",
+        json={"name": "Non-blocking parse"},
+        headers=headers,
+    )).json()
+
+    upload_task = asyncio.create_task(client.post(
+        f"/api/v1/knowledge-bases/{kb['id']}/documents",
+        files={"file": ("slow.txt", b"slow parser", "text/plain")},
+        headers=headers,
+    ))
+
+    assert await asyncio.to_thread(started.wait, 1)
+    try:
+        response = await asyncio.wait_for(
+            client.get("/api/v1/knowledge-bases", headers=headers),
+            timeout=0.5,
+        )
+        assert response.status_code == 200
+    finally:
+        release.set()
+
+    upload = await asyncio.wait_for(upload_task, timeout=2)
+    assert upload.status_code == 201

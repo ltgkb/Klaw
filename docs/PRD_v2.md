@@ -65,7 +65,7 @@ v1.1 是设计草案。v2.0 以**已落地代码**为准重新对齐：保留 v1
 - **分块**：`fixed`（token 窗口）/ `recursive` / `markdown` / `semantic`（降级为 recursive）；表格整块保留；token 计数用 tiktoken。
 - **向量化**：TEI sidecar（BGE-M3，1024 维）；本轮新增**分批 embed（每批 16）**避免 413；dev 环境无 TEI 时回退确定性哈希向量。
 - **索引**：Elasticsearch（dense_vector + BM25，IK 分析器）；增量索引。
-- **检索**：`POST /api/v1/knowledge-bases/{id}/search`，kNN + BM25 混合；可选 Cross-Encoder（TEI reranker）重排；阈值可调；引用溯源（doc_id + page + chunk）。
+- **检索**：`POST /api/v1/knowledge-bases/{id}/search`，kNN + BM25 混合；可选 Cross-Encoder（TEI reranker）重排；8GB 默认使用多语言 `mmarco-mMiniLMv2-L12-H384-v1`，高内存环境可通过 `RERANKER_MODEL_ID` 切换 BGE reranker；阈值可调；引用溯源（doc_id + page + chunk）。
 - **Chunk 管理**：`GET /{id}/chunks`（本轮已确认实现，支持 doc_id 过滤）。
 
 ### 3.2 Agent 画布 — ✅

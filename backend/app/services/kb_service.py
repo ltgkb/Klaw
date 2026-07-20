@@ -1,5 +1,6 @@
 """知识库 CRUD 业务逻辑。对齐 PRD 5.1 / 6.1。"""
 
+import asyncio
 import logging
 
 from sqlalchemy import delete, func, select
@@ -87,7 +88,7 @@ async def delete_kb(db: AsyncSession, kb: KnowledgeBase) -> None:
     docs_result = await db.execute(select(Document).where(Document.kb_id == kb.id))
     for doc in docs_result.scalars().all():
         try:
-            delete_file(doc.file_path)
+            await asyncio.to_thread(delete_file, doc.file_path)
         except Exception as e:
             logger.warning("删除 MinIO 文件失败 (doc=%s): %s", doc.id, e)
 

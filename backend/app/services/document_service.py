@@ -3,6 +3,7 @@
 对齐 PRD 第 3.1 节完整管线。异步解析通过 FastAPI BackgroundTasks 触发。
 """
 
+import asyncio
 import logging
 import uuid
 
@@ -31,7 +32,7 @@ async def upload_document(
     object_name = f"{kb.id}/{doc_id}/{filename}"
 
     # 存储到 MinIO
-    upload_file(object_name, file_data, content_type)
+    await asyncio.to_thread(upload_file, object_name, file_data, content_type)
 
     # 创建 DB 记录
     doc = Document(
@@ -83,11 +84,14 @@ async def parse_and_index(doc_id: uuid.UUID, kb_id: uuid.UUID) -> None:
             await db.commit()
 
             # ── 2. 从 MinIO 下载 ──
-            file_data = download_file(doc.file_path)
+            file_data = await asyncio.to_thread(download_file, doc.file_path)
 
             # ── 3. DeepDoc 解析 ──
-            blocks = deepdoc_service.parse_document(
-                doc.filename, file_data, chunk_token_num=kb.chunk_size
+            blocks = await asyncio.to_thread(
+                deepdoc_service.parse_document,
+                doc.filename,
+                file_data,
+                chunk_token_num=kb.chunk_size,
             )
             doc.page_count = len({b["page"] for b in blocks}) if blocks else 0
             doc.parse_result = {
@@ -102,7 +106,7 @@ async def parse_and_index(doc_id: uuid.UUID, kb_id: uuid.UUID) -> None:
                 return
 
             # ── 4. 分块 (基于 DeepDoc 已有的块 + 知识库 chunk_strategy) ──
-            chunks_data = _create_chunks(blocks, kb)
+            chunks_data = await asyncio.to_thread(_create_chunks, blocks, kb)
 
             # ── 5. TEI 批量向量化 ──
             texts = [c["content"] for c in chunks_data]
@@ -281,7 +285,7 @@ async def delete_document(db: AsyncSession, doc: Document) -> None:
 
     # 2. 删除 MinIO 文件
     try:
-        delete_file(doc.file_path)
+        await asyncio.to_thread(delete_file, doc.file_path)
     except Exception as e:
         logger.warning("删除 MinIO 文件失败 (doc=%s): %s", doc.id, e)
 

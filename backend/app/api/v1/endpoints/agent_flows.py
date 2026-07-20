@@ -128,12 +128,7 @@ async def get_execution(
     db: DBSession,
 ):
     """获取执行详情。"""
-    flow = await agent_flow_service.get_flow(db, flow_id, current_user.id)
-    if flow is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="工作流不存在")
-    execution = await agent_flow_service.get_execution(db, execution_id)
-    if execution is None or execution.flow_id != flow_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="执行记录不存在")
+    execution = await _get_owned_execution(db, flow_id, execution_id, current_user.id)
     return ExecutionRead.model_validate(execution)
 
 
@@ -147,9 +142,7 @@ async def pause_execution(
     db: DBSession,
 ):
     """暂停执行 (在下一个节点前生效)。"""
-    flow = await agent_flow_service.get_flow(db, flow_id, current_user.id)
-    if flow is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="工作流不存在")
+    await _get_owned_execution(db, flow_id, execution_id, current_user.id)
     ok = await execution_service.pause_execution(db, execution_id)
     if not ok:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="无法暂停 (执行可能已结束)")
@@ -165,9 +158,7 @@ async def resume_execution(
     db: DBSession,
 ):
     """恢复暂停的执行。"""
-    flow = await agent_flow_service.get_flow(db, flow_id, current_user.id)
-    if flow is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="工作流不存在")
+    await _get_owned_execution(db, flow_id, execution_id, current_user.id)
     ok = await execution_service.resume_execution(db, execution_id)
     if not ok:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="无法恢复 (执行可能未暂停)")
@@ -183,14 +174,24 @@ async def cancel_execution(
     db: DBSession,
 ):
     """取消执行。"""
-    flow = await agent_flow_service.get_flow(db, flow_id, current_user.id)
-    if flow is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="工作流不存在")
+    await _get_owned_execution(db, flow_id, execution_id, current_user.id)
     ok = await execution_service.cancel_execution(db, execution_id)
     if not ok:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="无法取消 (执行可能已结束)")
     execution = await agent_flow_service.get_execution(db, execution_id)
     return ExecutionRead.model_validate(execution)
+
+
+async def _get_owned_execution(db, flow_id, execution_id, owner_id):
+    """Return an execution only when both its flow and execution belong together."""
+    flow = await agent_flow_service.get_flow(db, flow_id, owner_id)
+    if flow is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="工作流不存在")
+
+    execution = await agent_flow_service.get_execution(db, execution_id)
+    if execution is None or execution.flow_id != flow_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="执行记录不存在")
+    return execution
 
 
 @router.get("/{flow_id}/executions/{execution_id}/stream")
@@ -221,9 +222,7 @@ async def stream_execution(
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未认证")
 
-    flow = await agent_flow_service.get_flow(db, flow_id, user.id)
-    if flow is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="工作流不存在")
+    await _get_owned_execution(db, flow_id, execution_id, user.id)
 
     async def event_generator():
         while True:

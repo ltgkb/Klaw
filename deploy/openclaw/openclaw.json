@@ -1,0 +1,17 @@
+{
+  "gateway": {
+    "mode": "local",
+    "http": {
+      "endpoints": {
+        "chatCompletions": {
+          "enabled": true
+        }
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "workspace": "/home/node/.openclaw/workspace"
+    }
+  }
+}

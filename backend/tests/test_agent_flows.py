@@ -3,7 +3,11 @@
 DB 层用 SQLite 内存库。LLM/检索外部服务通过 monkeypatch mock。
 """
 
+import asyncio
+import uuid
+
 import pytest
+from sqlalchemy import select
 
 
 # ── 辅助函数 ──
@@ -293,3 +297,105 @@ async def test_execute_empty_flow(client, db_engine, monkeypatch):
     )
     detail = detail_resp.json()
     assert detail["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_execution_controls_reject_mismatched_flow(client, db_session):
+    """A user cannot control an execution by pairing it with another owned flow."""
+    token_a = await _register_and_login(client, "control-a@test.com")
+    token_b = await _register_and_login(client, "control-b@test.com")
+
+    flow_a = (await client.post(
+        "/api/v1/agent-flows",
+        json={"name": "Flow A"},
+        headers=_auth_headers(token_a),
+    )).json()
+    flow_b = (await client.post(
+        "/api/v1/agent-flows",
+        json={"name": "Flow B"},
+        headers=_auth_headers(token_b),
+    )).json()
+
+    from app.models.execution import Execution, ExecutionStatus
+
+    execution = Execution(
+        flow_id=uuid.UUID(flow_a["id"]),
+        status=ExecutionStatus.running,
+        input={},
+        node_states={},
+    )
+    db_session.add(execution)
+    await db_session.commit()
+    await db_session.refresh(execution)
+
+    for action in ("pause", "resume", "cancel"):
+        response = await client.post(
+            f"/api/v1/agent-flows/{flow_b['id']}/executions/{execution.id}/{action}",
+            headers=_auth_headers(token_b),
+        )
+        assert response.status_code == 404
+
+    stream_response = await client.get(
+        f"/api/v1/agent-flows/{flow_b['id']}/executions/{execution.id}/stream",
+        params={"token": token_b},
+    )
+    assert stream_response.status_code == 404
+
+    await db_session.refresh(execution)
+    assert execution.status == ExecutionStatus.running
+
+
+@pytest.mark.asyncio
+async def test_cancelled_execution_is_not_overwritten(
+    client, db_engine, db_session, monkeypatch
+):
+    """Cancellation during a long node remains terminal after the node returns."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    import app.core.database as db_module
+    from app.models.execution import Execution, ExecutionStatus
+    from app.services import agent_flow_service, execution_service
+
+    test_factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    monkeypatch.setattr(db_module, "async_session_factory", test_factory)
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_chat(*args, **kwargs):
+        started.set()
+        await release.wait()
+        return "late result"
+
+    monkeypatch.setattr(execution_service, "llm_chat", slow_chat)
+
+    token = await _register_and_login(client, "cancel@test.com")
+    dag = {
+        "nodes": [
+            {"id": "llm", "type": "llm", "position": {"x": 0, "y": 0},
+             "data": {"label": "LLM", "config": {"user_template": "hello"}}},
+            {"id": "after", "type": "text", "position": {"x": 200, "y": 0},
+             "data": {"label": "After", "config": {"template": "must not run"}}},
+        ],
+        "edges": [{"id": "e1", "source": "llm", "target": "after"}],
+    }
+    flow = (await client.post(
+        "/api/v1/agent-flows",
+        json={"name": "Cancel Flow", "dag": dag},
+        headers=_auth_headers(token),
+    )).json()
+    flow_id = uuid.UUID(flow["id"])
+    execution = await agent_flow_service.create_execution(db_session, flow_id, {})
+
+    task = asyncio.create_task(execution_service.run_flow(execution.id, flow_id))
+    await asyncio.wait_for(started.wait(), timeout=2)
+    assert await execution_service.cancel_execution(db_session, execution.id)
+    release.set()
+    await asyncio.wait_for(task, timeout=2)
+
+    result = await db_session.execute(select(Execution).where(Execution.id == execution.id))
+    final = result.scalar_one()
+    await db_session.refresh(final)
+    assert final.status == ExecutionStatus.cancelled
+    assert final.node_states["llm"]["status"] == "cancelled"
+    assert "after" not in final.node_states

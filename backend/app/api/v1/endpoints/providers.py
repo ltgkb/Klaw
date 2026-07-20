@@ -51,8 +51,8 @@ async def list_providers():
     hermes_ok = False
     try:
         async with httpx.AsyncClient(timeout=3) as client:
-            resp = await client.get(f"{settings.hermes_url}/")
-            hermes_ok = resp.status_code < 500
+            resp = await client.get(f"{settings.hermes_url}/health")
+            hermes_ok = resp.status_code == 200
     except Exception:
         hermes_ok = False
     providers.append(ProviderInfo(
@@ -60,7 +60,7 @@ async def list_providers():
         status="ok" if hermes_ok else "unavailable",
         deploy="local",
         priority="P0",
-        detail="gateway mode (CLI 调用)",
+        detail="OpenAI-compatible API server",
     ))
 
     # OpenAI (云端 fallback)

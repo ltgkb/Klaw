@@ -1,5 +1,6 @@
 """FastAPI 应用入口。对齐 PRD 4.1 API 网关层。"""
 
+import asyncio
 import logging
 import sys
 from contextlib import asynccontextmanager
@@ -28,7 +29,7 @@ async def lifespan(app: FastAPI):
     # MinIO bucket
     try:
         from app.core.minio_client import ensure_bucket
-        ensure_bucket()
+        await asyncio.to_thread(ensure_bucket)
     except Exception as e:
         logger.warning("MinIO bucket 初始化失败 (将在请求时重试): %s", e)
 

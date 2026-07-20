@@ -19,6 +19,7 @@ router = APIRouter(prefix="/schedules", tags=["定时任务"])
 @router.post("", response_model=ScheduleRead, status_code=status.HTTP_201_CREATED)
 async def create_schedule(data: ScheduleCreate, current_user: CurrentUser, db: DBSession):
     """创建定时任务。"""
+    _validate_cron(data.cron)
     # 验证 flow 属于当前用户
     flow = await agent_flow_service.get_flow(db, data.flow_id, current_user.id)
     if flow is None:
@@ -49,7 +50,7 @@ async def create_schedule(data: ScheduleCreate, current_user: CurrentUser, db: D
     await db.commit()
     await db.refresh(job)
 
-    return ScheduleRead.model_validate(job)
+    return _schedule_read(job)
 
 
 @router.get("", response_model=list[ScheduleRead])
@@ -72,7 +73,7 @@ async def list_schedules(
         query = query.where(ScheduleJob.status == status_filter)
     query = query.order_by(ScheduleJob.created_at.desc())
     result = await db.execute(query)
-    return [ScheduleRead.model_validate(j) for j in result.scalars().all()]
+    return [_schedule_read(j) for j in result.scalars().all()]
 
 
 @router.get("/{schedule_id}", response_model=ScheduleRead)
@@ -86,7 +87,7 @@ async def get_schedule(schedule_id: uuid.UUID, current_user: CurrentUser, db: DB
     flow = await agent_flow_service.get_flow(db, job.flow_id, current_user.id)
     if flow is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="定时任务不存在")
-    return ScheduleRead.model_validate(job)
+    return _schedule_read(job)
 
 
 @router.put("/{schedule_id}", response_model=ScheduleRead)
@@ -105,15 +106,18 @@ async def update_schedule(schedule_id: uuid.UUID, data: ScheduleUpdate, current_
         job.name = data.name
         changed = True
     if data.cron is not None:
+        _validate_cron(data.cron)
         job.cron = data.cron
         changed = True
     if data.input is not None:
         job.input = data.input
+        changed = True
 
     if data.status is not None:
         job.status = data.status
         if data.status == ScheduleStatus.paused:
             scheduler_module.pause_scheduled_job(str(job.id))
+            job.next_run_time = None
         elif data.status == ScheduleStatus.active:
             next_run = scheduler_module.resume_scheduled_job(str(job.id))
             job.next_run_time = next_run
@@ -131,7 +135,7 @@ async def update_schedule(schedule_id: uuid.UUID, data: ScheduleUpdate, current_
 
     await db.commit()
     await db.refresh(job)
-    return ScheduleRead.model_validate(job)
+    return _schedule_read(job)
 
 
 @router.delete("/{schedule_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -148,3 +152,22 @@ async def delete_schedule(schedule_id: uuid.UUID, current_user: CurrentUser, db:
     scheduler_module.unschedule_flow(str(job.id))
     await db.delete(job)
     await db.commit()
+
+
+def _validate_cron(cron: str) -> None:
+    try:
+        scheduler_module.validate_cron(cron)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+
+
+def _schedule_read(job: ScheduleJob) -> ScheduleRead:
+    next_run = None
+    if job.status == ScheduleStatus.active:
+        next_run = scheduler_module.get_next_run_time(str(job.id)) or job.next_run_time
+    return ScheduleRead.model_validate(job).model_copy(
+        update={"next_run_time": next_run}
+    )
