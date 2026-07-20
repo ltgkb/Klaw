@@ -5,6 +5,67 @@ import pytest
 from tests.test_m4 import _auth_headers, _register_and_login
 
 
+@pytest.mark.asyncio
+async def test_health_checks_configured_embedding_api(monkeypatch):
+    from app.api.v1.endpoints import health
+    from app.core import embedding_config, tei_client
+
+    monkeypatch.setattr(embedding_config, "is_configured", lambda: True)
+    monkeypatch.setattr(
+        embedding_config,
+        "get",
+        lambda: {"base_url": "https://embedding.test/v1", "api_key": "key", "model": "model"},
+    )
+
+    async def healthy_api(texts, base_url, api_key, model, timeout):
+        return [[0.0] * 1024]
+
+    monkeypatch.setattr(tei_client, "_embed_via_api", healthy_api)
+
+    status = await health._embedding_health_status()
+    assert status == "ok: embedding API"
+    assert health._status_is_healthy(status) is True
+
+
+@pytest.mark.asyncio
+async def test_health_rejects_wrong_embedding_dimensions(monkeypatch):
+    from app.api.v1.endpoints import health
+    from app.core import embedding_config, tei_client
+
+    monkeypatch.setattr(embedding_config, "is_configured", lambda: True)
+    monkeypatch.setattr(
+        embedding_config,
+        "get",
+        lambda: {"base_url": "https://embedding.test/v1", "api_key": "key", "model": "model"},
+    )
+
+    async def wrong_dimensions(texts, base_url, api_key, model, timeout):
+        return [[0.0] * 1536]
+
+    monkeypatch.setattr(tei_client, "_embed_via_api", wrong_dimensions)
+
+    status = await health._embedding_health_status()
+    assert status == "error: embedding API returned 1536 dimensions"
+    assert health._status_is_healthy(status) is False
+
+
+@pytest.mark.asyncio
+async def test_health_requires_tei_without_embedding_api(monkeypatch):
+    from app.api.v1.endpoints import health
+    from app.core import embedding_config, tei_client
+
+    monkeypatch.setattr(embedding_config, "is_configured", lambda: False)
+
+    async def unhealthy_tei():
+        return False
+
+    monkeypatch.setattr(tei_client, "health_check", unhealthy_tei)
+
+    status = await health._embedding_health_status()
+    assert status == "error: unhealthy"
+    assert health._status_is_healthy(status) is False
+
+
 # ── 本地工具发现 ──
 
 @pytest.mark.asyncio

@@ -48,6 +48,7 @@ services:
 
   # ── Embedding 服务 (BGE-M3, 1024维, 本地推理) ──
   tei:
+    profiles: ["local-embedding"]
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
     container_name: claw-tei
     restart: unless-stopped
@@ -246,8 +247,6 @@ services:
       elasticsearch:
         condition: service_healthy
       minio:
-        condition: service_healthy
-      tei:
         condition: service_healthy
       reranker:
         condition: service_healthy

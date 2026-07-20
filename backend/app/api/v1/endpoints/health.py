@@ -11,6 +11,39 @@ from app.core.database import async_session_factory
 router = APIRouter(prefix="/health", tags=["健康检查"])
 
 
+async def _embedding_health_status() -> str:
+    """Return the active embedding backend status without requiring optional TEI."""
+    from app.core import embedding_config
+
+    if embedding_config.is_configured():
+        from app.core.tei_client import _embed_via_api
+
+        cfg = embedding_config.get()
+        try:
+            vectors = await _embed_via_api(
+                ["Klaw embedding health check"],
+                cfg["base_url"],
+                cfg["api_key"],
+                cfg["model"],
+                5.0,
+            )
+        except Exception as exc:
+            return f"error: embedding API {exc.__class__.__name__}"
+
+        dimensions = len(vectors[0]) if vectors else 0
+        if dimensions != settings.embedding_dim:
+            return f"error: embedding API returned {dimensions} dimensions"
+        return "ok: embedding API"
+
+    from app.core.tei_client import health_check as tei_health
+
+    return "ok" if await tei_health() else "error: unhealthy"
+
+
+def _status_is_healthy(value: str) -> bool:
+    return value == "ok" or value.startswith("ok:")
+
+
 @router.get("")
 async def health_check():
     """检查各基础设施连通性: PostgreSQL / Redis / ES / MinIO / OpenClaw / Hermes。"""
@@ -80,16 +113,11 @@ async def health_check():
     except Exception as e:
         checks["hermes"] = f"error: unavailable ({e.__class__.__name__})"
 
-    # TEI (Text Embeddings Inference — BGE-M3)
+    # Embedding API is primary. TEI is an optional local fallback.
     try:
-        from app.core.tei_client import health_check as tei_health
-
-        if await tei_health():
-            checks["tei"] = "ok"
-        else:
-            checks["tei"] = "error: unhealthy"
+        checks["embedding"] = await _embedding_health_status()
     except Exception as e:
-        checks["tei"] = f"error: {e.__class__.__name__}"
+        checks["embedding"] = f"error: {e.__class__.__name__}"
 
     # Reranker (Cross-Encoder — BGE reranker)
     try:
@@ -101,7 +129,7 @@ async def health_check():
     except Exception as e:
         checks["reranker"] = f"error: {e.__class__.__name__}"
 
-    all_ok = all(v == "ok" for v in checks.values())
+    all_ok = all(_status_is_healthy(v) for v in checks.values())
     return {
         "status": "healthy" if all_ok else "degraded",
         "checks": checks,
