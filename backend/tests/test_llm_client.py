@@ -6,7 +6,7 @@ from app.core import llm_client
 
 
 @pytest.mark.asyncio
-async def test_empty_kaiweb_stream_falls_back_to_openclaw(monkeypatch):
+async def test_empty_openclaw_stream_falls_back_to_kaiweb(monkeypatch):
     async def empty_stream(*args, **kwargs):
         if False:
             yield ""
@@ -15,8 +15,8 @@ async def test_empty_kaiweb_stream_falls_back_to_openclaw(monkeypatch):
         yield "fallback"
 
     monkeypatch.setattr(llm_client.settings, "kaiweb_api_key", "test-key")
-    monkeypatch.setattr(llm_client, "_stream_openai_compatible", empty_stream)
-    monkeypatch.setattr(llm_client, "_stream_openclaw", fallback_stream)
+    monkeypatch.setattr(llm_client, "_stream_openclaw", empty_stream)
+    monkeypatch.setattr(llm_client, "_stream_openai_compatible", fallback_stream)
 
     chunks = [
         chunk
@@ -42,8 +42,8 @@ async def test_partial_stream_failure_does_not_duplicate_from_fallback(monkeypat
         yield "duplicate"
 
     monkeypatch.setattr(llm_client.settings, "kaiweb_api_key", "test-key")
-    monkeypatch.setattr(llm_client, "_stream_openai_compatible", partial_stream)
-    monkeypatch.setattr(llm_client, "_stream_openclaw", fallback_stream)
+    monkeypatch.setattr(llm_client, "_stream_openclaw", partial_stream)
+    monkeypatch.setattr(llm_client, "_stream_openai_compatible", fallback_stream)
 
     chunks = []
     with pytest.raises(RuntimeError, match="connection lost"):
@@ -54,6 +54,23 @@ async def test_partial_stream_failure_does_not_duplicate_from_fallback(monkeypat
 
     assert chunks == ["partial"]
     assert fallback_called is False
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_prefers_openclaw_over_direct_kaiweb(monkeypatch):
+    async def openclaw(*args, **kwargs):
+        return "from claw"
+
+    async def unexpected_kaiweb(*args, **kwargs):
+        raise AssertionError("direct Kaiweb must not run before OpenClaw")
+
+    monkeypatch.setattr(llm_client.settings, "kaiweb_api_key", "test-key")
+    monkeypatch.setattr(llm_client, "_call_openclaw", openclaw)
+    monkeypatch.setattr(llm_client, "_call_openai_compatible", unexpected_kaiweb)
+
+    result = await llm_client.chat([{"role": "user", "content": "hello"}])
+
+    assert result == "from claw"
 
 
 def test_openclaw_model_contract(monkeypatch):

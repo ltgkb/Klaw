@@ -150,6 +150,8 @@ services:
       - |
         if [ ! -f "$${OPENCLAW_CONFIG_PATH}" ]; then
           cp /opt/klaw/openclaw.json "$${OPENCLAW_CONFIG_PATH}"
+        else
+          node dist/index.js config patch --file /opt/klaw/openclaw.json >/dev/null
         fi
         node dist/index.js config set gateway.http.endpoints.chatCompletions.enabled true --strict-json >/dev/null
         exec node dist/index.js gateway --bind lan --port 8080
@@ -169,6 +171,7 @@ services:
       - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-dev-token-claw}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - KAIWEB_API_KEY=${KAIWEB_API_KEY:-}
       - OPENCLAW_DISABLE_BONJOUR=1
     depends_on:
       openclaw-init:

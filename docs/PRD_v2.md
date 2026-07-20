@@ -46,7 +46,7 @@ v1.1 是设计草案。v2.0 以**已落地代码**为准重新对齐：保留 v1
 - ✅ 执行结果通过自建推送服务发送至飞书/企微/Telegram（本轮新增渠道持久化配置）
 - ✅ 支持 OpenAI 作为 OpenClaw / Hermes 的 fallback
 - ✅（本轮新增）dev 环境内置 Mock LLM / 向量兜底，无 API Key 亦可完整演示
-- ✅（Kaiweb 适配）接入自建 OpenAI 兼容网关 https://ai.kaiweb.net，真实 GLM/DeepSeek 模型已可用（默认 glm-4.5-air）
+- ✅（Kaiweb 适配）OpenClaw 接入自建 OpenAI 兼容网关 https://ai.kaiweb.net，真实 GLM 模型已可用（默认 glm-4.5）
 
 ### 2.2 生产级目标（可对外交付）— ⬜ 路线图
 - ⬜ 多租户权限隔离（当前为单租户 owner 隔离）
@@ -77,8 +77,8 @@ v1.1 是设计草案。v2.0 以**已落地代码**为准重新对齐：保留 v1
 
 ### 3.3 模型供应商 — ✅
 - **统一抽象**：`app/core/llm_client.py`，OpenAI 兼容 `chat/completions`；httpx 直调，不引 langchain/openai SDK。
-- **供应商与优先级**：**Kaiweb（自建 OpenAI 兼容网关 https://ai.kaiweb.net/v1，真实 LLM，P0 最高优先）** → OpenClaw（本地）→ OpenAI（云端 fallback）→ Anthropic → dev Mock 兜底。
-- **Kaiweb 适配**（本轮新增）：`_call_openai_compatible` / `_stream_openai_compatible` 通用方法复用于任意 OpenAI 兼容端点；`/v1/models` 拉取真实模型（glm-4.5/4.6/5.x、deepseek-v4 等）；默认模型 `glm-4.5-air`；兼容推理模型（content 为空时回退 `reasoning_content`）；`_resolve_kaiweb_model` 将 `default` 映射为配置模型。
+- **供应商与优先级**：**OpenClaw（本地 Agent 网关，默认上游 Kaiweb glm-4.5）** → Kaiweb 直连 fallback → OpenAI（云端 fallback）→ Anthropic → dev Mock 兜底。
+- **Kaiweb 适配**：OpenClaw 自定义 `openai-completions` provider 指向 `https://ai.kaiweb.net/v1`；Klaw 的 `_call_openai_compatible` / `_stream_openai_compatible` 保留为 OpenClaw 故障时的直连 fallback；兼容推理模型 content 为空时回退 `reasoning_content`。
 - **流式**：`/providers/chat/stream`（SSE）。
 - **本地集成**：OpenClaw `/v1/chat/completions`、`/v1/models`、`/health`；本轮新增 `/api/v1/local-agent/tools` 发现（扫描 `deploy/*/skills/skill.json` + OpenClaw 在线工具合并）与 `/tools/{id}/call`（OpenClaw 不可达时 dev mock）。
 
@@ -205,4 +205,4 @@ API 网关 FastAPI + JWT + RBAC + 全局异常 + 结构化 JSON 日志
 | v1.0 | 2026-07-14 | 初始版本（云端 Kimi Claw） |
 | v1.1 | 2026-07-14 | 模型层改本地 OpenClaw/Hermes；定时/存储/推送/记忆自建 |
 | v2.0 | 2026-07-15 | 按实际实现重生成；标注偏差；本轮补全 P0 接口与 UI；新增 Mock 兜底；修复 paused 枚举 |
-| v2.1 | 2026-07-16 | 接入自建 Kaiweb OpenAI 兼容网关为最高优先真实 LLM 供应商（glm-4.5-air 默认）；兼容推理模型 reasoning_content；取代 Mock 兜底为主路径 |
+| v2.1 | 2026-07-16 | OpenClaw 接入 Kaiweb OpenAI 兼容网关（glm-4.5 默认），Kaiweb 直连作为 fallback；兼容 reasoning_content |

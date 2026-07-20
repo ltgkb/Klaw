@@ -42,20 +42,7 @@ async def chat(
     Returns:
         LLM 回复文本
     """
-    # 1. 尝试 Kaiweb (自建 OpenAI 兼容网关, 真实 LLM 优先)
-    if settings.kaiweb_api_key:
-        try:
-            result = await _call_openai_compatible(
-                messages, _resolve_kaiweb_model(model), settings.kaiweb_base_url, settings.kaiweb_api_key,
-                "kaiweb", temperature, max_tokens, timeout,
-            )
-            if result:
-                logger.info("LLM 调用成功: Kaiweb (model=%s)", model)
-                return result
-        except Exception as e:
-            logger.warning("Kaiweb 调用失败, 尝试 fallback: %s", e)
-
-    # 2. 尝试 OpenClaw (本地优先)
+    # 1. OpenClaw owns agent context, tools, and provider routing.
     try:
         result = await _call_openclaw(messages, model, temperature, max_tokens, timeout)
         if result:
@@ -63,6 +50,19 @@ async def chat(
             return result
     except Exception as e:
         logger.warning("OpenClaw 调用失败, 尝试 fallback: %s", e)
+
+    # 2. Direct Kaiweb is retained as a fallback when OpenClaw is unavailable.
+    if settings.kaiweb_api_key:
+        try:
+            result = await _call_openai_compatible(
+                messages, _resolve_kaiweb_model(model), settings.kaiweb_base_url, settings.kaiweb_api_key,
+                "kaiweb", temperature, max_tokens, timeout,
+            )
+            if result:
+                logger.info("LLM 调用成功: Kaiweb fallback (model=%s)", model)
+                return result
+        except Exception as e:
+            logger.warning("Kaiweb 调用失败, 尝试 fallback: %s", e)
 
     # 3. 尝试 OpenAI
     openai_key = _get_openai_key(user)
@@ -310,7 +310,21 @@ async def chat_stream(
     优先 OpenClaw SSE 流式, fallback 到 OpenAI 流式。
     如果流式不可用, 降级为非流式调用并一次性 yield 完整回复。
     """
-    # 1. 尝试 Kaiweb 流式 (真实 LLM 优先)
+    # 1. OpenClaw owns the primary streaming path.
+    emitted = False
+    try:
+        async for chunk in _stream_openclaw(messages, model, temperature, max_tokens, timeout):
+            emitted = True
+            yield chunk
+        if not emitted:
+            raise RuntimeError("OpenClaw 流式响应未包含文本")
+        return
+    except Exception as e:
+        if emitted:
+            raise
+        logger.warning("OpenClaw 流式失败, 尝试 fallback: %s", e)
+
+    # 2. Direct Kaiweb streaming fallback.
     if settings.kaiweb_api_key:
         emitted = False
         try:
@@ -327,20 +341,6 @@ async def chat_stream(
             if emitted:
                 raise
             logger.warning("Kaiweb 流式失败, 尝试 fallback: %s", e)
-
-    # 2. 尝试 OpenClaw 流式
-    emitted = False
-    try:
-        async for chunk in _stream_openclaw(messages, model, temperature, max_tokens, timeout):
-            emitted = True
-            yield chunk
-        if not emitted:
-            raise RuntimeError("OpenClaw 流式响应未包含文本")
-        return
-    except Exception as e:
-        if emitted:
-            raise
-        logger.warning("OpenClaw 流式失败, 尝试 fallback: %s", e)
 
     # 3. 尝试 OpenAI 流式
     openai_key = _get_openai_key(user)

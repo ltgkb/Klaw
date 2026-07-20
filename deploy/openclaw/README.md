@@ -10,7 +10,7 @@ OpenClaw 是开源的本地 AI 智能体框架，支持 Skills 扩展和 OpenAI 
 ## 目录说明
 
 - `skills/` — 平台展示的本地工具清单，也挂载到 OpenClaw workspace
-- `openclaw.json` — 首次启动的基础配置，显式开启 Chat Completions API
+- `openclaw.json` — 启动时合并的基础配置，开启 Chat Completions，并把 Kaiweb GLM-4.5 配为默认聊天模型
 
 ## 配置
 
@@ -18,12 +18,13 @@ OpenClaw 是开源的本地 AI 智能体框架，支持 Skills 扩展和 OpenAI 
 ```
 OPENCLAW_IMAGE=openclaw/openclaw:latest
 OPENCLAW_GATEWAY_TOKEN=replace-with-a-random-secret
-OPENAI_API_KEY=your-provider-key
+KAIWEB_API_KEY=your-kaiweb-key
+KAIWEB_MODEL=glm-4.5
 ```
 
-也可使用 `ANTHROPIC_API_KEY`，或进入 OpenClaw 完成其他模型供应商配置。
-Compose 会保留持久卷里的已有配置，并在启动时合并启用
-`gateway.http.endpoints.chatCompletions.enabled`。
+`Klaw -> OpenClaw -> Kaiweb GLM-4.5` 是默认聊天链路；Klaw 仅在 OpenClaw
+不可用时直连 Kaiweb fallback。Compose 会保留持久卷里的已有配置，并在启动时
+合并仓库配置，不覆盖已有渠道和其他用户配置。
 
 ## 验证
 
@@ -31,4 +32,9 @@ Compose 会保留持久卷里的已有配置，并在启动时合并启用
 curl http://localhost:8080/readyz
 curl http://localhost:8080/v1/models \
   -H "Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN"
+
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"openclaw/default","messages":[{"role":"user","content":"Reply with OK"}]}'
 ```
