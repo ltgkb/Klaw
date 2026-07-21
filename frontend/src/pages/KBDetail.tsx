@@ -39,15 +39,16 @@ export function KBDetail() {
   const [docs, setDocs] = useState<DocumentRead[]>([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
+  const [error, setError] = useState("")
 
   // 检索
   const [query, setQuery] = useState("")
   const [searching, setSearching] = useState(false)
   const [hits, setHits] = useState<SearchHit[]>([])
 
-  const fetchAll = async () => {
+  const fetchAll = async (showLoading = true) => {
     if (!kbId) return
-    setLoading(true)
+    if (showLoading) setLoading(true)
     try {
       const [kbResp, docsResp] = await Promise.all([
         kbApi.get(kbId),
@@ -55,10 +56,11 @@ export function KBDetail() {
       ])
       setKb(kbResp.data)
       setDocs(docsResp.data)
+      setError("")
     } catch {
-      // 错误由拦截器处理
+      setError("无法加载知识库，请刷新后重试")
     } finally {
-      setLoading(false)
+      if (showLoading) setLoading(false)
     }
   }
 
@@ -71,7 +73,7 @@ export function KBDetail() {
   useEffect(() => {
     const hasParsing = docs.some((d) => d.parse_status === "pending" || d.parse_status === "parsing")
     if (!hasParsing) return
-    const timer = setInterval(fetchAll, 3000)
+    const timer = setInterval(() => fetchAll(false), 3000)
     return () => clearInterval(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docs])
@@ -84,8 +86,9 @@ export function KBDetail() {
         await kbApi.uploadDocument(kbId, file)
       }
       await fetchAll()
+      setError("")
     } catch {
-      // 错误由拦截器处理
+      setError("文档上传失败，请检查格式、大小或存储服务")
     } finally {
       setUploading(false)
       if (fileInputRef.current) fileInputRef.current.value = ""
@@ -98,8 +101,9 @@ export function KBDetail() {
     try {
       await kbApi.deleteDocument(kbId, docId)
       await fetchAll()
+      setError("")
     } catch {
-      // 错误由拦截器处理
+      setError("文档删除失败，数据已保留，请稍后重试")
     }
   }
 
@@ -109,8 +113,9 @@ export function KBDetail() {
     try {
       const resp = await kbApi.search(kbId, { query, top_k: 10 })
       setHits(resp.data.hits)
+      setError("")
     } catch {
-      // 错误由拦截器处理
+      setError("检索失败，请检查索引或向量服务状态")
     } finally {
       setSearching(false)
     }
@@ -131,13 +136,20 @@ export function KBDetail() {
           <ArrowLeft className="h-4 w-4" />
           返回
         </Button>
-        <p className="text-sm text-muted-foreground">知识库不存在</p>
+        <p role={error ? "alert" : undefined} className={error ? "text-sm text-destructive" : "text-sm text-muted-foreground"}>
+          {error || "知识库不存在"}
+        </p>
       </div>
     )
   }
 
   return (
     <div className="space-y-6">
+      {error && (
+        <div role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+          {error}
+        </div>
+      )}
       {/* 头部 */}
       <div className="flex items-center gap-4">
         <Button variant="ghost" size="sm" onClick={() => navigate("/kb")}>
