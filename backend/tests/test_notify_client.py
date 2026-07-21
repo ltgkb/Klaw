@@ -153,6 +153,19 @@ async def test_telegram_fallback_also_fails(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_telegram_auth_error_does_not_raise_url_with_token(monkeypatch, caplog):
+    """非 400 API 错误只记录状态，不能通过 HTTPStatusError 暴露 URL 中的 token。"""
+    token = "123456:SECRET-token"
+    _patch_httpx(monkeypatch, lambda url, json: _FakeResponse(401, {"ok": False}))
+
+    with caplog.at_level("WARNING"):
+        assert await send_telegram(token, "123", "x") is False
+
+    assert token not in caplog.text
+    assert "HTTP 401" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_telegram_invalid_token_rejected(monkeypatch):
     requests = _patch_httpx(monkeypatch, lambda url, json: _FakeResponse(200, {"ok": True}))
     with pytest.raises(ValueError, match="bot_token"):

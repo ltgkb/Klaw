@@ -92,7 +92,7 @@ async def send_telegram(bot_token: str, chat_id: str, text: str) -> bool:
                 logger.warning("Telegram 纯文本重发仍失败: HTTP %s", resp2.status_code)
                 return False
             return "ok" in data2 and data2["ok"] is True
-        resp.raise_for_status()
+        logger.warning("Telegram API 请求失败: HTTP %s", resp.status_code)
         return False
 
 
