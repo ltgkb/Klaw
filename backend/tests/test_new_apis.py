@@ -251,6 +251,28 @@ async def test_file_workspace_crud(client, mock_minio):
     assert len(resp.json()) == 0
 
 
+@pytest.mark.asyncio
+async def test_file_workspace_rejects_oversized_upload_before_storage(client, monkeypatch):
+    """工作区文件超过限制时返回 413，且不会进入对象存储。"""
+    from app.api.v1.endpoints import files as files_ep
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "max_upload_size", 3)
+
+    def unexpected_upload(*args, **kwargs):
+        raise AssertionError("oversized upload must be rejected before MinIO")
+
+    monkeypatch.setattr(files_ep, "upload_file", unexpected_upload)
+    token = await _register_and_login(client, "filelarge@test.com")
+    resp = await client.post(
+        "/api/v1/files",
+        files={"file": ("large.txt", b"four", "text/plain")},
+        headers=_auth_headers(token),
+    )
+
+    assert resp.status_code == 413
+
+
 # ── WP6: 文件记忆与本地工具修复 ──
 
 @pytest.mark.asyncio

@@ -191,7 +191,7 @@ API 网关 FastAPI + JWT + RBAC + 全局异常 + 结构化 JSON 日志
 ---
 
 ## 10. 验证状态（2026-07-22）
-- 后端：`uv run pytest -q` → **219 passed**。
+- 后端：`uv run pytest -q` → **220 passed**。
 - 前端：lint/build 通过；Playwright 桌面/移动真实登录、工具调用、Agent 对话通过，无 console error 或横向溢出。
 - 真实依赖：PostgreSQL/Redis/MinIO/Elasticsearch/OpenClaw/Hermes/reranker healthy；空库迁移到 `5d4e1a2b8f66 (head)` 且无 schema 漂移。
 - 真实链路：TXT→MinIO→解析→hash embedding（明确 dev fallback）→ES→rerank；条件错误分支 skipped；Bearer SSE complete；Agent 消息落库；OpenClaw `web_fetch` HTTP 200；APScheduler 触发、重启恢复和暂停通过。

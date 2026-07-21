@@ -6,7 +6,7 @@
 
 ## 证据摘要
 
-- 后端基线：`uv run pytest -q` 为 **203 passed**；本轮最终全量回归 **219 passed**。
+- 后端基线：`uv run pytest -q` 为 **203 passed**；本轮最终全量回归 **220 passed**。
 - 前端：`npm run lint` 通过（4 个既有 Fast Refresh warning）；`npm run build` 通过，主 JS 约 631 kB，仍有 code-splitting warning。
 - 真实依赖：隔离 PostgreSQL 16、Redis 7、MinIO、Elasticsearch 8.11、OpenClaw 2026.7.1、Hermes 0.18.2、TEI reranker 全部 healthy；OpenClaw/Hermes/reranker 均 0 重启、未 OOM。
 - 真实 API：注册、登录、refresh、TXT 上传解析、MinIO 存储、ES 索引/检索、真实 rerank、条件裁剪、Bearer Header SSE、Agent 对话落库、OpenClaw `web_fetch`、APScheduler 触发/重启恢复/暂停均通过。
@@ -48,7 +48,7 @@
 | 系统设置/健康 | `/settings`、`/health` | 依赖状态可见 | PG/Redis/ES/MinIO/OpenClaw/Hermes/reranker 探活 | 前六项真实 ok；embedding error 使 overall degraded | 可用（诚实） | 缺延迟、版本和历史趋势（P2） |
 | 导航/空态/错误态/移动端 | 全站 | 响应式主导航和 Agent 选择 | React Router + toast | 1440/390 Playwright，无 console error/横向溢出 | 部分可用 | 多页仍有静默 catch；无 CI 浏览器套件（P1） |
 | Compose/迁移/部署 | Compose、Makefile | N/A | backend 启动前 Alembic；health gating；无运行时依赖安装 | backend/frontend 镜像；容器迁移到 head；运行后 alembic check clean；Nginx E2E | 部分可用 | 固定 container_name 阻碍并行；TEI BGE-M3 未启动（P1/P2） |
-| 测试/lint/build/CI | Makefile | N/A | pytest/oxlint/tsc/Vite/Compose | 219 tests；lint/build/config 通过 | 部分可用 | 仓库无 CI；bundle 631 kB；无浏览器 CI（P1） |
+| 测试/lint/build/CI | Makefile | N/A | pytest/oxlint/tsc/Vite/Compose | 220 tests；lint/build/config 通过 | 部分可用 | 仓库无 CI；bundle 631 kB；无浏览器 CI（P1） |
 
 ## 本轮矩阵变化
 
