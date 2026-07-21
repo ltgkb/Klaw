@@ -136,7 +136,17 @@ async def call_tool(tool_id: str, parameters: dict) -> dict:
     except Exception as e:
         logger.debug("OpenClaw 工具调用不可用, 回退 mock: %s", e)
 
-    # 2. dev 兜底: mock 结构化结果
+    # 2. 仅 dev 允许离线演示兜底。生产必须显式暴露不可用，不能伪造成功。
+    if settings.environment != "dev":
+        return {
+            "tool_id": tool_id,
+            "success": False,
+            "result": None,
+            "error": "OpenClaw tool service unavailable",
+            "source": "openclaw",
+        }
+
+    # dev 兜底: mock 结构化结果
     return {
         "tool_id": tool_id,
         "success": True,
@@ -158,7 +168,7 @@ async def health() -> dict:
     try:
         async with httpx.AsyncClient(timeout=3) as client:
             resp = await client.get(f"{settings.hermes_url}/")
-            hermes_ok = resp.status_code < 500
+            hermes_ok = 200 <= resp.status_code < 300
     except Exception:
         hermes_ok = False
 

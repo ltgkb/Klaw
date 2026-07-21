@@ -52,7 +52,7 @@ async def list_providers():
     try:
         async with httpx.AsyncClient(timeout=3) as client:
             resp = await client.get(f"{settings.hermes_url}/")
-            hermes_ok = resp.status_code < 500
+            hermes_ok = 200 <= resp.status_code < 300
     except Exception:
         hermes_ok = False
     providers.append(ProviderInfo(

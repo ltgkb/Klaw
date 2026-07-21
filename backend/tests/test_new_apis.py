@@ -38,6 +38,23 @@ async def test_local_agent_tool_call_mock(client):
 
 
 @pytest.mark.asyncio
+async def test_local_agent_tool_call_does_not_fake_prod_success(client, monkeypatch):
+    """生产环境 OpenClaw 不可达时必须返回失败而不是 mock 成功。"""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "environment", "prod")
+    token = await _register_and_login(client, "toolcall-prod@test.com")
+    resp = await client.post(
+        "/api/v1/local-agent/tools/web_search/call",
+        json={"parameters": {"query": "hello"}},
+        headers=_auth_headers(token),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["success"] is False
+    assert resp.json()["source"] == "openclaw"
+
+
+@pytest.mark.asyncio
 async def test_local_agent_health(client):
     """测试本地 Agent 健康检查。"""
     token = await _register_and_login(client, "lh@test.com")
