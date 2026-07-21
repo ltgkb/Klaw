@@ -39,7 +39,7 @@ async def health_check():
 
         async with httpx.AsyncClient(timeout=3) as client:
             resp = await client.get(settings.es_url)
-            checks["elasticsearch"] = "ok" if resp.status_code < 500 else f"error: HTTP {resp.status_code}"
+            checks["elasticsearch"] = "ok" if 200 <= resp.status_code < 300 else f"error: HTTP {resp.status_code}"
     except Exception as e:
         checks["elasticsearch"] = f"error: {e.__class__.__name__}"
 
@@ -67,23 +67,21 @@ async def health_check():
             headers["Authorization"] = f"Bearer {settings.openclaw_token}"
         async with httpx.AsyncClient(timeout=3) as client:
             resp = await client.get(f"{settings.openclaw_url}/health", headers=headers)
-            checks["openclaw"] = "ok" if resp.status_code < 500 else f"error: HTTP {resp.status_code}"
+            checks["openclaw"] = "ok" if 200 <= resp.status_code < 300 else f"error: HTTP {resp.status_code}"
     except Exception as e:
         checks["openclaw"] = f"error: {e.__class__.__name__}"
 
-    # Hermes — 消息网关 (Telegram/Discord/Slack bridge)
-    # Hermes gateway 不暴露标准 HTTP API (API server 默认关闭, 需 API_SERVER_KEY)
-    # 容器运行即视为可用; 实际 Skills 调用在 M4 通过 CLI/进程方式集成
+    # Hermes — 这里只能确认 HTTP API 连通性。gateway 模式没有 HTTP API
+    # 时必须报告不可探测，不能把连接失败当作 running。
     try:
         import httpx
 
         # 尝试连接 Hermes gateway 的 HTTP 端口 (如配置了 API server)
         async with httpx.AsyncClient(timeout=2) as client:
             resp = await client.get(f"{settings.hermes_url}/")
-            checks["hermes"] = "ok" if resp.status_code < 500 else f"running (HTTP {resp.status_code})"
-    except Exception:
-        # 端口不可达是正常的 — Hermes gateway 默认不暴露 HTTP
-        checks["hermes"] = "running (gateway mode, no HTTP API)"
+            checks["hermes"] = "ok" if 200 <= resp.status_code < 300 else f"error: HTTP {resp.status_code}"
+    except Exception as e:
+        checks["hermes"] = f"error: {e.__class__.__name__}"
 
     # TEI (Text Embeddings Inference — BGE-M3)
     try:
@@ -106,7 +104,7 @@ async def health_check():
     except Exception as e:
         checks["reranker"] = f"error: {e.__class__.__name__}"
 
-    all_ok = all(v == "ok" or v.startswith("running") for v in checks.values())
+    all_ok = all(v == "ok" for v in checks.values())
     return {
         "status": "healthy" if all_ok else "degraded",
         "checks": checks,
