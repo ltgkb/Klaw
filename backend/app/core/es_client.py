@@ -4,6 +4,8 @@
 ES 8.11 原生支持 dense_vector + knn，IK 插件提供中文分词。
 """
 
+import asyncio
+import json
 import logging
 
 from elasticsearch import AsyncElasticsearch, NotFoundError
@@ -11,6 +13,12 @@ from elasticsearch import AsyncElasticsearch, NotFoundError
 from app.core.config import settings
 
 logger = logging.getLogger("claw.es")
+
+# bulk 分批与重试参数: 8GB 生产机上 ES 堆 1g, 单个 bulk 请求需远小于
+# coordinating_operation_bytes 上限 (默认 heap 10%), 否则触发 429。
+_BULK_MAX_CHUNKS = 100                  # 每批最多 chunk 条数
+_BULK_MAX_BYTES = 5 * 1024 * 1024       # 每批估算字节上限 5MB
+_BULK_RETRY_DELAYS = (2.0, 5.0, 10.0)   # 429 类可恢复错误指数退避 (秒), 共 3 次重试
 
 _client: AsyncElasticsearch | None = None
 
@@ -83,6 +91,13 @@ async def index_chunks_bulk(chunks: list[dict]) -> int:
     每个 chunk dict 需包含: chunk_id, kb_id, doc_id, content, content_type, page, embedding, metadata。
     开头确保索引存在; bulk 响应中任何条目出错即解析错误并 raise。
     返回成功索引的文档数。
+
+    生产机 ES 堆较小 (1g), 整篇文档一次性 bulk 会触发
+    coordinating_operation_bytes / circuit_breaking 429, 因此:
+      - 按「条数 ≤ _BULK_MAX_CHUNKS 且估算字节 ≤ _BULK_MAX_BYTES」分批发送;
+      - 每批遇 429 / circuit_breaking / rejected_execution 类可恢复错误时
+        按 _BULK_RETRY_DELAYS 指数退避重试, 耗尽后再 raise;
+      - 仅最后一批 refresh=True, 中间批 refresh=False (减少段合并压力)。
     """
     if not chunks:
         return 0
@@ -92,10 +107,13 @@ async def index_chunks_bulk(chunks: list[dict]) -> int:
     es = get_es_client()
     index_name = settings.es_kb_index
 
-    actions = []
+    # ── 构造每 chunk 的 (action, source) 并按条数+字节分批 ──
+    batches: list[list[dict]] = []
+    current: list[dict] = []
+    current_bytes = 0
     for chunk in chunks:
-        actions.append({"index": {"_index": index_name, "_id": chunk["chunk_id"]}})
-        actions.append({
+        action = {"index": {"_index": index_name, "_id": chunk["chunk_id"]}}
+        source = {
             "chunk_id": chunk["chunk_id"],
             "kb_id": str(chunk["kb_id"]),
             "doc_id": str(chunk["doc_id"]),
@@ -104,15 +122,53 @@ async def index_chunks_bulk(chunks: list[dict]) -> int:
             "page": chunk.get("page", 0),
             "embedding": chunk["embedding"],
             "metadata": chunk.get("metadata", {}),
-        })
+        }
+        size = len(json.dumps(source, ensure_ascii=False, default=str).encode("utf-8")) + 128
+        if current and (len(current) // 2 >= _BULK_MAX_CHUNKS or current_bytes + size > _BULK_MAX_BYTES):
+            batches.append(current)
+            current, current_bytes = [], 0
+        current.extend((action, source))
+        current_bytes += size
+    if current:
+        batches.append(current)
 
-    result = await es.bulk(operations=actions, refresh=True)
-    if result.get("errors"):
-        errors = [item["index"]["error"] for item in result.get("items", []) if "error" in item.get("index", {})]
-        logger.error("ES bulk 索引部分失败: %d/%d — %s", len(errors), len(chunks), errors[:3])
-        raise RuntimeError(f"ES bulk 索引失败 {len(errors)}/{len(chunks)}: {errors[0] if errors else 'unknown'}")
-    logger.info("ES bulk 索引成功: %d chunks", len(chunks))
+    # ── 分批发送, 仅最后一批 refresh ──
+    for i, batch in enumerate(batches):
+        refresh = i == len(batches) - 1
+        result = await _bulk_with_retry(es, batch, refresh)
+        if result.get("errors"):
+            errors = [item["index"]["error"] for item in result.get("items", []) if "error" in item.get("index", {})]
+            logger.error("ES bulk 索引部分失败: %d/%d — %s", len(errors), len(chunks), errors[:3])
+            raise RuntimeError(f"ES bulk 索引失败 {len(errors)}/{len(chunks)}: {errors[0] if errors else 'unknown'}")
+        logger.info("ES bulk 批次 %d/%d 索引成功: %d chunks", i + 1, len(batches), len(batch) // 2)
+
+    logger.info("ES bulk 索引成功: %d chunks (%d 批)", len(chunks), len(batches))
     return len(chunks)
+
+
+def _is_recoverable_bulk_error(exc: Exception) -> bool:
+    """判断 bulk 异常是否为 429 / 熔断 / 拒绝执行类可恢复错误。"""
+    status = getattr(exc, "status_code", None) or getattr(getattr(exc, "meta", None), "status", None)
+    if status == 429:
+        return True
+    text = str(exc).lower()
+    return "429" in text or "too_many_requests" in text or "circuit_breaking" in text or "rejected_execution" in text
+
+
+async def _bulk_with_retry(es: AsyncElasticsearch, operations: list[dict], refresh: bool):
+    """发送单批 bulk, 可恢复错误按指数退避重试, 耗尽后原样 raise。"""
+    for attempt in range(len(_BULK_RETRY_DELAYS) + 1):
+        try:
+            return await es.bulk(operations=operations, refresh=refresh)
+        except Exception as exc:
+            if attempt >= len(_BULK_RETRY_DELAYS) or not _is_recoverable_bulk_error(exc):
+                raise
+            delay = _BULK_RETRY_DELAYS[attempt]
+            logger.warning(
+                "ES bulk 被限流/熔断 (%s), %.0fs 后第 %d/%d 次重试 (%d ops)",
+                exc, delay, attempt + 1, len(_BULK_RETRY_DELAYS), len(operations),
+            )
+            await asyncio.sleep(delay)
 
 
 async def hybrid_search(
