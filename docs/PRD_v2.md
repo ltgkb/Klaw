@@ -71,7 +71,7 @@ v1.1 是设计草案。v2.0 以**已落地代码**为准重新对齐：保留 v1
 ### 3.2 Agent 画布 — ✅
 - **画布引擎**：@xyflow/react；节点拖拽/连线/删除、缩放/平移/minimap、序列化为 DAG JSON。
 - **节点类型**（6 类）：`text` / `llm` / `retrieval` / `condition` / `notify` / `memory`。
-- **执行引擎**：自研 asyncio DAG（Kahn 拓扑排序，逐节点执行，每步写 `node_states`）；后台任务 + SSE 实时状态推送（`progress`/`complete`）；暂停/恢复/取消（DB 状态轮询）；节点失败即终止。
+- **执行引擎**：自研 asyncio DAG（Kahn 拓扑排序，逐节点执行，每步写 `node_states`）；后台任务 + SSE 实时状态推送（`progress`/`complete`）；暂停/恢复/取消（DB 状态轮询，控制按 flow+execution+owner 绑定）；节点失败即终止；条件节点按 `sourceHandle` 只推进匹配分支。
 - **模板与复用**：CRUD 已就绪，预设模板留作路线图。
 - **MCP**：二期。
 
@@ -108,7 +108,7 @@ v1.1 是设计草案。v2.0 以**已落地代码**为准重新对齐：保留 v1
 | 编排引擎 | LangGraph | 自研 asyncio DAG | 功能等价（拓扑序 + 状态机 + SSE），降低依赖；M5 可迁 LangGraph |
 | PDF 解析 | DeepDoc 全量（含 OCR） | PlainParser 纯文本 | 视觉/OCR 需 ONNX 模型，留 M5 |
 | 短期记忆 | Redis + PG | 仅 PG | Redis 短期记忆待补 |
-| 条件分支 | IF/ELSE 分支 | 简化求值返回 true/false | 当前不裁剪下游边，全部执行；M5 实现真正分支 |
+| 条件分支 | IF/ELSE 分支 | cases + `sourceHandle` 路由 | 已实现匹配分支裁剪；复杂汇合拓扑仍需更多回归 |
 
 ---
 
@@ -177,7 +177,7 @@ API 网关 FastAPI + JWT + RBAC + 全局异常 + 结构化 JSON 日志
 ---
 
 ## 9. 剩余路线图（M5 生产级）
-1. 迁移到 LangGraph SDK（保留当前 DAG 作为 fallback）；条件节点实现真正分支裁剪。
+1. 迁移到 LangGraph SDK（保留当前 DAG 作为 fallback）；补 checkpoint、重试和复杂汇合分支评测。
 2. PDF 视觉/OCR 解析（DeepDoc VisionParser + ONNX 模型）。
 3. Redis 短期记忆（会话上下文 TTL）。
 4. LangSmith 全链路追踪 + 日志聚合 + 告警。
@@ -188,7 +188,7 @@ API 网关 FastAPI + JWT + RBAC + 全局异常 + 结构化 JSON 日志
 
 ---
 
-## 10. 验证状态（2026-07-15）
+## 10. 验证状态（2026-07-21 审计更新）
 - 后端测试：`uv run pytest -q` → **58 passed**（含本轮新增 6 项：本地工具/文件工作区/推送渠道）。
 - 端到端（本地运行，轻量基础设施 postgres+redis+minio+es，OpenClaw/Hermes/TEI 可用）：
   - 注册/登录/JWT ✅
@@ -196,6 +196,8 @@ API 网关 FastAPI + JWT + RBAC + 全局异常 + 结构化 JSON 日志
   - 工作流：创建(text→llm)→执行→node_states→success（**真实 GLM via Kaiweb**，非 Mock）✅
   - 本地工具发现（3 Skills）✅ · 推送渠道配置（加密+脱敏）✅ · 文件上传 ✅ · 供应商列表（kaiweb=ok，10 真实模型）✅
 - 前端：`tsc -b` 通过；Vite 5173 + 代理 8000 正常。
+- 本轮隔离验证：后端 `66 passed`；真实 PostgreSQL/Redis/MinIO/Elasticsearch healthy；Alembic 空库升级到 `4b2e9a1c7d33` 且 `alembic check` 无漂移；真实 TXT 摄取→ES 检索命中、条件分支/SSE、APScheduler 实际触发与重启恢复、文件工作区上传下载分享删除均通过。
+- 本轮环境阻塞：TEI、reranker、OpenClaw、Hermes 未启动，健康检查为 degraded；仅使用显式标记的 dev 哈希向量/Mock LLM/Mock 工具，未将其称为生产真实服务。
 
 ---
 
@@ -206,3 +208,4 @@ API 网关 FastAPI + JWT + RBAC + 全局异常 + 结构化 JSON 日志
 | v1.1 | 2026-07-14 | 模型层改本地 OpenClaw/Hermes；定时/存储/推送/记忆自建 |
 | v2.0 | 2026-07-15 | 按实际实现重生成；标注偏差；本轮补全 P0 接口与 UI；新增 Mock 兜底；修复 paused 枚举 |
 | v2.1 | 2026-07-16 | 接入自建 Kaiweb OpenAI 兼容网关为最高优先真实 LLM 供应商（glm-4.5-air 默认）；兼容推理模型 reasoning_content；取代 Mock 兜底为主路径 |
+| v2.2 | 2026-07-21 | 按功能就绪审计修复执行控制越权/取消复活、SSE stale state、DeepDoc 重型导入阻塞、Alembic/Compose 启动迁移、调度暂停编辑一致性、健康检查假阳性；新增鉴权文件工作区与前端 token refresh |
