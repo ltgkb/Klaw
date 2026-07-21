@@ -214,7 +214,10 @@ services:
       minio:
         condition: service_healthy
       tei:
-        condition: service_healthy
+        # TEI is optional during API bootstrap; dev can use the explicit hash fallback
+        # while the model loads, and production reports embedding errors instead of
+        # pretending the dependency is ready.
+        condition: service_started
     volumes:
       - ./backend:/app
       - ./deploy:/deploy:ro
