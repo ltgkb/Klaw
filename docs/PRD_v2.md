@@ -196,7 +196,7 @@ API 网关 FastAPI + JWT + RBAC + 全局异常 + 结构化 JSON 日志
   - 工作流：创建(text→llm)→执行→node_states→success（**真实 GLM via Kaiweb**，非 Mock）✅
   - 本地工具发现（3 Skills）✅ · 推送渠道配置（加密+脱敏）✅ · 文件上传 ✅ · 供应商列表（kaiweb=ok，10 真实模型）✅
 - 前端：`tsc -b` 通过；Vite 5173 + 代理 8000 正常。
-- 本轮隔离验证：后端最终 `78 passed`；前端 lint/build、三任务 GitHub Actions CI 配置与桌面/移动 Playwright 烟测通过；真实 PostgreSQL/Redis/MinIO/Elasticsearch healthy；Alembic 空库升级到 `4b2e9a1c7d33` 且 `alembic check` 无漂移；真实 TXT/HTML 摄取→ES 检索命中、条件分支/SSE、APScheduler 实际触发与重启恢复、文件工作区、管理员停用/恢复均通过；Compose 后端不再硬等待 TEI 健康。
+- 本轮隔离验证：后端最终 `78 passed`；前端 lint/build、三任务 GitHub Actions CI 配置与桌面/移动 Playwright 烟测通过；真实 PostgreSQL/Redis/MinIO/Elasticsearch healthy；Alembic 空库升级到 `4b2e9a1c7d33` 且 `alembic check` 无漂移；真实 TXT/HTML 摄取→ES 检索命中、条件分支/SSE、APScheduler 实际触发与重启恢复、文件工作区、管理员停用/恢复均通过；Compose 后端不再硬等待 TEI，`/opt/venv` bind-mount smoke 成功执行迁移和 API 启动。
 - 本轮环境阻塞：TEI、reranker、OpenClaw、Hermes 未启动，健康检查为 degraded；仅使用显式标记的 dev 哈希向量/Mock LLM/Mock 工具，未将其称为生产真实服务。
 
 ---

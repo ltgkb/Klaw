@@ -9,7 +9,7 @@
 - 后端：`uv run pytest -q` → **78 passed**；另行运行 `uv run python -m compileall -q app deepdoc common` 通过。
 - 前端：`npm run lint` 通过（3 个既有 Fast Refresh warning）；`npm run build` 通过（Vite 产生约 607 kB 主 JS，存在 code-splitting warning）。
 - 浏览器：Playwright 在 1440×1000 与 390×844 视口完成真实管理员登录→设置→用户停用→恢复；普通用户设置页不显示用户管理且不请求 admin-only API；页面/滚动容器无横向溢出，控制台无 error。
-- Compose：基础 `docker compose config --quiet` 通过；隔离覆盖配置也通过；后端/前端镜像均构建成功，`.dockerignore` 将最终 build context 限制在约 194 kB / 39 kB（未忽略时曾达 1.12 GB / 132 MB）；后端不再硬等待 TEI 健康，模型加载期间 API 可启动并如实降级。
+- Compose：基础与隔离 `docker compose config --quiet` 通过；前序后端/前端镜像构建成功，`.dockerignore` 将 build context 从 1.12 GB / 132 MB 降到约 194 kB / 39 kB；最终 Docker Hub 元数据重试超时，但基于本地镜像的离线 smoke 已验证最新 `/opt/venv` 布局、Alembic 与 API 启动。
 - 真实依赖：隔离 PostgreSQL 16、Redis 7、MinIO、Elasticsearch 8.11 全部 healthy；Alembic 从空库升级到 `4b2e9a1c7d33 (head)`，`alembic check` 无漂移。
 - 真实 API：注册/登录/刷新、PG 元数据、管理员用户列表与停用/恢复、MinIO 上传下载分享删除、TXT/HTML DeepDoc 解析、哈希向量 fallback、ES 索引与检索、条件分支、SSE complete、APScheduler 实际触发和重启恢复均已通过；内存生成的 MD/HTML/JSON/DOCX/XLSX/PPTX/PDF parser fixture 也已通过。
 - 环境阻塞：本次未启动 TEI BGE-M3、reranker、OpenClaw、Hermes；健康检查如实为 degraded。知识库使用明确标记的 dev 哈希向量 fallback，LLM/工具使用明确标记的 dev Mock，未宣称真实模型或真实本地工具可用。
@@ -48,7 +48,7 @@
 | 系统设置 | 设置 | 可用 | embedding/LLM config admin endpoints；普通用户跳过 admin-only 请求 | 现有 API 测试；真实 startup 读取 PG；管理员用户管理 E2E | 部分可用 | 前端部分错误态仍有静默 catch（P1） |
 | 健康检查 | `/health`、设置 | 可用 | PG/Redis/ES/MinIO/TEI/reranker/OpenClaw/Hermes | 真实返回 degraded，四个基础依赖 ok，重型 sidecar error | 可用（诚实） | `/health` 未提供依赖延迟/版本（P2） |
 | 前后端导航与空/加载/错误态 | 全局布局 | 部分可用 | React Router + API interceptor | build；文件页/执行页新增错误态；桌面/移动浏览器无溢出 | 部分可用 | 多页面仍有静默 catch（P1） |
-| Docker Compose 启动 | 根目录 Compose | 部分可用 | 10 服务；后端镜像启动先迁移 | config 校验；本轮隔离只启动 4 基础依赖 | 部分可用 | TEI/OCR/OpenClaw/Hermes 镜像/模型未在本机验证；固定 container_name 影响并行部署（P1） |
+| Docker Compose 启动 | 根目录 Compose | 部分可用 | 10 服务；后端先迁移；TEI 不阻塞 API bootstrap；容器 venv 独立于 bind mount | config；离线容器 smoke 执行 Alembic 并返回根 API；4 基础依赖 healthy | 部分可用 | TEI/OCR/OpenClaw/Hermes 镜像/模型未在本机验证；固定 container_name 影响并行部署（P1） |
 | 迁移 | `make db-migrate` | 可用 | Alembic | 空 PG upgrade + current head + check | 可用 | 首次多实例迁移锁策略未加固（P2） |
 | 测试/lint/build | Makefile、GitHub Actions | 可用 | pytest/oxlint/tsc/Vite；后端/前端/Compose 三个 CI job | 78 passed；lint/build、YAML/Compose、手工 Playwright 烟测通过 | 可用 | 浏览器 E2E 尚未纳入 CI（P1） |
 
@@ -64,6 +64,7 @@
 8. 新增 GitHub Actions CI，锁文件安装后并行执行后端测试、前端 lint/build 与 Compose 配置校验，并限制最小只读权限。
 9. 知识库、chunk 与 Agent 流列表统一校验分页边界，拒绝负页码、空页和超过 100 条的单页查询。
 10. Compose 后端对 TEI 改为 `service_started` 依赖，避免模型加载或缺失阻塞整个 API 启动；健康检查与生产摄取错误仍保持诚实。
+11. 后端容器 venv 移到 `/opt/venv`，避免 `./backend:/app` 遮蔽 Linux 依赖；CMD 直接调用 Alembic/Uvicorn，启动不再联网同步 dev 包。离线 bind-mount smoke 已通过。
 
 ## 对标参考（官方资料，检索日期 2026-07-21）
 
