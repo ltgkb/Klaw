@@ -45,6 +45,7 @@ import {
   Repeat2,
   Square,
   GripVertical,
+  Home,
 } from "lucide-react"
 import { flowApi, systemApi, type FlowRead, type NodeType, type ExecutionRead, type NodeState } from "@/lib/api"
 import { Button } from "@/components/ui/button"
@@ -715,9 +716,13 @@ function FlowCanvasInner() {
   if (!flow) {
     return (
       <div className="space-y-4">
-        <Button variant="ghost" onClick={() => navigate("/flows")}>
+        <Button variant="outline" onClick={() => navigate("/flows")}>
           <ArrowLeft className="h-4 w-4" />
-          返回
+          返回工作流
+        </Button>
+        <Button variant="ghost" onClick={() => navigate("/")}>
+          <Home className="h-4 w-4" />
+          首页
         </Button>
         <p className="text-sm text-muted-foreground">工作流不存在</p>
       </div>
@@ -727,11 +732,28 @@ function FlowCanvasInner() {
   return (
     <div className="flex h-[calc(100vh-3.5rem)] flex-col">
       {/* 顶部工具栏 */}
-      <div className="flex items-center gap-3 border-b px-4 py-2">
-        <Button variant="ghost" size="sm" onClick={() => navigate("/flows")}>
+      <div className="flex items-center gap-3 overflow-x-auto border-b px-4 py-2">
+        <Button
+          className="shrink-0"
+          variant="outline"
+          size="sm"
+          onClick={() => navigate("/flows")}
+          title="返回工作流列表"
+        >
           <ArrowLeft className="h-4 w-4" />
+          返回工作流
         </Button>
-        <div className="flex-1">
+        <Button
+          className="shrink-0"
+          variant="ghost"
+          size="sm"
+          onClick={() => navigate("/")}
+          title="返回平台首页"
+        >
+          <Home className="h-4 w-4" />
+          首页
+        </Button>
+        <div className="min-w-40 flex-1">
           <h1 className="text-base font-semibold">{flow.name}</h1>
           <p className="text-xs text-muted-foreground">
             {flow.description || "无描述"} · {nodes.length} 节点 · {edges.length} 连线
