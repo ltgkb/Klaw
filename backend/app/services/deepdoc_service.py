@@ -149,7 +149,12 @@ def _parse_excel(fnm: str, binary: bytes) -> list[dict]:
     """ExcelParser 返回 [text_line, ...]。"""
     from deepdoc.parser.excel_parser import RAGFlowExcelParser
 
-    result = RAGFlowExcelParser()(fnm if not binary else binary)
+    parser = RAGFlowExcelParser()
+    source = fnm if not binary else binary
+    result = parser(source)
+    if not result:
+        fallback = parser.markdown(source)
+        result = [fallback] if fallback and fallback.strip() else []
     blocks = []
     for line in result:
         if line and str(line).strip():
@@ -158,20 +163,15 @@ def _parse_excel(fnm: str, binary: bytes) -> list[dict]:
 
 
 def _parse_ppt(fnm: str, binary: bytes) -> list[dict]:
-    """PptParser 返回 (sections, tables)。"""
+    """PptParser 返回按幻灯片排列的文本列表。"""
     from deepdoc.parser.ppt_parser import RAGFlowPptParser
 
-    sections, tables = RAGFlowPptParser()(fnm, from_page=0, to_page=10000)
+    sections = RAGFlowPptParser()(binary if binary else fnm, from_page=0, to_page=10000)
     blocks = []
-    if sections:
-        for item in sections:
-            text = item[0] if isinstance(item, (list, tuple)) else str(item)
-            if text and str(text).strip():
-                blocks.append({"content": str(text), "content_type": "text", "page": 0})
-    if tables:
-        for tbl in tables:
-            if tbl and str(tbl).strip():
-                blocks.append({"content": str(tbl), "content_type": "table", "page": 0})
+    for page_number, item in enumerate(sections or [], start=1):
+        text = item[0] if isinstance(item, (list, tuple)) else str(item)
+        if text and str(text).strip():
+            blocks.append({"content": str(text), "content_type": "text", "page": page_number})
     return blocks
 
 
@@ -181,7 +181,7 @@ def _parse_markdown(binary: bytes, chunk_token_num: int) -> list[dict]:
 
     md_text = binary.decode("utf-8", errors="ignore")
     parser = RAGFlowMarkdownParser(chunk_token_num=chunk_token_num)
-    tables, remainder = parser.extract_tables_and_remainder(md_text)
+    remainder, tables = parser.extract_tables_and_remainder(md_text)
 
     blocks = []
     if remainder and remainder.strip():
@@ -193,16 +193,19 @@ def _parse_markdown(binary: bytes, chunk_token_num: int) -> list[dict]:
 
 
 def _parse_html(fnm: str, binary: bytes, chunk_token_num: int) -> list[dict]:
-    """HtmlParser 返回 sections。"""
-    from deepdoc.parser.html_parser import RAGFlowHtmlParser
+    """解析 HTML 文本和表格，不依赖运行时下载 NLTK tokenizer 数据。"""
+    from bs4 import BeautifulSoup
 
-    result = RAGFlowHtmlParser()(fnm, binary=binary, chunk_token_num=chunk_token_num)
+    soup = BeautifulSoup(binary, "html.parser")
+    for tag in soup(["script", "style"]):
+        tag.decompose()
     blocks = []
-    if isinstance(result, list):
-        for item in result:
-            text = item[0] if isinstance(item, (list, tuple)) else str(item)
-            if text and str(text).strip():
-                blocks.append({"content": str(text), "content_type": "text", "page": 0})
+    for table in soup.find_all("table"):
+        blocks.append({"content": str(table), "content_type": "table", "page": 0})
+        table.decompose()
+    text = "\n".join(line.strip() for line in soup.get_text("\n").splitlines() if line.strip())
+    if text:
+        blocks.insert(0, {"content": text, "content_type": "text", "page": 0})
     return blocks
 
 
