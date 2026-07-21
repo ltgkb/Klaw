@@ -349,22 +349,30 @@ def mock_scheduler(monkeypatch):
     from datetime import datetime, timezone
     from app.core import scheduler as sched_module
 
+    calls = {"schedule": [], "pause": [], "resume": [], "unschedule": []}
+
     def mock_schedule_flow(job_id, flow_id, cron, input_data, name):
+        calls["schedule"].append({
+            "job_id": job_id, "flow_id": flow_id, "cron": cron,
+            "input_data": input_data, "name": name,
+        })
         return datetime.now(timezone.utc)
 
     def mock_unschedule_flow(job_id):
-        pass
+        calls["unschedule"].append(job_id)
 
     def mock_pause(job_id):
-        pass
+        calls["pause"].append(job_id)
 
     def mock_resume(job_id):
+        calls["resume"].append(job_id)
         return datetime.now(timezone.utc)
 
     monkeypatch.setattr(sched_module, "schedule_flow", mock_schedule_flow)
     monkeypatch.setattr(sched_module, "unschedule_flow", mock_unschedule_flow)
     monkeypatch.setattr(sched_module, "pause_scheduled_job", mock_pause)
     monkeypatch.setattr(sched_module, "resume_scheduled_job", mock_resume)
+    return calls
 
 
 @pytest.mark.asyncio
@@ -408,6 +416,7 @@ async def test_schedule_crud(client, mock_scheduler):
     }, headers=h)
     assert resp.status_code == 200
     assert resp.json()["status"] == "paused"
+    assert resp.json()["next_run_time"] is None
 
     # 恢复
     resp = await client.put(f"/api/v1/schedules/{sched_id}", json={
@@ -415,6 +424,7 @@ async def test_schedule_crud(client, mock_scheduler):
     }, headers=h)
     assert resp.status_code == 200
     assert resp.json()["status"] == "active"
+    assert resp.json()["next_run_time"] is not None
 
     # 删除
     resp = await client.delete(f"/api/v1/schedules/{sched_id}", headers=h)
@@ -460,3 +470,48 @@ async def test_schedule_invalid_flow(client, mock_scheduler):
         "cron": "0 9 * * *",
     }, headers=_auth_headers(token))
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_schedule_rejects_invalid_cron(client, mock_scheduler):
+    token = await _register_and_login(client, "badcron@test.com")
+    h = _auth_headers(token)
+    flow_id = (await client.post("/api/v1/agent-flows", json={"name": "cron"}, headers=h)).json()["id"]
+
+    resp = await client.post("/api/v1/schedules", json={
+        "flow_id": flow_id, "name": "bad cron", "cron": "not-a-cron",
+    }, headers=h)
+    assert resp.status_code == 422
+    assert (await client.get("/api/v1/schedules", headers=h)).json() == []
+
+
+@pytest.mark.asyncio
+async def test_paused_schedule_edit_replaces_job_before_resume(client, mock_scheduler):
+    token = await _register_and_login(client, "paused-edit@test.com")
+    h = _auth_headers(token)
+    flow_id = (await client.post("/api/v1/agent-flows", json={"name": "editable"}, headers=h)).json()["id"]
+    created = await client.post("/api/v1/schedules", json={
+        "flow_id": flow_id,
+        "name": "old",
+        "cron": "0 9 * * *",
+        "input": {"version": 1},
+    }, headers=h)
+    schedule_id = created.json()["id"]
+
+    await client.put(f"/api/v1/schedules/{schedule_id}", json={"status": "paused"}, headers=h)
+    edited = await client.put(f"/api/v1/schedules/{schedule_id}", json={
+        "name": "new",
+        "cron": "30 10 * * *",
+        "input": {"version": 2},
+    }, headers=h)
+    assert edited.status_code == 200
+    assert edited.json()["status"] == "paused"
+    assert edited.json()["next_run_time"] is None
+    assert mock_scheduler["schedule"][-1]["cron"] == "30 10 * * *"
+    assert mock_scheduler["schedule"][-1]["input_data"] == {"version": 2}
+    assert mock_scheduler["pause"][-1] == schedule_id
+
+    resumed = await client.put(f"/api/v1/schedules/{schedule_id}", json={"status": "active"}, headers=h)
+    assert resumed.status_code == 200
+    assert resumed.json()["next_run_time"] is not None
+    assert mock_scheduler["resume"][-1] == schedule_id

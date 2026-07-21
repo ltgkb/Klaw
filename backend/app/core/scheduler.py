@@ -10,6 +10,7 @@ from datetime import datetime
 
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 from app.core.config import settings
 
@@ -61,21 +62,14 @@ def schedule_flow(
         logger.error("调度器未初始化")
         return None
 
-    # 解析 cron 表达式为 APScheduler CronTrigger 字段
-    parts = cron.split()
-    trigger_kwargs = {}
-    cron_fields = ["minute", "hour", "day", "month", "day_of_week"]
-    for i, part in enumerate(parts):
-        if i < len(cron_fields):
-            trigger_kwargs[cron_fields[i]] = part
+    trigger = CronTrigger.from_crontab(cron, timezone=scheduler.timezone)
 
     job = scheduler.add_job(
         _execute_scheduled_flow,
-        "cron",
+        trigger=trigger,
         id=job_id,
         name=name,
         kwargs={"flow_id": str(flow_id), "input_data": input_data or {}},
-        **trigger_kwargs,
         replace_existing=True,
     )
     logger.info("定时任务已添加: job_id=%s flow=%s cron=%s next_run=%s", job_id, flow_id, cron, job.next_run_time)

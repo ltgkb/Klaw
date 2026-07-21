@@ -37,13 +37,22 @@ async def create_schedule(data: ScheduleCreate, current_user: CurrentUser, db: D
     await db.refresh(job)
 
     # 注册到 APScheduler
-    next_run = scheduler_module.schedule_flow(
-        job_id=str(job.id),
-        flow_id=data.flow_id,
-        cron=data.cron,
-        input_data=data.input,
-        name=data.name,
-    )
+    try:
+        next_run = scheduler_module.schedule_flow(
+            job_id=str(job.id),
+            flow_id=data.flow_id,
+            cron=data.cron,
+            input_data=data.input,
+            name=data.name,
+        )
+    except Exception as exc:
+        await db.delete(job)
+        await db.commit()
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="调度器注册失败") from exc
+    if next_run is None:
+        await db.delete(job)
+        await db.commit()
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="调度器不可用")
     job.apscheduler_job_id = str(job.id)
     job.next_run_time = next_run
     await db.commit()
@@ -100,26 +109,24 @@ async def update_schedule(schedule_id: uuid.UUID, data: ScheduleUpdate, current_
     if flow is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="定时任务不存在")
 
-    changed = False
+    previous_status = job.status
+    definition_changed = False
     if data.name is not None:
         job.name = data.name
-        changed = True
+        definition_changed = True
     if data.cron is not None:
         job.cron = data.cron
-        changed = True
-    if data.input is not None:
+        definition_changed = True
+    if "input" in data.model_fields_set:
         job.input = data.input
+        definition_changed = True
 
     if data.status is not None:
         job.status = data.status
-        if data.status == ScheduleStatus.paused:
-            scheduler_module.pause_scheduled_job(str(job.id))
-        elif data.status == ScheduleStatus.active:
-            next_run = scheduler_module.resume_scheduled_job(str(job.id))
-            job.next_run_time = next_run
 
-    # 如果 cron 或 name 变了, 重新注册 APScheduler job
-    if changed and job.status == ScheduleStatus.active:
+    # Definition changes replace the concrete APScheduler job even while the
+    # logical schedule is paused, so resume can never use stale cron/input.
+    if definition_changed:
         next_run = scheduler_module.schedule_flow(
             job_id=str(job.id),
             flow_id=job.flow_id,
@@ -127,6 +134,29 @@ async def update_schedule(schedule_id: uuid.UUID, data: ScheduleUpdate, current_
             input_data=job.input,
             name=job.name,
         )
+        if next_run is None:
+            await db.rollback()
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="调度器不可用")
+        job.next_run_time = next_run
+        if job.status == ScheduleStatus.paused:
+            scheduler_module.pause_scheduled_job(str(job.id))
+            job.next_run_time = None
+    elif data.status == ScheduleStatus.paused and previous_status != ScheduleStatus.paused:
+        scheduler_module.pause_scheduled_job(str(job.id))
+        job.next_run_time = None
+    elif data.status == ScheduleStatus.active and previous_status == ScheduleStatus.paused:
+        next_run = scheduler_module.resume_scheduled_job(str(job.id))
+        if next_run is None:
+            next_run = scheduler_module.schedule_flow(
+                job_id=str(job.id),
+                flow_id=job.flow_id,
+                cron=job.cron,
+                input_data=job.input,
+                name=job.name,
+            )
+        if next_run is None:
+            await db.rollback()
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="调度器不可用")
         job.next_run_time = next_run
 
     await db.commit()
