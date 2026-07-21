@@ -26,9 +26,9 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex h-screen">
+    <div className="flex h-screen min-w-0">
       {/* 侧边栏 */}
-      <aside className="flex w-60 flex-col border-r bg-secondary/30">
+      <aside className="hidden w-60 shrink-0 flex-col border-r bg-secondary/30 md:flex">
         <div className="flex h-14 items-center border-b px-4 font-semibold">
           🐾 Claw-Native Agent
         </div>
@@ -54,14 +54,14 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       </aside>
 
       {/* 主区域 */}
-      <div className="flex flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col">
         {/* 顶栏 */}
-        <header className="flex h-14 items-center justify-between border-b px-6">
-          <div className="text-sm text-muted-foreground">
+        <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b px-3 sm:px-6">
+          <div className="min-w-0 truncate text-sm text-muted-foreground">
             Claw-Native Agent 平台
           </div>
-          <div className="flex items-center gap-4">
-            <span className="text-sm">
+          <div className="flex shrink-0 items-center gap-2 sm:gap-4">
+            <span className="hidden text-sm sm:inline">
               {user?.name}{" "}
               <span className="rounded bg-secondary px-1.5 py-0.5 text-xs text-secondary-foreground">
                 {user?.role}
@@ -69,13 +69,31 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             </span>
             <Button variant="ghost" size="sm" onClick={handleLogout}>
               <LogOut className="h-4 w-4" />
-              退出
+              <span className="hidden sm:inline">退出</span>
             </Button>
           </div>
         </header>
 
+        <nav className="flex shrink-0 gap-1 overflow-x-auto border-b p-2 md:hidden">
+          {navItems
+            .filter((item) => !("adminOnly" in item) || user?.role === "admin")
+            .map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }) => cn(
+                  "flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-sm",
+                  isActive ? "bg-accent text-accent-foreground" : "text-muted-foreground",
+                )}
+              >
+                <item.icon className="h-4 w-4" />
+                {item.label}
+              </NavLink>
+            ))}
+        </nav>
+
         {/* 内容区 */}
-        <main className="flex-1 overflow-auto p-6">{children}</main>
+        <main className="min-w-0 flex-1 overflow-auto p-4 sm:p-6">{children}</main>
       </div>
     </div>
   )
