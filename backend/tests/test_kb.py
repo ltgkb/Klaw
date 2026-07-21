@@ -139,6 +139,15 @@ async def test_list_kbs(client):
 
 
 @pytest.mark.asyncio
+async def test_list_kbs_rejects_invalid_pagination(client):
+    token = await _register_and_login(client)
+    headers = _auth_headers(token)
+
+    assert (await client.get("/api/v1/knowledge-bases?page=0", headers=headers)).status_code == 422
+    assert (await client.get("/api/v1/knowledge-bases?page_size=101", headers=headers)).status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_get_kb(client):
     token = await _register_and_login(client)
     create_resp = await client.post("/api/v1/knowledge-bases", json={

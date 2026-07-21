@@ -189,14 +189,14 @@ API 网关 FastAPI + JWT + RBAC + 全局异常 + 结构化 JSON 日志
 ---
 
 ## 10. 验证状态（2026-07-21 审计更新）
-- 后端测试：历史基线 `uv run pytest -q` → **58 passed**；本轮审计回归 → **75 passed**（新增执行控制、轻量解析、调度一致性、用户生命周期、生产工具 fallback 等覆盖）。
+- 后端测试：历史基线 `uv run pytest -q` → **58 passed**；本轮审计回归 → **77 passed**（新增执行控制、轻量解析、调度一致性、用户生命周期、分页边界、生产工具 fallback 等覆盖）。
 - 历史端到端记录（旧环境曾声明 OpenClaw/Hermes/TEI 可用；本轮不复用为验证证据）：
   - 注册/登录/JWT ✅
   - 知识库：创建→上传 txt→DeepDoc 解析→TEI 向量化→ES 索引→混合检索（3 hits，BM25+kNN 排序）✅
   - 工作流：创建(text→llm)→执行→node_states→success（**真实 GLM via Kaiweb**，非 Mock）✅
   - 本地工具发现（3 Skills）✅ · 推送渠道配置（加密+脱敏）✅ · 文件上传 ✅ · 供应商列表（kaiweb=ok，10 真实模型）✅
 - 前端：`tsc -b` 通过；Vite 5173 + 代理 8000 正常。
-- 本轮隔离验证：后端最终 `75 passed`；前端 lint/build、三任务 GitHub Actions CI 配置与桌面/移动 Playwright 烟测通过；真实 PostgreSQL/Redis/MinIO/Elasticsearch healthy；Alembic 空库升级到 `4b2e9a1c7d33` 且 `alembic check` 无漂移；真实 TXT/HTML 摄取→ES 检索命中、条件分支/SSE、APScheduler 实际触发与重启恢复、文件工作区、管理员停用/恢复均通过。
+- 本轮隔离验证：后端最终 `77 passed`；前端 lint/build、三任务 GitHub Actions CI 配置与桌面/移动 Playwright 烟测通过；真实 PostgreSQL/Redis/MinIO/Elasticsearch healthy；Alembic 空库升级到 `4b2e9a1c7d33` 且 `alembic check` 无漂移；真实 TXT/HTML 摄取→ES 检索命中、条件分支/SSE、APScheduler 实际触发与重启恢复、文件工作区、管理员停用/恢复均通过。
 - 本轮环境阻塞：TEI、reranker、OpenClaw、Hermes 未启动，健康检查为 degraded；仅使用显式标记的 dev 哈希向量/Mock LLM/Mock 工具，未将其称为生产真实服务。
 
 ---

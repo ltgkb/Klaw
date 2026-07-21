@@ -6,7 +6,7 @@
 
 ## 证据摘要
 
-- 后端：`uv run pytest -q` → **75 passed**；另行运行 `uv run python -m compileall -q app deepdoc common` 通过。
+- 后端：`uv run pytest -q` → **77 passed**；另行运行 `uv run python -m compileall -q app deepdoc common` 通过。
 - 前端：`npm run lint` 通过（3 个既有 Fast Refresh warning）；`npm run build` 通过（Vite 产生约 607 kB 主 JS，存在 code-splitting warning）。
 - 浏览器：Playwright 在 1440×1000 与 390×844 视口完成真实登录→设置→用户停用→恢复；用户管理可见，页面/滚动容器无横向溢出，控制台无 error。
 - Compose：基础 `docker compose config --quiet` 通过；隔离覆盖配置也通过；后端/前端镜像均构建成功，`.dockerignore` 将最终 build context 限制在约 194 kB / 39 kB（未忽略时曾达 1.12 GB / 132 MB）。
@@ -22,7 +22,7 @@
 | 刷新令牌 | 前端拦截器自动刷新 | 本批补全 | `/auth/refresh`，校验 refresh 类型、用户 active | `test_refresh_token`；真实 HTTP 200 | 可用 | 需后续增加 token rotation/revocation（P2） |
 | RBAC 与禁用用户 | 设置/用户管理 | 可用 | `require_roles`；当前用户每次请求检查 `is_active`；管理员状态 API 禁止自锁 | RBAC、普通用户 403、自锁 400 测试；真实 API 与浏览器停用/恢复；旧 token 401 | 可用 | 组织/团队级管理员策略仍缺失（P2） |
 | owner 隔离与密钥保护 | 各资源页面 | 可用 | 查询按 owner；AES-256-GCM API key/channel secret | KB/flow/schedule/file 隔离测试；真实 push 配置返回 `******` | 可用 | 单租户 owner 模式，不是团队/组织租户（P2） |
-| 知识库 CRUD | `/kb` | 可用 | `/knowledge-bases` + PG | `test_kb.py`、真实创建/列表 | 可用 | 分页参数缺少上限校验（P2） |
+| 知识库 CRUD | `/kb` | 可用 | `/knowledge-bases` + PG；页码最小 1、每页最大 100 | `test_kb.py`、分页 422、真实创建/列表 | 可用 | 无 |
 | TXT/MD/HTML/JSON/DOCX/XLSX/PPTX/EPUB 上传解析 | KB 详情上传 | 可用 | MinIO + DeepDoc 格式路由 | parser fixture 覆盖 MD/HTML/JSON/DOCX/XLSX/PPTX/EPUB/PDF；真实 MinIO→解析→ES 管线验证 TXT、HTML | 部分可用 | 仍需逐格式 MinIO→ES E2E 和大文件/损坏文件验证（P1） |
 | PDF 纯文本解析 | KB 详情上传 | 可用 | pypdf 轻量路径；视觉 OCR 未启用 | 代码路径和 parser 回归 | 部分可用 | OCR/版面/表格图片仍缺模型（P2） |
 | 分块与引用元数据 | KB chunks | 可用 | fixed/recursive/markdown/semantic 降级；page/doc/chunk metadata | `test_kb.py`；真实 1 chunk、page/source metadata | 可用 | semantic 仍是 recursive fallback（P2） |
@@ -50,7 +50,7 @@
 | 前后端导航与空/加载/错误态 | 全局布局 | 部分可用 | React Router + API interceptor | build；文件页/执行页新增错误态；桌面/移动浏览器无溢出 | 部分可用 | 多页面仍有静默 catch（P1） |
 | Docker Compose 启动 | 根目录 Compose | 部分可用 | 10 服务；后端镜像启动先迁移 | config 校验；本轮隔离只启动 4 基础依赖 | 部分可用 | TEI/OCR/OpenClaw/Hermes 镜像/模型未在本机验证；固定 container_name 影响并行部署（P1） |
 | 迁移 | `make db-migrate` | 可用 | Alembic | 空 PG upgrade + current head + check | 可用 | 首次多实例迁移锁策略未加固（P2） |
-| 测试/lint/build | Makefile、GitHub Actions | 可用 | pytest/oxlint/tsc/Vite；后端/前端/Compose 三个 CI job | 75 passed；lint/build、YAML/Compose、手工 Playwright 烟测通过 | 可用 | 浏览器 E2E 尚未纳入 CI（P1） |
+| 测试/lint/build | Makefile、GitHub Actions | 可用 | pytest/oxlint/tsc/Vite；后端/前端/Compose 三个 CI job | 77 passed；lint/build、YAML/Compose、手工 Playwright 烟测通过 | 可用 | 浏览器 E2E 尚未纳入 CI（P1） |
 
 ## 本轮修复与新增能力
 
@@ -62,6 +62,7 @@
 6. 新增鉴权文件工作区 UI、blob 下载、分享/删除/上传状态；前端 access token 自动 refresh；移动端提供可滚动导航。
 7. 新增管理员用户管理纵向切片：用户列表、角色调整、启用/停用入口；后端禁止普通用户操作及管理员自锁；普通用户设置页不再请求 admin-only 配置。
 8. 新增 GitHub Actions CI，锁文件安装后并行执行后端测试、前端 lint/build 与 Compose 配置校验，并限制最小只读权限。
+9. 知识库、chunk 与 Agent 流列表统一校验分页边界，拒绝负页码、空页和超过 100 条的单页查询。
 
 ## 对标参考（官方资料，检索日期 2026-07-21）
 

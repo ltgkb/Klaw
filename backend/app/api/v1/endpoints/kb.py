@@ -5,7 +5,7 @@
 
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -43,8 +43,8 @@ async def create_knowledge_base(
 async def list_knowledge_bases(
     current_user: CurrentUser,
     db: DBSession,
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
 ):
     """列出当前用户的知识库。"""
     items, total = await kb_service.list_kbs(db, current_user.id, page, page_size)
@@ -176,8 +176,8 @@ async def list_chunks(
     current_user: CurrentUser,
     db: DBSession,
     doc_id: uuid.UUID | None = None,
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
 ):
     """列出知识库的 chunk。可按 doc_id 过滤。"""
     kb = await kb_service.get_kb(db, kb_id, current_user.id)

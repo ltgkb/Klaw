@@ -41,8 +41,8 @@ async def create_flow(data: FlowCreate, current_user: CurrentUser, db: DBSession
 async def list_flows(
     current_user: CurrentUser,
     db: DBSession,
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
 ):
     """列出当前用户的工作流。"""
     items, total = await agent_flow_service.list_flows(db, current_user.id, page, page_size)
