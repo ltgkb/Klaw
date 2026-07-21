@@ -242,6 +242,147 @@ async def test_execute_flow_condition(client, mock_llm, db_engine, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_execute_flow_condition_skips_unmatched_branch(client, db_engine, monkeypatch):
+    """条件节点只应执行匹配 handle 的下游节点。"""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    import app.core.database as db_module
+
+    test_factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    monkeypatch.setattr(db_module, "async_session_factory", test_factory)
+    token = await _register_and_login(client)
+
+    dag = {
+        "nodes": [
+            {"id": "input", "type": "text", "position": {"x": 0, "y": 0},
+             "data": {"label": "输入", "config": {"template": "yes"}}},
+            {"id": "check", "type": "condition", "position": {"x": 240, "y": 0},
+             "data": {"label": "判断", "config": {"cases": [
+                 {"id": "yes", "name": "是", "expression": "{input} == 'yes'"},
+             ], "default_name": "否"}}},
+            {"id": "yes-node", "type": "text", "position": {"x": 480, "y": -80},
+             "data": {"label": "是分支", "config": {"template": "accepted"}}},
+            {"id": "no-node", "type": "text", "position": {"x": 480, "y": 80},
+             "data": {"label": "否分支", "config": {"template": "rejected"}}},
+        ],
+        "edges": [
+            {"id": "e1", "source": "input", "target": "check"},
+            {"id": "e2", "source": "check", "target": "yes-node", "sourceHandle": "yes"},
+            {"id": "e3", "source": "check", "target": "no-node", "sourceHandle": "default"},
+        ],
+    }
+    create_resp = await client.post("/api/v1/agent-flows", json={"name": "BranchTest", "dag": dag}, headers=_auth_headers(token))
+    flow_id = create_resp.json()["id"]
+    exec_resp = await client.post(f"/api/v1/agent-flows/{flow_id}/execute", json={"input": {}}, headers=_auth_headers(token))
+    execution_id = exec_resp.json()["execution_id"]
+
+    detail = (await client.get(f"/api/v1/agent-flows/{flow_id}/executions/{execution_id}", headers=_auth_headers(token))).json()
+    assert detail["status"] == "success"
+    assert detail["node_states"]["check"]["matched_case"] == "yes"
+    assert detail["node_states"]["yes-node"]["output"] == "accepted"
+    assert "no-node" not in detail["node_states"]
+
+
+@pytest.mark.asyncio
+async def test_execution_controls_are_bound_to_flow_owner(client, db_engine, monkeypatch):
+    """不能借自己的 flow ID 控制别人的 execution。"""
+    import uuid
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    import app.core.database as db_module
+    from app.models.execution import Execution, ExecutionStatus
+
+    async def no_op_run_flow(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("app.api.v1.endpoints.agent_flows.execution_service.run_flow", no_op_run_flow)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    token_a = await _register_and_login(client, "control-a@test.com")
+    token_b = await _register_and_login(client, "control-b@test.com")
+    flow_a = (await client.post("/api/v1/agent-flows", json={"name": "A"}, headers=_auth_headers(token_a))).json()["id"]
+    flow_b = (await client.post("/api/v1/agent-flows", json={"name": "B"}, headers=_auth_headers(token_b))).json()["id"]
+    execution_id = uuid.UUID((await client.post(f"/api/v1/agent-flows/{flow_a}/execute", json={}, headers=_auth_headers(token_a))).json()["execution_id"])
+
+    async with factory() as db:
+        result = await db.execute(select(Execution).where(Execution.id == execution_id))
+        execution = result.scalar_one()
+        execution.status = ExecutionStatus.running
+        await db.commit()
+
+    resp = await client.post(f"/api/v1/agent-flows/{flow_b}/executions/{execution_id}/cancel", headers=_auth_headers(token_b))
+    assert resp.status_code == 404
+
+    async with factory() as db:
+        result = await db.execute(select(Execution).where(Execution.id == execution_id))
+        assert result.scalar_one().status == ExecutionStatus.running
+
+
+@pytest.mark.asyncio
+async def test_pre_cancelled_execution_is_not_restarted(client, db_engine, monkeypatch):
+    """后台任务晚启动时不得把已经取消的执行重新标记为 running/success。"""
+    import uuid
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    import app.core.database as db_module
+    from app.models.execution import Execution, ExecutionStatus
+    from app.services.execution_service import run_flow
+
+    async def no_op_run_flow(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("app.api.v1.endpoints.agent_flows.execution_service.run_flow", no_op_run_flow)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    monkeypatch.setattr(db_module, "async_session_factory", factory)
+
+    token = await _register_and_login(client)
+    dag = {"nodes": [
+        {"id": "never", "type": "text", "position": {"x": 0, "y": 0},
+         "data": {"label": "不应执行", "config": {"template": "unexpected"}}},
+    ], "edges": []}
+    flow_id = uuid.UUID((await client.post("/api/v1/agent-flows", json={"name": "CancelRace", "dag": dag}, headers=_auth_headers(token))).json()["id"])
+    execution_id = uuid.UUID((await client.post(f"/api/v1/agent-flows/{flow_id}/execute", json={}, headers=_auth_headers(token))).json()["execution_id"])
+
+    async with factory() as db:
+        result = await db.execute(select(Execution).where(Execution.id == execution_id))
+        execution = result.scalar_one()
+        execution.status = ExecutionStatus.cancelled
+        await db.commit()
+
+    await run_flow(execution_id, flow_id)
+
+    async with factory() as db:
+        result = await db.execute(select(Execution).where(Execution.id == execution_id))
+        execution = result.scalar_one()
+        assert execution.status == ExecutionStatus.cancelled
+        assert execution.node_states is None
+
+
+@pytest.mark.asyncio
+async def test_execution_stream_emits_complete_for_terminal_execution(client, db_engine, monkeypatch):
+    """SSE 应读取数据库最新状态并以 complete 事件结束。"""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    import app.core.database as db_module
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    monkeypatch.setattr(db_module, "async_session_factory", factory)
+    token = await _register_and_login(client)
+    dag = {"nodes": [
+        {"id": "text", "type": "text", "position": {"x": 0, "y": 0},
+         "data": {"label": "Text", "config": {"template": "done"}}},
+    ], "edges": []}
+    flow_id = (await client.post("/api/v1/agent-flows", json={"name": "SSE", "dag": dag}, headers=_auth_headers(token))).json()["id"]
+    execution_id = (await client.post(f"/api/v1/agent-flows/{flow_id}/execute", json={}, headers=_auth_headers(token))).json()["execution_id"]
+
+    resp = await client.get(
+        f"/api/v1/agent-flows/{flow_id}/executions/{execution_id}/stream",
+        params={"token": token},
+    )
+    assert resp.status_code == 200
+    assert "event: complete" in resp.text
+    assert '"status": "success"' in resp.text
+
+
+@pytest.mark.asyncio
 async def test_list_executions(client, mock_llm, db_engine, monkeypatch):
     """测试执行历史列表。"""
     from sqlalchemy.ext.asyncio import async_sessionmaker

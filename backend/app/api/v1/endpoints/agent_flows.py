@@ -131,10 +131,18 @@ async def get_execution(
     flow = await agent_flow_service.get_flow(db, flow_id, current_user.id)
     if flow is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="工作流不存在")
-    execution = await agent_flow_service.get_execution(db, execution_id)
-    if execution is None or execution.flow_id != flow_id:
+    execution = await agent_flow_service.get_execution(db, execution_id, flow_id=flow_id)
+    if execution is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="执行记录不存在")
     return ExecutionRead.model_validate(execution)
+
+
+async def _get_flow_execution(db, flow_id: uuid.UUID, execution_id: uuid.UUID):
+    """Load an execution only when it belongs to the already-owned flow."""
+    execution = await agent_flow_service.get_execution(db, execution_id, flow_id=flow_id)
+    if execution is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="执行记录不存在")
+    return execution
 
 
 # ── 人机交互: 暂停/恢复/取消 ──
@@ -150,7 +158,8 @@ async def pause_execution(
     flow = await agent_flow_service.get_flow(db, flow_id, current_user.id)
     if flow is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="工作流不存在")
-    ok = await execution_service.pause_execution(db, execution_id)
+    await _get_flow_execution(db, flow_id, execution_id)
+    ok = await execution_service.pause_execution(db, execution_id, flow_id=flow_id)
     if not ok:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="无法暂停 (执行可能已结束)")
     execution = await agent_flow_service.get_execution(db, execution_id)
@@ -168,7 +177,8 @@ async def resume_execution(
     flow = await agent_flow_service.get_flow(db, flow_id, current_user.id)
     if flow is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="工作流不存在")
-    ok = await execution_service.resume_execution(db, execution_id)
+    await _get_flow_execution(db, flow_id, execution_id)
+    ok = await execution_service.resume_execution(db, execution_id, flow_id=flow_id)
     if not ok:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="无法恢复 (执行可能未暂停)")
     execution = await agent_flow_service.get_execution(db, execution_id)
@@ -186,7 +196,8 @@ async def cancel_execution(
     flow = await agent_flow_service.get_flow(db, flow_id, current_user.id)
     if flow is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="工作流不存在")
-    ok = await execution_service.cancel_execution(db, execution_id)
+    await _get_flow_execution(db, flow_id, execution_id)
+    ok = await execution_service.cancel_execution(db, execution_id, flow_id=flow_id)
     if not ok:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="无法取消 (执行可能已结束)")
     execution = await agent_flow_service.get_execution(db, execution_id)
@@ -218,19 +229,26 @@ async def stream_execution(
                 result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
                 user = result.scalar_one_or_none()
 
-    if user is None:
+    if user is None or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未认证")
 
     flow = await agent_flow_service.get_flow(db, flow_id, user.id)
     if flow is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="工作流不存在")
 
+    execution = await agent_flow_service.get_execution(db, execution_id, flow_id=flow_id)
+    if execution is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="执行记录不存在")
+
     async def event_generator():
         while True:
-            execution = await agent_flow_service.get_execution(db, execution_id)
+            execution = await agent_flow_service.get_execution(db, execution_id, flow_id=flow_id)
             if execution is None:
                 yield {"event": "error", "data": json.dumps({"error": "执行记录不存在"})}
                 break
+            # The execution engine writes through a separate session.  Refresh
+            # the identity-mapped row so SSE never loops forever on stale state.
+            await db.refresh(execution)
 
             payload = {
                 "execution_id": str(execution.id),

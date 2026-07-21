@@ -108,21 +108,35 @@ export function ExecutionDetail() {
   const [execution, setExecution] = useState<ExecutionRead | null>(null)
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState(false)
+  const [error, setError] = useState("")
 
   useEffect(() => {
-    const fetch = async () => {
+    let disposed = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+
+    const fetch = async (initial = false) => {
       if (!flowId || !execId) return
-      setLoading(true)
+      if (initial) setLoading(true)
       try {
         const resp = await flowApi.getExecution(flowId, execId)
+        if (disposed) return
         setExecution(resp.data)
+        setError("")
+        if (["pending", "running", "paused"].includes(resp.data.status)) {
+          timer = setTimeout(() => fetch(false), 1000)
+        }
       } catch {
-        // 错误由拦截器处理
+        if (!disposed) setError("无法获取执行状态，请刷新后重试")
       } finally {
-        setLoading(false)
+        if (!disposed && initial) setLoading(false)
       }
     }
-    fetch()
+
+    fetch(true)
+    return () => {
+      disposed = true
+      if (timer) clearTimeout(timer)
+    }
   }, [flowId, execId])
 
   const handleAction = async (action: "pause" | "resume" | "cancel") => {
@@ -131,8 +145,9 @@ export function ExecutionDetail() {
     try {
       const resp = await flowApi[`${action}Execution`](flowId, execId)
       setExecution(resp.data)
+      setError("")
     } catch {
-      // 错误由拦截器处理
+      setError("执行控制失败，状态可能已变化，请重试")
     } finally {
       setActionLoading(false)
     }
@@ -219,6 +234,12 @@ export function ExecutionDetail() {
       </div>
 
       {/* 错误信息 */}
+      {error && (
+        <div role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+          {error}
+        </div>
+      )}
+
       {execution.error_message && (
         <Card>
           <CardHeader>

@@ -58,6 +58,12 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
         user = user_result.scalar_one_or_none()
 
         try:
+            # A cancellation can arrive after the execution row is created but
+            # before this background task starts.  Never resurrect it as running.
+            await db.refresh(execution)
+            if execution.status == ExecutionStatus.cancelled:
+                return
+
             # ── 1. 标记为 running ──
             execution.status = ExecutionStatus.running
             execution.node_states = {}
@@ -111,6 +117,10 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
 
                 # ── 暂停检查 (人机交互) ──
                 await db.refresh(execution)
+                if execution.status == ExecutionStatus.cancelled:
+                    execution.output = node_outputs
+                    await db.commit()
+                    return
                 if execution.status == ExecutionStatus.paused:
                     # 等待恢复 (轮询 DB, 每 2s 检查一次)
                     while execution.status == ExecutionStatus.paused:
@@ -141,6 +151,16 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
                         output = case_name
                     else:
                         output = await _execute_node(node_type, config, context, user, node_outputs, label=label)
+
+                    # Cancellation may happen while an external node (LLM,
+                    # retrieval, notification) is in flight.  Do not write a
+                    # successful node or final success after that cancellation.
+                    await db.refresh(execution)
+                    if execution.status == ExecutionStatus.cancelled:
+                        execution.output = node_outputs
+                        await db.commit()
+                        return
+
                     node_outputs[node_id] = output
                     # 按节点 id + label 都存, 支持引用 {label} / {node_id}; @content 为别名
                     context[node_id] = output
@@ -196,6 +216,11 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
                     return
 
             # ── 5. 全部完成 ──
+            await db.refresh(execution)
+            if execution.status == ExecutionStatus.cancelled:
+                execution.output = node_outputs
+                await db.commit()
+                return
             execution.status = ExecutionStatus.success
             execution.output = node_outputs
             await db.commit()
@@ -565,9 +590,12 @@ async def _execute_memory_node(config: dict, context: dict, user=None) -> str:
 
 # ── 人机交互: 暂停/恢复/取消 (M4) ──
 
-async def pause_execution(db, execution_id) -> bool:
+async def pause_execution(db, execution_id, flow_id=None) -> bool:
     """暂停执行。执行引擎在下一个节点前检测到 paused 状态后停止。"""
-    result = await db.execute(select(Execution).where(Execution.id == execution_id))
+    query = select(Execution).where(Execution.id == execution_id)
+    if flow_id is not None:
+        query = query.where(Execution.flow_id == flow_id)
+    result = await db.execute(query)
     execution = result.scalar_one_or_none()
     if execution is None or execution.status != ExecutionStatus.running:
         return False
@@ -577,9 +605,12 @@ async def pause_execution(db, execution_id) -> bool:
     return True
 
 
-async def resume_execution(db, execution_id) -> bool:
+async def resume_execution(db, execution_id, flow_id=None) -> bool:
     """恢复执行。执行引擎检测到 running 状态后继续。"""
-    result = await db.execute(select(Execution).where(Execution.id == execution_id))
+    query = select(Execution).where(Execution.id == execution_id)
+    if flow_id is not None:
+        query = query.where(Execution.flow_id == flow_id)
+    result = await db.execute(query)
     execution = result.scalar_one_or_none()
     if execution is None or execution.status != ExecutionStatus.paused:
         return False
@@ -589,13 +620,20 @@ async def resume_execution(db, execution_id) -> bool:
     return True
 
 
-async def cancel_execution(db, execution_id) -> bool:
+async def cancel_execution(db, execution_id, flow_id=None) -> bool:
     """取消执行。执行引擎检测到 cancelled 状态后终止。"""
-    result = await db.execute(select(Execution).where(Execution.id == execution_id))
+    query = select(Execution).where(Execution.id == execution_id)
+    if flow_id is not None:
+        query = query.where(Execution.flow_id == flow_id)
+    result = await db.execute(query)
     execution = result.scalar_one_or_none()
     if execution is None:
         return False
-    if execution.status in (ExecutionStatus.success, ExecutionStatus.failed):
+    if execution.status in (
+        ExecutionStatus.success,
+        ExecutionStatus.failed,
+        ExecutionStatus.cancelled,
+    ):
         return False
     execution.status = ExecutionStatus.cancelled
     await db.commit()

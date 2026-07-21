@@ -85,6 +85,32 @@ async def test_me_with_valid_token(client):
 
 
 @pytest.mark.asyncio
+async def test_disabled_user_token_is_rejected(client, db_engine):
+    """禁用用户已有的 access token 也必须立即失效。"""
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    from app.models.user import User
+
+    await client.post("/api/v1/auth/register", json={
+        "email": "disabled@test.com", "name": "Disabled", "password": "secret123",
+    })
+    login_resp = await client.post("/api/v1/auth/login", json={
+        "email": "disabled@test.com", "password": "secret123",
+    })
+    token = login_resp.json()["access_token"]
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as db:
+        result = await db.execute(select(User).where(User.email == "disabled@test.com"))
+        user = result.scalar_one()
+        user.is_active = False
+        await db.commit()
+
+    resp = await client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_me_without_token_unauthorized(client):
     resp = await client.get("/api/v1/auth/me")
     assert resp.status_code == 401

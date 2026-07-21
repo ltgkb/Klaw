@@ -108,7 +108,10 @@ async def list_executions(db: AsyncSession, flow_id) -> list[Execution]:
     return list(result.scalars().all())
 
 
-async def get_execution(db: AsyncSession, execution_id) -> Execution | None:
-    """获取执行记录。"""
-    result = await db.execute(select(Execution).where(Execution.id == execution_id))
+async def get_execution(db: AsyncSession, execution_id, flow_id=None) -> Execution | None:
+    """获取执行记录，可选地绑定到工作流以防止跨工作流访问。"""
+    query = select(Execution).where(Execution.id == execution_id)
+    if flow_id is not None:
+        query = query.where(Execution.flow_id == flow_id)
+    result = await db.execute(query)
     return result.scalar_one_or_none()
