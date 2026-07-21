@@ -4,6 +4,7 @@
 存储复用 MinIO (路径 /workspaces/{user_id}/{file_id}/{filename})。
 """
 
+import asyncio
 import uuid
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
@@ -44,7 +45,15 @@ async def upload_workspace_file(
     filename = file.filename or "untitled"
     object_name = f"workspaces/{current_user.id}/{file_id}/{filename}"
 
-    upload_file(object_name, file_data, file.content_type or "application/octet-stream")
+    try:
+        await asyncio.to_thread(
+            upload_file,
+            object_name,
+            file_data,
+            file.content_type or "application/octet-stream",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="文件存储不可用") from exc
 
     wf = WorkspaceFile(
         id=file_id,
@@ -75,7 +84,10 @@ async def list_workspace_files(current_user: CurrentUser, db: DBSession):
 async def download_workspace_file(file_id: uuid.UUID, current_user: CurrentUser, db: DBSession):
     """下载工作区文件。"""
     wf = await _get_owned_file(db, file_id, current_user.id)
-    data = download_file(wf.object_name)
+    try:
+        data = await asyncio.to_thread(download_file, wf.object_name)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="文件读取失败") from exc
     return Response(
         content=data,
         media_type=wf.content_type,
@@ -88,9 +100,11 @@ async def delete_workspace_file(file_id: uuid.UUID, current_user: CurrentUser, d
     """删除工作区文件 (含 MinIO 对象)。"""
     wf = await _get_owned_file(db, file_id, current_user.id)
     try:
-        delete_file(wf.object_name)
-    except Exception:
-        pass
+        await asyncio.to_thread(delete_file, wf.object_name)
+    except Exception as exc:
+        # Keep the DB record so the user can retry instead of leaking an
+        # unreachable object while the UI incorrectly reports success.
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="文件删除失败，请重试") from exc
     await db.delete(wf)
     await db.commit()
 
@@ -99,7 +113,10 @@ async def delete_workspace_file(file_id: uuid.UUID, current_user: CurrentUser, d
 async def share_workspace_file(file_id: uuid.UUID, current_user: CurrentUser, db: DBSession):
     """生成预签名分享链接 (默认 1 小时有效)。"""
     wf = await _get_owned_file(db, file_id, current_user.id)
-    url = get_presigned_url(wf.object_name, expires_hours=1)
+    try:
+        url = await asyncio.to_thread(get_presigned_url, wf.object_name, 1)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="分享链接生成失败") from exc
     return FileShareResponse(url=url, expires_hours=1)
 
 

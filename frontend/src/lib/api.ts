@@ -1,4 +1,5 @@
 import axios from "axios"
+import type { InternalAxiosRequestConfig } from "axios"
 
 const API_BASE = "/api/v1"
 
@@ -16,16 +17,46 @@ api.interceptors.request.use((config) => {
   return config
 })
 
-// 响应拦截器：401 跳登录
+type RetryableRequest = InternalAxiosRequestConfig & { _retry?: boolean }
+let refreshRequest: Promise<string> | null = null
+
+const clearSession = () => {
+  localStorage.removeItem("access_token")
+  localStorage.removeItem("refresh_token")
+}
+
+// 响应拦截器：access token 过期时只发起一次 refresh，并重放并发请求。
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
-      localStorage.removeItem("access_token")
-      localStorage.removeItem("refresh_token")
-      if (window.location.pathname !== "/login") {
-        window.location.href = "/login"
+  async (error) => {
+    const original = error.config as RetryableRequest | undefined
+    const refreshToken = localStorage.getItem("refresh_token")
+    const isRefreshRequest = original?.url?.includes("/auth/refresh")
+
+    if (error.response?.status === 401 && original && !original._retry && refreshToken && !isRefreshRequest) {
+      original._retry = true
+      try {
+        refreshRequest ??= axios
+          .post<TokenResponse>(`${API_BASE}/auth/refresh`, { refresh_token: refreshToken })
+          .then(({ data }) => {
+            localStorage.setItem("access_token", data.access_token)
+            localStorage.setItem("refresh_token", data.refresh_token)
+            return data.access_token
+          })
+          .finally(() => {
+            refreshRequest = null
+          })
+        const accessToken = await refreshRequest
+        original.headers.Authorization = `Bearer ${accessToken}`
+        return api(original)
+      } catch {
+        clearSession()
       }
+    }
+
+    if (error.response?.status === 401) {
+      clearSession()
+      if (window.location.pathname !== "/login") window.location.href = "/login"
     }
     return Promise.reject(error)
   },
@@ -467,7 +498,7 @@ export const fileApi = {
       headers: { "Content-Type": "multipart/form-data" },
     })
   },
-  downloadUrl: (id: string) => `/api/v1/files/${id}`,
+  download: (id: string) => api.get<Blob>(`/files/${id}`, { responseType: "blob" }),
   delete: (id: string) => api.delete(`/files/${id}`),
   share: (id: string) => api.get<FileShare>(`/files/${id}/share`),
 }
