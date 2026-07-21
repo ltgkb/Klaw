@@ -1,8 +1,8 @@
 # Claw-Native Agent 平台 — PRD v2
 
-> **版本**: v2.0
-> **日期**: 2026-07-15
-> **状态**: MVP 闭环可用（M1–M4 已交付 + 本轮补全）
+> **版本**: v2.2
+> **日期**: 2026-07-22
+> **状态**: MVP 主链可演示；生产级能力仍以 `FEATURE_READINESS.md` 的部分可用/环境阻塞为准
 > **本文档定位**: 在 v1.1 基础上，**按代码实际实现状态**重生成 PRD，如实标注已实现 / 偏差 / 本轮新增 / 剩余路线图。
 
 ---
@@ -38,10 +38,10 @@ v1.1 是设计草案。v2.0 以**已落地代码**为准重新对齐：保留 v1
 
 ## 2. 产品目标
 
-### 2.1 MVP 目标（闭环可用）— ✅ 已达成
+### 2.1 MVP 目标（主链演示可用）— ✅ 已达成
 - ✅ 用户可上传文档，DeepDoc 解析后建立知识库（DeepDoc 已复制入 `backend/deepdoc/`）
 - ✅ 用户可在画布上拖拽节点编排工作流（XYFlow）
-- ✅ 工作流可调用本地工具（本轮新增 `/api/v1/local-agent/tools` 发现 + 调用）
+- ✅ 工作流外可发现并调用本地工具（`web_fetch` 已经 OpenClaw 真实验证）；画布工具节点与其它工具实现仍为 P1
 - ✅ 定时任务通过本地 APScheduler 驱动工作流（PostgreSQL JobStore）
 - ✅ 执行结果通过自建推送服务发送至飞书/企微/Telegram（本轮新增渠道持久化配置）
 - ✅ 支持 OpenAI 作为 OpenClaw / Hermes 的 fallback
@@ -70,18 +70,19 @@ v1.1 是设计草案。v2.0 以**已落地代码**为准重新对齐：保留 v1
 
 ### 3.2 Agent 画布 — ✅
 - **画布引擎**：@xyflow/react；节点拖拽/连线/删除、缩放/平移/minimap、序列化为 DAG JSON。
-- **节点类型**（9 类）：`start` / `end` / `text` / `llm` / `retrieval` / `condition` / `loop` / `notify` / `memory`。
+- **节点类型**（10 类）：`start` / `end` / `text` / `llm` / `retrieval` / `condition` / `loop` / `http` / `notify` / `memory`。
+- **条件节点**：多 case 按顺序求值，使用 XYFlow `sourceHandle` 只推进命中分支；未命中节点记录为 `skipped`，默认分支显式路由。
 - **循环节点**：数组、对象、JSON 或多行文本输入；选择一个未连线节点作为循环体，注入循环项与索引变量，顺序执行并聚合结构化结果；支持 1-100 次上限、单次失败后继续及迭代状态。
-- **执行引擎**：自研 asyncio DAG（Kahn 拓扑排序，逐节点执行，每步写 `node_states`）；后台任务 + SSE 实时状态推送（`progress`/`complete`）；暂停/恢复/取消（DB 状态轮询）；节点失败即终止。
+- **执行引擎**：自研 asyncio DAG（Kahn 拓扑排序，逐节点执行，每步写 `node_states`）；后台任务 + SSE 实时状态推送（`progress`/`complete`）；Bearer Header 鉴权且每轮刷新跨 session 状态；暂停/恢复/取消（DB 状态轮询）；节点失败即终止。
 - **模板与复用**：CRUD 已就绪，预设模板留作路线图。
 - **MCP**：二期。
 
 ### 3.3 模型供应商 — ✅
 - **统一抽象**：`app/core/llm_client.py`，OpenAI 兼容 `chat/completions`；httpx 直调，不引 langchain/openai SDK。
-- **供应商与优先级**：**OpenClaw（本地 Agent 网关，默认上游 Kaiweb glm-4.5）** → Kaiweb 直连 fallback → OpenAI（云端 fallback）→ Anthropic → dev Mock 兜底。
+- **供应商与优先级**：**OpenClaw** → 启用后的 **Hermes** → Kaiweb 直连 → OpenAI → Anthropic → dev Mock；两个本地网关未配置推理供应商时不进入默认路径。
 - **Kaiweb 适配**：OpenClaw 自定义 `openai-completions` provider 指向 `https://ai.kaiweb.net/v1`；Klaw 的 `_call_openai_compatible` / `_stream_openai_compatible` 保留为 OpenClaw 故障时的直连 fallback；兼容推理模型 content 为空时回退 `reasoning_content`。
 - **流式**：`/providers/chat/stream`（SSE）。
-- **本地集成**：OpenClaw `/v1/chat/completions`、`/v1/models`、`/health`；本轮新增 `/api/v1/local-agent/tools` 发现（扫描 `deploy/*/skills/skill.json` + OpenClaw 在线工具合并）与 `/tools/{id}/call`（OpenClaw 不可达时 dev mock）。
+- **本地集成**：OpenClaw `/v1/chat/completions`、`/v1/models`、`/readyz`；`/api/v1/local-agent/tools` 扫描本地 manifest，`/tools/{id}/call` 通过 OpenClaw `/tools/invoke` 调用。`web_fetch` 已真实通过；失败返回 `success=false`，不会用 mock 冒充成功。
 
 ### 3.4 定时任务 — ✅
 - **引擎**：APScheduler AsyncIO + PostgreSQL SQLAlchemyJobStore（持久化，重启不丢）。
@@ -109,7 +110,7 @@ v1.1 是设计草案。v2.0 以**已落地代码**为准重新对齐：保留 v1
 | 编排引擎 | LangGraph | 自研 asyncio DAG | 功能等价（拓扑序 + 状态机 + SSE），降低依赖；M5 可迁 LangGraph |
 | PDF 解析 | DeepDoc 全量（含 OCR） | PlainParser 纯文本 | 视觉/OCR 需 ONNX 模型，留 M5 |
 | 短期记忆 | Redis + PG | 仅 PG | Redis 短期记忆待补 |
-| 条件分支 | IF/ELSE 分支 | 简化求值返回 true/false | 当前不裁剪下游边，全部执行；M5 实现真正分支 |
+| 条件分支 | IF/ELSE 分支 | 多 case + default 的 sourceHandle 路由 | 已真正裁剪未命中路径并记录 skipped；复杂汇合仍需扩展测试 |
 
 ---
 
@@ -178,7 +179,7 @@ API 网关 FastAPI + JWT + RBAC + 全局异常 + 结构化 JSON 日志
 ---
 
 ## 9. 剩余路线图（M5 生产级）
-1. 迁移到 LangGraph SDK（保留当前 DAG 作为 fallback）；条件节点实现真正分支裁剪。
+1. 评估 LangGraph checkpoint/持久恢复收益（保留当前 DAG 作为 fallback）；迁移前补兼容与回退测试。
 2. PDF 视觉/OCR 解析（DeepDoc VisionParser + ONNX 模型）。
 3. Redis 短期记忆（会话上下文 TTL）。
 4. LangSmith 全链路追踪 + 日志聚合 + 告警。
@@ -189,14 +190,12 @@ API 网关 FastAPI + JWT + RBAC + 全局异常 + 结构化 JSON 日志
 
 ---
 
-## 10. 验证状态（2026-07-15）
-- 后端测试：`uv run pytest -q` → **58 passed**（含本轮新增 6 项：本地工具/文件工作区/推送渠道）。
-- 端到端（本地运行，轻量基础设施 postgres+redis+minio+es，OpenClaw/Hermes/TEI 可用）：
-  - 注册/登录/JWT ✅
-  - 知识库：创建→上传 txt→DeepDoc 解析→TEI 向量化→ES 索引→混合检索（3 hits，BM25+kNN 排序）✅
-  - 工作流：创建(text→llm)→执行→node_states→success（**真实 GLM via Kaiweb**，非 Mock）✅
-  - 本地工具发现（3 Skills）✅ · 推送渠道配置（加密+脱敏）✅ · 文件上传 ✅ · 供应商列表（kaiweb=ok，10 真实模型）✅
-- 前端：`tsc -b` 通过；Vite 5173 + 代理 8000 正常。
+## 10. 验证状态（2026-07-22）
+- 后端：`uv run pytest -q` → **219 passed**。
+- 前端：lint/build 通过；Playwright 桌面/移动真实登录、工具调用、Agent 对话通过，无 console error 或横向溢出。
+- 真实依赖：PostgreSQL/Redis/MinIO/Elasticsearch/OpenClaw/Hermes/reranker healthy；空库迁移到 `5d4e1a2b8f66 (head)` 且无 schema 漂移。
+- 真实链路：TXT→MinIO→解析→hash embedding（明确 dev fallback）→ES→rerank；条件错误分支 skipped；Bearer SSE complete；Agent 消息落库；OpenClaw `web_fetch` HTTP 200；APScheduler 触发、重启恢复和暂停通过。
+- 环境阻塞：无真实 embedding/LLM/推送凭据，因此不宣称生产向量质量、真实模型推理或真实外部推送可用。详见 `docs/FEATURE_READINESS.md`。
 
 ---
 
@@ -207,3 +206,4 @@ API 网关 FastAPI + JWT + RBAC + 全局异常 + 结构化 JSON 日志
 | v1.1 | 2026-07-14 | 模型层改本地 OpenClaw/Hermes；定时/存储/推送/记忆自建 |
 | v2.0 | 2026-07-15 | 按实际实现重生成；标注偏差；本轮补全 P0 接口与 UI；新增 Mock 兜底；修复 paused 枚举 |
 | v2.1 | 2026-07-16 | OpenClaw 接入 Kaiweb OpenAI 兼容网关（glm-4.5 默认），Kaiweb 直连作为 fallback；兼容 reasoning_content |
+| v2.2 | 2026-07-22 | 以真实审计证据修正条件分支、SSE、Agent 对话、本地工具和环境阻塞状态；新增功能就绪矩阵 |
