@@ -10,7 +10,7 @@ import re
 import httpx
 
 from app.core.config import settings
-from common.ssrf_guard import assert_url_is_safe
+from common.ssrf_guard import assert_url_is_safe, pin_dns_global
 
 logger = logging.getLogger("claw.notify")
 
@@ -131,11 +131,13 @@ async def notify(channels: list[dict], title: str, content: str) -> list[dict]:
         error = None
         try:
             if ch_type == "feishu":
-                assert_url_is_safe(ch["webhook_url"])
-                success = await send_feishu(ch["webhook_url"], title, content)
+                hostname, resolved_ip = assert_url_is_safe(ch["webhook_url"])
+                with pin_dns_global(hostname, resolved_ip):
+                    success = await send_feishu(ch["webhook_url"], title, content)
             elif ch_type == "wechat":
-                assert_url_is_safe(ch["webhook_url"])
-                success = await send_wechat(ch["webhook_url"], title, content)
+                hostname, resolved_ip = assert_url_is_safe(ch["webhook_url"])
+                with pin_dns_global(hostname, resolved_ip):
+                    success = await send_wechat(ch["webhook_url"], title, content)
             elif ch_type == "telegram":
                 full_text = f"*{title}*\n\n{content}"
                 success = await send_telegram(ch["bot_token"], ch["chat_id"], full_text)

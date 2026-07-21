@@ -10,6 +10,7 @@
 """
 
 import uuid
+from contextlib import contextmanager
 
 import pytest
 
@@ -200,12 +201,21 @@ async def test_notify_ssrf_blocks_bad_scheme(monkeypatch):
 @pytest.mark.asyncio
 async def test_notify_dispatch_success(monkeypatch):
     """合法公网 webhook 正常分发 (SSRF 校验打桩)。"""
+    pins = []
+
+    @contextmanager
+    def fake_pin(hostname, resolved_ip):
+        pins.append((hostname, resolved_ip))
+        yield
+
     _noop_ssrf(monkeypatch)
+    monkeypatch.setattr(notify_client, "pin_dns_global", fake_pin)
     _patch_httpx(monkeypatch, lambda url, json: _FakeResponse(200, {"code": 0}))
     results = await notify(
         [{"type": "feishu", "webhook_url": "https://open.feishu.cn/hook/x"}], "t", "c"
     )
     assert results == [{"channel": "feishu", "success": True, "error": None}]
+    assert pins == [("host", "1.1.1.1")]
 
 
 @pytest.mark.asyncio

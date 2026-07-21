@@ -44,7 +44,7 @@
 | 调度重启持久化 | `/schedules` | next run 可见 | PG JobStore 恢复 | 后端重启后 next run 恢复并再次触发；暂停清空 next run | 可用 | 多实例重复触发风险（P1） |
 | PostgreSQL/Redis 记忆 | `/memories` | PG 记忆 UI 可用 | PG CRUD/search/upsert；Redis 只探活 | memory tests；Redis healthy | 部分可用 | Redis TTL 短期会话记忆缺失（P2） |
 | 文件工作区/分享 | `/files` | 上传/下载/删除/分享 | MinIO + owner PG + presigned URL | tests；本次 MinIO 实际存储由 KB 链路覆盖 | 部分可用 | 本次未重跑文件分享浏览器 E2E；无版本/撤销（P1/P2） |
-| 推送渠道与失败重试 | 设置、notify 节点 | 配置/测试入口 | 加密渠道；SSRF guard；四种 sender | 自动化失败/脱敏 | 部分可用 | 无真实渠道凭据；无持久重试/告警（P1/P2） |
+| 推送渠道与失败重试 | 设置、notify 节点 | 配置/测试入口 | 加密渠道；SSRF guard + DNS pin；四种 sender | 自动化失败/脱敏/rebinding 防护 | 部分可用 | 无真实渠道凭据；无持久重试/告警（P1/P2） |
 | 系统设置/健康 | `/settings`、`/health` | 依赖状态可见 | PG/Redis/ES/MinIO/OpenClaw/Hermes/reranker 探活 | 前六项真实 ok；embedding error 使 overall degraded | 可用（诚实） | 缺延迟、版本和历史趋势（P2） |
 | 导航/空态/错误态/移动端 | 全站 | 响应式主导航和 Agent 选择 | React Router + toast | 1440/390 Playwright，无 console error/横向溢出 | 部分可用 | 多页仍有静默 catch；无 CI 浏览器套件（P1） |
 | Compose/迁移/部署 | Compose、Makefile | N/A | backend 启动前 Alembic；health gating；无运行时依赖安装 | backend/frontend 镜像；容器迁移到 head；运行后 alembic check clean；Nginx E2E | 部分可用 | 固定 container_name 阻碍并行；TEI BGE-M3 未启动（P1/P2） |
