@@ -19,7 +19,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # 先拷依赖文件，利用缓存层
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev 2>/dev/null || uv sync --no-dev
+RUN uv sync --frozen --no-dev
 
 # 拷贝源码
 COPY . .

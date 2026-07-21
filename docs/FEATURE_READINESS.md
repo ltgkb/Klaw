@@ -66,7 +66,7 @@
 8. 新增 GitHub Actions CI，锁文件安装后并行执行后端测试、前端 lint/build 与 Compose 配置校验，并限制最小只读权限。
 9. 知识库、chunk 与 Agent 流列表统一校验分页边界，拒绝负页码、空页和超过 100 条的单页查询。
 10. Compose 后端对 TEI 改为 `service_started` 依赖，避免模型加载或缺失阻塞整个 API 启动；健康检查与生产摄取错误仍保持诚实。
-11. 后端容器 venv 移到 `/opt/venv`，避免 `./backend:/app` 遮蔽 Linux 依赖；CMD 直接调用 Alembic/Uvicorn，启动不再联网同步 dev 包。离线 bind-mount smoke 已通过。
+11. 后端容器 venv 移到 `/opt/venv`，避免 `./backend:/app` 遮蔽 Linux 依赖；构建强制 frozen lock，CMD 直接调用 Alembic/Uvicorn，启动不再联网同步 dev 包。离线 bind-mount smoke 已通过。
 
 ## 对标参考（官方资料，检索日期 2026-07-21）
 
