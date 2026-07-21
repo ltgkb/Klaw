@@ -223,13 +223,22 @@ def _parse_json(binary: bytes) -> list[dict]:
 
 
 def _parse_epub(fnm: str, binary: bytes, chunk_token_num: int) -> list[dict]:
-    """EpubParser 返回 [[text, ""], ...]。"""
-    from deepdoc.parser.epub_parser import RAGFlowEpubParser
+    """按 XHTML 阅读顺序提取 EPUB，复用轻量 HTML 适配器。"""
+    import zipfile
 
-    result = RAGFlowEpubParser()(fnm, binary=binary, chunk_token_num=chunk_token_num)
+    result = []
+    with zipfile.ZipFile(BytesIO(binary)) as archive:
+        names = sorted(
+            name for name in archive.namelist()
+            if name.lower().endswith((".xhtml", ".html", ".htm")) and not name.startswith("META-INF/")
+        )
+        for name in names:
+            result.extend(_parse_html(name, archive.read(name), chunk_token_num))
     blocks = []
     for item in result:
-        text = item[0] if isinstance(item, (list, tuple)) else str(item)
-        if text and str(text).strip():
-            blocks.append({"content": str(text), "content_type": "text", "page": 0})
+        blocks.append({
+            "content": item["content"],
+            "content_type": item.get("content_type", "text"),
+            "page": item.get("page", 0),
+        })
     return blocks

@@ -4,6 +4,7 @@ import subprocess
 import sys
 from io import BytesIO
 from pathlib import Path
+from zipfile import ZipFile
 
 from app.services.deepdoc_service import parse_document
 
@@ -38,6 +39,12 @@ def test_lightweight_text_formats_parse_real_content():
     for filename, (data, expected) in samples.items():
         blocks = parse_document(filename, data)
         assert expected in "\n".join(block["content"] for block in blocks)
+
+    epub = BytesIO()
+    with ZipFile(epub, "w") as archive:
+        archive.writestr("OEBPS/chapter.xhtml", "<html><body><p>Klaw epub evidence</p></body></html>")
+    blocks = parse_document("sample.epub", epub.getvalue())
+    assert "Klaw epub evidence" in "\n".join(block["content"] for block in blocks)
 
 
 def test_office_formats_parse_generated_files():
