@@ -19,7 +19,7 @@
 |---|---|---|---|---|---|---|
 | 注册、登录、access JWT | `/register`、`/login` | 可用 | `/auth/register`、`/auth/login` + PG | `test_auth.py`；真实 HTTP 注册/登录 | 可用 | 无；密码 bcrypt |
 | 刷新令牌 | 前端拦截器自动刷新 | 本批补全 | `/auth/refresh`，校验 refresh 类型、用户 active | `test_refresh_token`；真实 HTTP 200 | 可用 | 需后续增加 token rotation/revocation（P2） |
-| RBAC 与禁用用户 | 设置/用户管理 | 可用 | `require_roles`；当前用户每次请求检查 `is_active`；管理员状态 API 禁止自锁 | RBAC、普通用户 403、自锁 400 测试；真实管理员停用/恢复 | 可用 | 组织/团队级管理员策略仍缺失（P2） |
+| RBAC 与禁用用户 | 设置/用户管理 | 可用 | `require_roles`；当前用户每次请求检查 `is_active`；管理员状态 API 禁止自锁 | RBAC、普通用户 403、自锁 400 测试；真实停用后旧 token 401、恢复成功 | 可用 | 组织/团队级管理员策略仍缺失（P2） |
 | owner 隔离与密钥保护 | 各资源页面 | 可用 | 查询按 owner；AES-256-GCM API key/channel secret | KB/flow/schedule/file 隔离测试；真实 push 配置返回 `******` | 可用 | 单租户 owner 模式，不是团队/组织租户（P2） |
 | 知识库 CRUD | `/kb` | 可用 | `/knowledge-bases` + PG | `test_kb.py`、真实创建/列表 | 可用 | 分页参数缺少上限校验（P2） |
 | TXT/MD/HTML/JSON/DOCX/XLSX/PPTX/EPUB 上传解析 | KB 详情上传 | 可用 | MinIO + DeepDoc 格式路由 | parser fixture 覆盖 MD/HTML/JSON/DOCX/XLSX/PPTX/EPUB/PDF；真实 MinIO→解析→ES 管线验证 TXT、HTML | 部分可用 | 仍需逐格式 MinIO→ES E2E 和大文件/损坏文件验证（P1） |
@@ -49,7 +49,7 @@
 | 前后端导航与空/加载/错误态 | 全局布局 | 部分可用 | React Router + API interceptor | build；文件页/执行页新增错误态 | 部分可用 | 多页面仍静默 catch；移动端已补横向导航但未做浏览器截图验收（P1） |
 | Docker Compose 启动 | 根目录 Compose | 部分可用 | 10 服务；后端镜像启动先迁移 | config 校验；本轮隔离只启动 4 基础依赖 | 部分可用 | TEI/OCR/OpenClaw/Hermes 镜像/模型未在本机验证；固定 container_name 影响并行部署（P1） |
 | 迁移 | `make db-migrate` | 可用 | Alembic | 空 PG upgrade + current head + check | 可用 | 首次多实例迁移锁策略未加固（P2） |
-| 测试/lint/build | Makefile、CI 入口 | 可用 | pytest/oxlint/tsc/Vite | 75 passed；lint/build 通过 | 可用 | 未配置 CI workflow、E2E 浏览器测试（P1） |
+| 测试/lint/build | Makefile、GitHub Actions | 可用 | pytest/oxlint/tsc/Vite；后端/前端/Compose 三个 CI job | 75 passed；lint/build、YAML 与 Compose 校验通过 | 可用 | 尚无浏览器 E2E（P1） |
 
 ## 本轮修复与新增能力
 
@@ -60,6 +60,7 @@
 5. 健康检查只把 2xx 视为依赖可用；生产环境禁止本地工具 mock 伪造成功。
 6. 新增鉴权文件工作区 UI、blob 下载、分享/删除/上传状态；前端 access token 自动 refresh；移动端提供可滚动导航。
 7. 新增管理员用户管理纵向切片：用户列表、角色调整、启用/停用入口；后端禁止普通用户操作及管理员自锁；普通用户设置页不再请求 admin-only 配置。
+8. 新增 GitHub Actions CI，锁文件安装后并行执行后端测试、前端 lint/build 与 Compose 配置校验，并限制最小只读权限。
 
 ## 对标参考（官方资料，检索日期 2026-07-21）
 
@@ -70,7 +71,7 @@
 ## 遗留项
 
 - P0：无代码层遗留；生产启动仍需提供 TEI/OpenClaw/Hermes/Kaiweb 等真实依赖，当前环境阻塞必须在部署前解决。
-- P1：真实 provider/工具/推送成功链路未验证；前端对话流式与多数页面错误态；画布工具节点；真实长耗时暂停/取消；CI/E2E 浏览器测试；多实例调度锁。
+- P1：真实 provider/工具/推送成功链路未验证；前端对话流式与多数页面错误态；画布工具节点；真实长耗时暂停/取消；浏览器 E2E；多实例调度锁。
 - P2：OCR/多模态、Redis TTL 短期记忆、重排服务、文件版本、推送重试/告警、可观测/评测、K8s/压测。
 
 ## 参考命令
