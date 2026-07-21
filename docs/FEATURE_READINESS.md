@@ -31,7 +31,7 @@
 | 向量化 | 上传后台任务 | 无独立配置入口可感知 fallback | TEI → dev 哈希向量 | 真实 TEI 不可达时明确日志并完成 ES indexing | 部分可用 | TEI 模型 sidecar 未启动；哈希向量不可用于生产（P0/P1 环境） |
 | Elasticsearch 索引 | 无独立入口 | 由 KB 流程触发 | dense_vector + BM25 | 真实 ES bulk 1 chunk 成功 | 可用 | 无索引生命周期/备份策略（P2） |
 | 混合检索、阈值、引用 | KB 详情检索 | 可用 | `/search` kNN+BM25；可选 rerank | mock rerank 测试；真实 ES 查询命中 `ORBIT-7429` | 部分可用 | reranker 未启动；真实结果未覆盖重排（P1 环境） |
-| Agent 画布保存/加载 | `/flows/:id` | 可用；节点和左右栏可调尺寸 | `/agent-flows` DAG JSON 保存节点 style 与 edge handles | CRUD/DAG 测试；真实浏览器缩放、保存、重载 | 可用 | 模板库/版本历史缺失（P2） |
+| Agent 画布保存/加载 | `/flows/:id`；顶栏可返回工作流列表或平台首页 | 可用；节点和左右栏可调尺寸 | `/agent-flows` DAG JSON 保存节点 style 与 edge handles | CRUD/DAG 测试；真实 API 浏览器缩放/保存/重载；浏览器路由夹具验证站内返回 | 可用 | 模板库/版本历史缺失（P2） |
 | 节点配置 | 画布右侧面板 | 可用 | text/llm/retrieval/condition/notify/memory/start/end | execution tests + 真实 text/condition flow | 部分可用 | 本地工具未作为画布节点，仅独立工具 API（P1） |
 | 条件分支裁剪 | condition handles | 可用 | 按 `sourceHandle` 只推进匹配路径；保存/导入导出保留 handle | 错误分支不执行测试；浏览器动态 handle、拖线、重载验证 | 可用 | 汇合节点复杂拓扑仍需更多回归（P1） |
 | 执行、node states、失败终止 | 画布执行/执行详情 | 可用 | asyncio DAG + PG execution | 测试；真实 flow success | 可用 | 多实例执行锁/幂等缺失（P2） |
