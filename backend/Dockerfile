@@ -20,4 +20,6 @@ COPY . .
 
 EXPOSE 8000
 
-CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Apply committed migrations before accepting traffic. A migration failure keeps
+# the container unhealthy instead of serving requests against a stale schema.
+CMD ["sh", "-c", "uv run --no-sync alembic upgrade head && exec uv run --no-sync uvicorn app.main:app --host 0.0.0.0 --port 8000"]
