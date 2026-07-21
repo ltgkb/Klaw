@@ -20,7 +20,7 @@
 | 注册、登录、access JWT | `/register`、`/login` | 可用 | `/auth/register`、`/auth/login` + PG | 自动化；真实 HTTP 201/200 | 可用 | 无 |
 | 刷新令牌 | Axios 拦截器 | 可用 | `/auth/refresh` 校验 token 类型和 active 用户 | 自动化；真实 Bearer refresh | 可用 | rotation/revocation 缺失（P2） |
 | RBAC 与用户启停 | `/users`（admin） | 可用 | 动态读取 DB 角色/状态，保护最后 admin 和自锁 | auth/negative tests | 可用 | 组织级角色策略缺失（P2） |
-| owner 隔离与密钥保护 | 各资源页、设置 | 可用 | owner-scoped 查询；AES-256-GCM 存 API key/channel secret | KB/flow/schedule/file 隔离和 crypto tests | 可用 | 当前是单租户 owner 隔离（P2） |
+| owner 隔离与密钥保护 | 各资源页、设置 | 持久化渠道已脱敏 | owner-scoped 查询；AES-256-GCM 存 API key/channel secret | 隔离和 crypto tests | 部分可用 | notify 节点内联凭据仍在 DAG 明文存储（P1）；单租户 owner 隔离（P2） |
 | 知识库 CRUD | `/kb` | 可用 | PG CRUD，分页上限 100 | 自动化；真实创建/列表 | 可用 | 无 |
 | TXT/MD/HTML/JSON/DOCX/XLSX/PPTX/EPUB | KB 详情上传 | 可用 | MinIO + DeepDoc 类型路由 | parser fixtures；真实 TXT 全链路 | 部分可用 | 其它格式缺逐格式 MinIO->ES E2E（P1） |
 | PDF 解析/OCR | KB 详情上传 | 文本 PDF 可上传 | pypdf 文本路径；视觉模块未启用 | parser test；未跑扫描 PDF | 部分可用 | OCR/版面/图片表格缺失（P2） |
@@ -44,7 +44,7 @@
 | 调度重启持久化 | `/schedules` | next run 可见 | PG JobStore 恢复 | 后端重启后 next run 恢复并再次触发；暂停清空 next run | 可用 | 多实例重复触发风险（P1） |
 | PostgreSQL/Redis 记忆 | `/memories` | PG 记忆 UI 可用 | PG CRUD/search/upsert；Redis 只探活 | memory tests；Redis healthy | 部分可用 | Redis TTL 短期会话记忆缺失（P2） |
 | 文件工作区/分享 | `/files` | 上传/下载/删除/分享 | MinIO + owner PG + presigned URL | tests；本次 MinIO 实际存储由 KB 链路覆盖 | 部分可用 | 本次未重跑文件分享浏览器 E2E；无版本/撤销（P1/P2） |
-| 推送渠道与失败重试 | 设置、notify 节点 | 配置/测试入口 | 加密渠道；SSRF guard + DNS pin；四种 sender | 自动化失败/脱敏/rebinding 防护 | 部分可用 | 无真实渠道凭据；无持久重试/告警（P1/P2） |
+| 推送渠道与失败重试 | 设置、notify 节点 | 设置渠道加密；节点仍内联 | SSRF guard + DNS pin；四种 sender | 自动化失败/脱敏/rebinding 防护 | 部分可用 | 节点需改用 channel_ids；无真实凭据/持久重试（P1/P2） |
 | 系统设置/健康 | `/settings`、`/health` | 依赖状态可见 | PG/Redis/ES/MinIO/OpenClaw/Hermes/reranker 探活 | 前六项真实 ok；embedding error 使 overall degraded | 可用（诚实） | 缺延迟、版本和历史趋势（P2） |
 | 导航/空态/错误态/移动端 | 全站 | 响应式主导航和 Agent 选择 | React Router + toast | 1440/390 Playwright，无 console error/横向溢出 | 部分可用 | 多页仍有静默 catch；无 CI 浏览器套件（P1） |
 | Compose/迁移/部署 | Compose、Makefile | N/A | backend 启动前 Alembic；health gating；无运行时依赖安装 | backend/frontend 镜像；容器迁移到 head；运行后 alembic check clean；Nginx E2E | 部分可用 | 固定 container_name 阻碍并行；TEI BGE-M3 未启动（P1/P2） |
@@ -81,6 +81,7 @@
 
 - HTTP 节点现按安全默认值仅允许解析到公网 IP 的 URL。若产品必须访问企业内网 API，应设计管理员域名/CIDR allowlist，不能启用全局绕过。
 - Compose 仍保留固定 `container_name` 以兼容现有运维命令；这会阻碍同机多 project 并行，是否移除需同步部署脚本。
+- notify 节点应迁移到已加密的持久化 `channel_ids`。需确认旧 DAG 内联凭据是自动建渠道后清除，还是要求用户手动重配；迁移前不删除现有配置。
 
 ## 参考命令
 
