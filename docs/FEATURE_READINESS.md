@@ -9,7 +9,7 @@
 ## 证据摘要
 
 - 后端：`uv run pytest -q` → **78 passed**；另行运行 `uv run python -m compileall -q app deepdoc common` 通过。
-- 前端：`npm run lint` 通过（3 个既有 Fast Refresh warning）；`npm run build` 通过（Vite 产生约 607 kB 主 JS，存在 code-splitting warning）。
+- 前端：`npm run lint` 通过（3 个既有 Fast Refresh warning）；`npm run build` 通过（Vite 产生约 612 kB 主 JS，存在 code-splitting warning）。
 - 浏览器：Playwright 在 1440×1000 与 390×844 视口完成真实管理员登录→设置→用户停用→恢复；普通用户设置页不显示用户管理且不请求 admin-only API；页面/滚动容器无横向溢出，控制台无 error。
 - Compose：基础与隔离 `docker compose config --quiet` 通过；前序后端/前端镜像构建成功，`.dockerignore` 将 build context 从 1.12 GB / 132 MB 降到约 194 kB / 39 kB；最终 Docker Hub 元数据重试超时，但基于本地镜像的离线 smoke 已验证最新 `/opt/venv` 布局、Alembic 与 API 启动。
 - 真实依赖：隔离 PostgreSQL 16、Redis 7、MinIO、Elasticsearch 8.11 全部 healthy；Alembic 从空库升级到 `4b2e9a1c7d33 (head)`，`alembic check` 无漂移。
@@ -31,9 +31,9 @@
 | 向量化 | 上传后台任务 | 无独立配置入口可感知 fallback | TEI → dev 哈希向量 | 真实 TEI 不可达时明确日志并完成 ES indexing | 部分可用 | TEI 模型 sidecar 未启动；哈希向量不可用于生产（P0/P1 环境） |
 | Elasticsearch 索引 | 无独立入口 | 由 KB 流程触发 | dense_vector + BM25 | 真实 ES bulk 1 chunk 成功 | 可用 | 无索引生命周期/备份策略（P2） |
 | 混合检索、阈值、引用 | KB 详情检索 | 可用 | `/search` kNN+BM25；可选 rerank | mock rerank 测试；真实 ES 查询命中 `ORBIT-7429` | 部分可用 | reranker 未启动；真实结果未覆盖重排（P1 环境） |
-| Agent 画布保存/加载 | `/flows/:id` | 可用 | `/agent-flows` DAG JSON | CRUD/DAG 测试；真实 flow 保存 | 可用 | 模板库/版本历史缺失（P2） |
+| Agent 画布保存/加载 | `/flows/:id` | 可用；节点和左右栏可调尺寸 | `/agent-flows` DAG JSON 保存节点 style 与 edge handles | CRUD/DAG 测试；真实浏览器缩放、保存、重载 | 可用 | 模板库/版本历史缺失（P2） |
 | 节点配置 | 画布右侧面板 | 可用 | text/llm/retrieval/condition/notify/memory/start/end | execution tests + 真实 text/condition flow | 部分可用 | 本地工具未作为画布节点，仅独立工具 API（P1） |
-| 条件分支裁剪 | condition handles | 可用 | 按 `sourceHandle` 只推进匹配路径 | 新增错误分支不执行测试；真实 `approved` 路径成功 | 可用 | 汇合节点复杂拓扑仍需更多回归（P1） |
+| 条件分支裁剪 | condition handles | 可用 | 按 `sourceHandle` 只推进匹配路径；保存/导入导出保留 handle | 错误分支不执行测试；浏览器动态 handle、拖线、重载验证 | 可用 | 汇合节点复杂拓扑仍需更多回归（P1） |
 | 执行、node states、失败终止 | 画布执行/执行详情 | 可用 | asyncio DAG + PG execution | 测试；真实 flow success | 可用 | 多实例执行锁/幂等缺失（P2） |
 | SSE 实时执行流 | 执行详情 | 可用 | `/stream` token query 鉴权，刷新 DB row | 新增 complete 测试；真实 SSE `complete` | 可用 | query token 会出现在 URL 日志，宜改短期 SSE ticket（P1） |
 | 暂停/恢复/取消 | 执行详情按钮 | 本批补全实时轮询/错误态 | 控制 API 绑定 flow+execution；取消不再复活 | owner 越权、pre-cancel、控制测试 | 部分可用 | 尚未在真实长耗时节点执行暂停/取消；需真实 LLM/人工节点验证（P1） |
@@ -67,6 +67,7 @@
 9. 知识库、chunk 与 Agent 流列表统一校验分页边界，拒绝负页码、空页和超过 100 条的单页查询。
 10. Compose 后端对 TEI 改为 `service_started` 依赖，避免模型加载或缺失阻塞整个 API 启动；健康检查与生产摄取错误仍保持诚实。
 11. 后端容器 venv 移到 `/opt/venv`，避免 `./backend:/app` 遮蔽 Linux 依赖；构建强制 frozen lock，CMD 直接调用 Alembic/Uvicorn，启动不再联网同步 dev 包。离线 bind-mount smoke 已通过。
+12. 画布节点加入尺寸拖柄并持久化，元素栏/属性栏支持鼠标和键盘调宽；新增节点使用准确画布坐标。修复条件分支 handle 坐标缓存、自动接线 handle 丢失和普通保存漏写 `sourceHandle`。
 
 ## 对标参考（官方资料，检索日期 2026-07-21）
 
