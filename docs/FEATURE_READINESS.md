@@ -48,7 +48,7 @@
 | 系统设置/健康 | `/settings`、`/health` | 依赖状态可见 | PG/Redis/ES/MinIO/OpenClaw/Hermes/reranker 探活 | 前六项真实 ok；embedding error 使 overall degraded | 可用（诚实） | 缺延迟、版本和历史趋势（P2） |
 | 导航/空态/错误态/移动端 | 全站 | 响应式主导航和 Agent 选择 | React Router + toast | 1440/390 Playwright，无 console error/横向溢出 | 部分可用 | 多页仍有静默 catch；无 CI 浏览器套件（P1） |
 | Compose/迁移/部署 | Compose、Makefile | N/A | backend 启动前 Alembic；health gating；无运行时依赖安装 | backend/frontend 镜像；容器迁移到 head；运行后 alembic check clean；Nginx E2E | 部分可用 | 固定 container_name 阻碍并行；TEI BGE-M3 未启动（P1/P2） |
-| 测试/lint/build/CI | Makefile、GitHub Actions | N/A | pytest/oxlint/tsc/Vite/Compose 三任务 CI | 219 tests；lint/build/config 通过 | 部分可用 | 新 CI 待远端首次运行；bundle 631 kB；无浏览器 CI（P1） |
+| 测试/lint/build/CI | Makefile | N/A | pytest/oxlint/tsc/Vite/Compose | 219 tests；lint/build/config 通过 | 部分可用 | 仓库无 CI；bundle 631 kB；无浏览器 CI（P1） |
 
 ## 本轮矩阵变化
 
@@ -60,10 +60,9 @@
 6. Compose backend 从覆盖镜像的宿主源码挂载改为确定性镜像，启动前自动迁移并向 frontend 提供 health gate；Docker 构建上下文排除 `.venv`/`node_modules`/缓存。
 7. 画布 HTTP 节点新增公网地址校验与 DNS pinning，阻断 loopback/私网/云元数据 SSRF；HTTP 错误不再泄露 URL 查询凭据。
 8. 取消操作立即把运行节点写为 cancelled 并记录原因，SSE 终帧不再出现“顶层已取消、节点仍运行”的矛盾状态。
-9. 新增 GitHub Actions 后端、前端和 Compose 三任务 CI；首次远端执行前不宣称 CI 已通过。
-10. Hermes 从“在线即模型可用”的误报改为显式 chat 开关；补齐非流式/SSE fallback 适配，未配置推理供应商时保持未配置状态。
-11. 模型发现不再展示未配置的 Kaiweb/OpenAI/Anthropic；无真实凭据时只显示默认路由和显式 dev mock。
-12. Alembic autogenerate 排除 APScheduler 自管表，避免运行后错误生成删除 `apscheduler_jobs` 的迁移。
+9. Hermes 从“在线即模型可用”的误报改为显式 chat 开关；补齐非流式/SSE fallback 适配，未配置推理供应商时保持未配置状态。
+10. 模型发现不再展示未配置的 Kaiweb/OpenAI/Anthropic；无真实凭据时只显示默认路由和显式 dev mock。
+11. Alembic autogenerate 排除 APScheduler 自管表，避免运行后错误生成删除 `apscheduler_jobs` 的迁移。
 
 ## 对标参考（官方资料，检索日期 2026-07-22）
 
@@ -75,7 +74,7 @@
 ## 遗留优先级
 
 - P0 部署条件：生产必须配置强 JWT/加密密钥、真实 1024 维 embedding 和至少一个真实 LLM；当前代码无已知未修 P0。
-- P1：真实 LLM/token stream UI；OpenClaw 工具画布节点；其它工具真实实现；在途调用强制中断；多实例调度防重；逐格式摄取 E2E；推送成功链路/重试；浏览器 CI；移除静默错误。
+- P1：真实 LLM/token stream UI；OpenClaw 工具画布节点；其它工具真实实现；在途调用强制中断；多实例调度防重；逐格式摄取 E2E；推送成功链路/重试；基础/浏览器 CI；移除静默错误。
 - P2：OCR/多模态、语义分块、Redis TTL 记忆、文件版本、索引备份、checkpoint/评测/可观测、K8s/压测。
 
 ## 需用户确认
