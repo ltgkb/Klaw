@@ -8,7 +8,7 @@
 
 - 后端：`uv run pytest -q` → **70 passed**；另行运行 `uv run python -m compileall -q app deepdoc common` 通过。
 - 前端：`npm run lint` 通过（3 个既有 Fast Refresh warning）；`npm run build` 通过（Vite 产生约 602 kB 主 JS，存在 code-splitting warning）。
-- Compose：基础 `docker compose config --quiet` 通过；隔离覆盖配置也通过；后端/前端镜像均构建成功，`.dockerignore` 将 build context 分别降至约 15.85 kB / 1.93 kB。
+- Compose：基础 `docker compose config --quiet` 通过；隔离覆盖配置也通过；后端/前端镜像均构建成功，`.dockerignore` 将最终 build context 限制在约 194 kB / 39 kB（未忽略时曾达 1.12 GB / 132 MB）。
 - 真实依赖：隔离 PostgreSQL 16、Redis 7、MinIO、Elasticsearch 8.11 全部 healthy；Alembic 从空库升级到 `4b2e9a1c7d33 (head)`，`alembic check` 无漂移。
 - 真实 API：注册/登录/刷新、PG 元数据、MinIO 上传下载分享删除、TXT DeepDoc 解析、哈希向量 fallback、ES 索引与检索、条件分支、SSE complete、APScheduler 实际触发和重启恢复均已通过。
 - 环境阻塞：本次未启动 TEI BGE-M3、reranker、OpenClaw、Hermes；健康检查如实为 degraded。知识库使用明确标记的 dev 哈希向量 fallback，LLM/工具使用明确标记的 dev Mock，未宣称真实模型或真实本地工具可用。
