@@ -8,6 +8,9 @@ import asyncio
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app.api.v1.endpoints.agent_chat import _final_answer
+from app.models.execution import Execution, ExecutionStatus
+
 
 # ── 辅助函数 ──
 
@@ -139,3 +142,21 @@ async def test_chat_failed_flow_saves_error(client, db_engine, patch_session_fac
 
     _, answer = await _wait_assistant_message(client, flow_id, token)
     assert "循环依赖" in answer["content"]
+
+
+def test_final_answer_does_not_mask_failure_or_cancellation_with_partial_output():
+    """失败或取消时必须展示终态原因，不能误把最后一个成功节点当作回答。"""
+    failed = Execution(
+        status=ExecutionStatus.failed,
+        output={"partial": "看似成功的中间结果"},
+        node_states={"partial": {"status": "success", "output": "中间结果"}},
+        error_message="模型供应商不可用",
+    )
+    cancelled = Execution(
+        status=ExecutionStatus.cancelled,
+        output={"partial": "中间结果"},
+        node_states={},
+    )
+
+    assert _final_answer(failed) == "模型供应商不可用"
+    assert _final_answer(cancelled) == "(执行已取消)"

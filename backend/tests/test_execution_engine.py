@@ -8,6 +8,7 @@ DB 用 SQLite 内存库; run_flow 内部的 async_session_factory 通过 monkeyp
 """
 
 import uuid
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -318,6 +319,10 @@ async def test_http_node_success(db_session, patch_session_factory, monkeypatch)
     calls = []
     queue = [_FakeResponse('{"echo": "pong"}')]
     monkeypatch.setattr(
+        execution_service, "assert_url_is_safe", lambda _url: ("api.example.com", "1.1.1.1")
+    )
+    monkeypatch.setattr(execution_service, "pin_dns_global", lambda *_args: nullcontext())
+    monkeypatch.setattr(
         execution_service.httpx, "AsyncClient", _make_fake_client(calls, queue)
     )
 
@@ -358,6 +363,10 @@ async def test_http_node_retry_on_error(db_session, patch_session_factory, monke
     calls = []
     queue = [ConnectionError("连接失败"), _FakeResponse("RECOVERED")]
     monkeypatch.setattr(
+        execution_service, "assert_url_is_safe", lambda _url: ("api.example.com", "1.1.1.1")
+    )
+    monkeypatch.setattr(execution_service, "pin_dns_global", lambda *_args: nullcontext())
+    monkeypatch.setattr(
         execution_service.httpx, "AsyncClient", _make_fake_client(calls, queue)
     )
 
@@ -367,6 +376,49 @@ async def test_http_node_retry_on_error(db_session, patch_session_factory, monke
     assert ex.status == ExecutionStatus.success
     assert len([c for c in calls if c.get("method")]) == 2
     assert ex.node_states["n1"]["output"] == "RECOVERED"
+
+
+@pytest.mark.asyncio
+async def test_http_node_blocks_private_network_before_request(monkeypatch):
+    """用户配置的 HTTP 节点不能访问 loopback、内网或云元数据地址。"""
+    called = False
+
+    class UnexpectedClient:
+        def __init__(self, *args, **kwargs):
+            nonlocal called
+            called = True
+
+    monkeypatch.setattr(execution_service.httpx, "AsyncClient", UnexpectedClient)
+
+    with pytest.raises(ValueError, match="non-public"):
+        await execution_service._execute_http_node(
+            {"method": "GET", "url": "http://127.0.0.1:8000/api/v1/health"}, {}
+        )
+
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_http_node_error_does_not_expose_url_credentials(monkeypatch):
+    """HTTP 状态错误只包含状态码，不能把 query token 写入执行错误和日志。"""
+    token = "query-secret-token"
+    calls = []
+    queue = [_FakeResponse("denied", status_code=401)]
+    monkeypatch.setattr(
+        execution_service, "assert_url_is_safe", lambda _url: ("api.example.com", "1.1.1.1")
+    )
+    monkeypatch.setattr(execution_service, "pin_dns_global", lambda *_args: nullcontext())
+    monkeypatch.setattr(
+        execution_service.httpx, "AsyncClient", _make_fake_client(calls, queue)
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await execution_service._execute_http_node(
+            {"method": "GET", "url": f"https://api.example.com/data?token={token}"}, {}
+        )
+
+    assert str(exc_info.value) == "HTTP request returned 401"
+    assert token not in str(exc_info.value)
 
 
 # ── P1-4: retrieval 节点 KB owner 校验 ──

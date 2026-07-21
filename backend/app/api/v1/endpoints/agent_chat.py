@@ -16,7 +16,7 @@ from app.core.database import async_session_factory
 from app.core.deps import CurrentUser, DBSession
 from app.models.agent_flow import AgentFlow
 from app.models.conversation import Conversation, Message, MessageRole
-from app.models.execution import Execution
+from app.models.execution import Execution, ExecutionStatus
 from app.schemas.conversation import ChatRequest, ChatResponse, MessageRead
 from app.services import agent_flow_service, execution_service
 
@@ -30,6 +30,10 @@ _background_tasks: set[asyncio.Task] = set()
 
 def _final_answer(execution: Execution) -> str:
     """从执行结果提取最终回答: 优先 end 节点输出, 否则最后一个节点输出。"""
+    if execution.status == ExecutionStatus.failed:
+        return execution.error_message or "(执行失败)"
+    if execution.status == ExecutionStatus.cancelled:
+        return execution.error_message or "(执行已取消)"
     node_states = execution.node_states or {}
     for st in node_states.values():
         if st.get("type") == "end":

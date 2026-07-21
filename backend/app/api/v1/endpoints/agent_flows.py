@@ -7,7 +7,7 @@ import asyncio
 import json
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, status
 from sqlalchemy import select
 from sse_starlette.sse import EventSourceResponse
 
@@ -199,7 +199,7 @@ async def stream_execution(
     flow_id: uuid.UUID,
     execution_id: uuid.UUID,
     db: DBSession,
-    token: str | None = Query(None, description="JWT access token (EventSource 无法设置 Header, 通过 query 传递)"),
+    authorization: str | None = Header(None),
 ):
     """SSE 实时推送执行状态。
 
@@ -207,20 +207,30 @@ async def stream_execution(
       - progress: 节点状态更新 (node_states)
       - complete: 执行完成 (最终状态)
 
-    认证: 浏览器 EventSource 不支持自定义 Header, 因此通过 ?token= 查询参数传递 JWT。
+    认证: 仅使用 Authorization Bearer Header，避免 JWT 出现在 URL/访问日志中。
     """
-    # 鉴权: token 可从 query 参数或 Authorization header 获取
-    user = None
-    if token:
-        payload = decode_token(token)
-        if payload and payload.get("type") == "access":
-            user_id = payload.get("sub")
-            if user_id:
-                result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
-                user = result.scalar_one_or_none()
+    bearer_token = None
+    if authorization:
+        scheme, _, credentials = authorization.partition(" ")
+        if scheme.lower() == "bearer" and credentials:
+            bearer_token = credentials
 
+    access_token = bearer_token
+    payload = decode_token(access_token) if access_token else None
+    if payload is None or payload.get("type") != "access":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="无效或过期的认证令牌")
+
+    try:
+        user_id = uuid.UUID(payload.get("sub", ""))
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="无效令牌") from None
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
     if user is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未认证")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在")
+    if not user.is_active:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户已被禁用")
 
     # 越权校验: execution 必须属于该 flow 且 flow 属于当前用户;
     # 不存在/跨 flow/越权统一 404, 不泄漏他人执行记录的存在性
@@ -232,6 +242,9 @@ async def stream_execution(
             if execution is None:
                 yield {"event": "error", "data": json.dumps({"error": "执行记录不存在"})}
                 break
+            # The executor commits through a separate session. Refresh the
+            # identity-mapped row so a stream opened while pending can observe it.
+            await db.refresh(execution)
 
             payload = {
                 "execution_id": str(execution.id),

@@ -4,12 +4,15 @@
 惰性 reaper (running/paused 超 30 分钟置 failed)、删除 flow 级联 unschedule (契约3)。
 """
 
+import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import update
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app.core.security import create_access_token
 from app.models.execution import Execution, ExecutionStatus
 from app.models.schedule_job import ScheduleJob
 
@@ -55,7 +58,12 @@ async def test_pause_resume_cancel_running_execution(client, db_session):
     """running 执行可暂停→恢复→取消; 已取消后再次取消返回 400。"""
     token = await _register_and_login(client)
     flow_id = await _create_flow(client, token)
-    ex = await _insert_execution(db_session, flow_id, ExecutionStatus.running)
+    ex = await _insert_execution(
+        db_session,
+        flow_id,
+        ExecutionStatus.running,
+        node_states={"slow": {"status": "running", "label": "Slow node"}},
+    )
 
     resp = await client.post(
         f"/api/v1/agent-flows/{flow_id}/executions/{ex.id}/pause", headers=_auth_headers(token))
@@ -71,6 +79,9 @@ async def test_pause_resume_cancel_running_execution(client, db_session):
         f"/api/v1/agent-flows/{flow_id}/executions/{ex.id}/cancel", headers=_auth_headers(token))
     assert resp.status_code == 200
     assert resp.json()["status"] == "cancelled"
+    assert resp.json()["error_message"] == "执行已取消"
+    assert resp.json()["node_states"]["slow"]["status"] == "cancelled"
+    assert resp.json()["node_states"]["slow"]["ended_at"]
 
 
 @pytest.mark.asyncio
@@ -126,22 +137,32 @@ async def test_sse_stream_wrong_flow_forbidden(client, db_session):
 
     # B 用自己的 flow + A 的 execution → 404 (deploy 语义: 跨 flow/越权统一 404, 防信息泄漏)
     resp = await client.get(
-        f"/api/v1/agent-flows/{flow_b}/executions/{ex_a.id}/stream?token={token_b}")
+        f"/api/v1/agent-flows/{flow_b}/executions/{ex_a.id}/stream",
+        headers=_auth_headers(token_b),
+    )
     assert resp.status_code == 404
 
     # B 用自己的 flow + 不存在的 execution → 404
     resp = await client.get(
-        f"/api/v1/agent-flows/{flow_b}/executions/{uuid.uuid4()}/stream?token={token_b}")
+        f"/api/v1/agent-flows/{flow_b}/executions/{uuid.uuid4()}/stream",
+        headers=_auth_headers(token_b),
+    )
     assert resp.status_code == 404
 
     # 无 token → 401
     resp = await client.get(f"/api/v1/agent-flows/{flow_b}/executions/{ex_a.id}/stream")
     assert resp.status_code == 401
 
+    # URL query 中即使带有效 token 也不再接受，防止凭据进入访问日志。
+    resp = await client.get(
+        f"/api/v1/agent-flows/{flow_b}/executions/{uuid.uuid4()}/stream?token={token_b}"
+    )
+    assert resp.status_code == 401
+
 
 @pytest.mark.asyncio
 async def test_sse_stream_terminal_execution(client, db_session):
-    """终态执行的 SSE 立即推送 complete 事件并结束。"""
+    """Bearer Header 认证后，终态执行的 SSE 立即推送 complete 事件并结束。"""
     token = await _register_and_login(client, "sse_ok@test.com")
     flow_id = await _create_flow(client, token)
     ex = await _insert_execution(
@@ -150,10 +171,95 @@ async def test_sse_stream_terminal_execution(client, db_session):
     )
 
     resp = await client.get(
-        f"/api/v1/agent-flows/{flow_id}/executions/{ex.id}/stream?token={token}")
+        f"/api/v1/agent-flows/{flow_id}/executions/{ex.id}/stream",
+        headers=_auth_headers(token),
+    )
     assert resp.status_code == 200
     assert "complete" in resp.text
     assert str(ex.id) in resp.text
+
+
+@pytest.mark.asyncio
+async def test_sse_observes_completion_committed_by_executor_session(
+    client, db_session, db_engine, monkeypatch
+):
+    """流打开时为 pending，独立执行器 session 提交 success 后必须发 complete 并结束。"""
+    token = await _register_and_login(client, "sse_live@test.com")
+    flow_id = await _create_flow(client, token)
+    ex = await _insert_execution(db_session, flow_id, ExecutionStatus.pending)
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    real_sleep = asyncio.sleep
+
+    async def fast_sleep(_seconds):
+        await real_sleep(0.01)
+
+    monkeypatch.setattr("app.api.v1.endpoints.agent_flows.asyncio.sleep", fast_sleep)
+
+    async def complete_from_executor_session():
+        await real_sleep(0.05)
+        async with factory() as executor_db:
+            await executor_db.execute(
+                update(Execution)
+                .where(Execution.id == ex.id)
+                .values(
+                    status=ExecutionStatus.success,
+                    node_states={"n1": {"status": "success", "output": "done"}},
+                )
+            )
+            await executor_db.commit()
+
+    task = asyncio.create_task(complete_from_executor_session())
+    resp = await asyncio.wait_for(
+        client.get(
+            f"/api/v1/agent-flows/{flow_id}/executions/{ex.id}/stream",
+            headers=_auth_headers(token),
+        ),
+        timeout=1,
+    )
+    await task
+
+    assert resp.status_code == 200
+    assert "event: complete" in resp.text
+    assert '"status": "success"' in resp.text
+
+
+@pytest.mark.asyncio
+async def test_sse_header_ignores_query_token(client, db_session):
+    """Header 凭据是唯一认证来源，URL 中的伪造 token 不影响安全 Header。"""
+    token = await _register_and_login(client, "sse_header@test.com")
+    flow_id = await _create_flow(client, token)
+    ex = await _insert_execution(db_session, flow_id, ExecutionStatus.success)
+
+    resp = await client.get(
+        f"/api/v1/agent-flows/{flow_id}/executions/{ex.id}/stream?token=invalid",
+        headers=_auth_headers(token),
+    )
+    assert resp.status_code == 200
+    assert "complete" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_sse_rejects_disabled_user_and_malformed_subject(client, db_session):
+    """SSE 与普通 API 一致拦截禁用用户，并把畸形 JWT subject 作为 401。"""
+    token = await _register_and_login(client, "sse_disabled@test.com")
+    flow_id = await _create_flow(client, token)
+    ex = await _insert_execution(db_session, flow_id, ExecutionStatus.success)
+
+    from app.models.user import User
+
+    user = (await db_session.execute(select(User).where(User.email == "sse_disabled@test.com"))).scalar_one()
+    user.is_active = False
+    await db_session.commit()
+
+    url = f"/api/v1/agent-flows/{flow_id}/executions/{ex.id}/stream"
+    resp = await client.get(url, headers=_auth_headers(token))
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "用户已被禁用"
+
+    malformed = create_access_token("not-a-uuid")
+    resp = await client.get(url, headers=_auth_headers(malformed))
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "无效令牌"
 
 
 # ── 惰性 reaper (P1-2) ──

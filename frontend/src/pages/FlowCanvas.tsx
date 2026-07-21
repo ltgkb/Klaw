@@ -48,7 +48,15 @@ import {
   GripVertical,
   Home,
 } from "lucide-react"
-import { flowApi, systemApi, type FlowRead, type NodeType, type ExecutionRead, type NodeState } from "@/lib/api"
+import {
+  flowApi,
+  systemApi,
+  type FlowRead,
+  type NodeType,
+  type ExecutionRead,
+  type ExecutionStreamPayload,
+  type NodeState,
+} from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { NodeToolbox } from "@/components/flow/NodeToolbox"
@@ -220,8 +228,8 @@ function FlowCanvasInner() {
   const [configWidth, setConfigWidth] = useState(() => clamp(readStoredWidth(CONFIG_WIDTH_KEY, 288), 260, 520))
 
   // 执行状态
-  const [execution, setExecution] = useState<ExecutionRead | null>(null)
-  const eventSourceRef = useRef<EventSource | null>(null)
+  const [execution, setExecution] = useState<ExecutionRead | ExecutionStreamPayload | null>(null)
+  const streamAbortRef = useRef<AbortController | null>(null)
 
   // 系统默认 LLM 模型 (新建 LLM 节点默认使用)
   const [defaultLlmModel, setDefaultLlmModel] = useState("")
@@ -265,7 +273,7 @@ function FlowCanvasInner() {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
-      eventSourceRef.current?.close()
+      streamAbortRef.current?.abort()
     }
   }, [])
 
@@ -641,58 +649,26 @@ function FlowCanvasInner() {
       const resp = await flowApi.execute(flowId, input)
       const execId = resp.data.execution_id
 
-      // SSE 连接
-      const token = localStorage.getItem("access_token")
-      eventSourceRef.current?.close()
-      const es = new EventSource(
-        `/api/v1/agent-flows/${flowId}/executions/${execId}/stream?token=${token}`,
-      )
-      eventSourceRef.current = es
-
-      es.addEventListener("progress", (ev) => {
-        try {
-          const data = JSON.parse((ev as MessageEvent).data)
-          setExecution(data)
-          // 更新节点状态
-          updateNodeStates(data.node_states || {})
-        } catch {
-          // 忽略解析错误
-        }
-      })
-
-      es.addEventListener("complete", (ev) => {
-        try {
-          const data = JSON.parse((ev as MessageEvent).data)
+      streamAbortRef.current?.abort()
+      streamAbortRef.current = flowApi.streamExecution(flowId, execId, {
+        onProgress: (data) => {
+          if (!mountedRef.current) return
           setExecution(data)
           updateNodeStates(data.node_states || {})
-        } catch {
-          // 忽略解析错误
-        }
-        es.close()
-        eventSourceRef.current = null
-        setExecuting(false)
-      })
-
-      es.addEventListener("error", (ev) => {
-        try {
-          const data = JSON.parse((ev as MessageEvent).data)
+        },
+        onComplete: (data) => {
+          if (!mountedRef.current) return
           setExecution(data)
-        } catch {
-          // 连接错误
-        }
-        es.close()
-        eventSourceRef.current = null
-        setExecuting(false)
+          updateNodeStates(data.node_states || {})
+          streamAbortRef.current = null
+          setExecuting(false)
+        },
+        onError: () => {
+          if (!mountedRef.current) return
+          streamAbortRef.current = null
+          void pollExecution(flowId, execId)
+        },
       })
-
-      // SSE 也可能因网络错误关闭
-      es.onerror = () => {
-        es.close()
-        eventSourceRef.current = null
-        setExecuting(false)
-        // 兜底: 轮询获取最终状态
-        pollExecution(flowId, execId)
-      }
     } catch {
       setExecuting(false)
     }
