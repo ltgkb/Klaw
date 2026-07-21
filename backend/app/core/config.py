@@ -3,6 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -81,6 +82,22 @@ class Settings(BaseSettings):
 
     # ── CORS ──
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
+
+    @model_validator(mode="after")
+    def validate_production_security(self):
+        """Refuse production startup with the development crypto defaults."""
+        if self.environment == "prod":
+            if self.jwt_secret_key.startswith("change-me") or len(self.jwt_secret_key) < 32:
+                raise ValueError("prod 环境必须设置至少 32 字符的 JWT_SECRET_KEY")
+            if self.encryption_key == "0" * 64:
+                raise ValueError("prod 环境必须设置随机 ENCRYPTION_KEY")
+            if len(self.encryption_key) != 64:
+                raise ValueError("ENCRYPTION_KEY 必须是 64 位 hex 字符")
+            try:
+                bytes.fromhex(self.encryption_key)
+            except ValueError as exc:
+                raise ValueError("ENCRYPTION_KEY 必须是 hex 字符") from exc
+        return self
 
     @property
     def sync_postgres_url(self) -> str:
