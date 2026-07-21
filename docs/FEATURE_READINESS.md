@@ -6,7 +6,7 @@
 
 ## 证据摘要
 
-- 后端：`uv run pytest -q` → **77 passed**；另行运行 `uv run python -m compileall -q app deepdoc common` 通过。
+- 后端：`uv run pytest -q` → **78 passed**；另行运行 `uv run python -m compileall -q app deepdoc common` 通过。
 - 前端：`npm run lint` 通过（3 个既有 Fast Refresh warning）；`npm run build` 通过（Vite 产生约 607 kB 主 JS，存在 code-splitting warning）。
 - 浏览器：Playwright 在 1440×1000 与 390×844 视口完成真实管理员登录→设置→用户停用→恢复；普通用户设置页不显示用户管理且不请求 admin-only API；页面/滚动容器无横向溢出，控制台无 error。
 - Compose：基础 `docker compose config --quiet` 通过；隔离覆盖配置也通过；后端/前端镜像均构建成功，`.dockerignore` 将最终 build context 限制在约 194 kB / 39 kB（未忽略时曾达 1.12 GB / 132 MB）；后端不再硬等待 TEI 健康，模型加载期间 API 可启动并如实降级。
@@ -20,7 +20,7 @@
 |---|---|---|---|---|---|---|
 | 注册、登录、access JWT | `/register`、`/login` | 可用 | `/auth/register`、`/auth/login` + PG | `test_auth.py`；真实 HTTP 注册/登录 | 可用 | 无；密码 bcrypt |
 | 刷新令牌 | 前端拦截器自动刷新 | 本批补全 | `/auth/refresh`，校验 refresh 类型、用户 active | `test_refresh_token`；真实 HTTP 200 | 可用 | 需后续增加 token rotation/revocation（P2） |
-| RBAC 与禁用用户 | 设置/用户管理 | 可用 | `require_roles`；当前用户每次请求检查 `is_active`；管理员状态 API 禁止自锁 | RBAC、普通用户 403、自锁 400 测试；真实 API 与浏览器停用/恢复；旧 token 401 | 可用 | 组织/团队级管理员策略仍缺失（P2） |
+| RBAC 与禁用用户 | 设置/用户管理 | 可用 | `require_roles` 每次读取 DB 角色/状态；管理员状态 API 禁止自锁 | 普通用户 403、自锁 400、角色降级后旧 token 立即 403；真实 API/浏览器停用恢复 | 可用 | 组织/团队级管理员策略仍缺失（P2） |
 | owner 隔离与密钥保护 | 各资源页面 | 可用 | 查询按 owner；AES-256-GCM API key/channel secret | KB/flow/schedule/file 隔离测试；真实 push 配置返回 `******` | 可用 | 单租户 owner 模式，不是团队/组织租户（P2） |
 | 知识库 CRUD | `/kb` | 可用 | `/knowledge-bases` + PG；页码最小 1、每页最大 100 | `test_kb.py`、分页 422、真实创建/列表 | 可用 | 无 |
 | TXT/MD/HTML/JSON/DOCX/XLSX/PPTX/EPUB 上传解析 | KB 详情上传 | 可用 | MinIO + DeepDoc 格式路由 | parser fixture 覆盖 MD/HTML/JSON/DOCX/XLSX/PPTX/EPUB/PDF；真实 MinIO→解析→ES 管线验证 TXT、HTML | 部分可用 | 仍需逐格式 MinIO→ES E2E 和大文件/损坏文件验证（P1） |
@@ -50,7 +50,7 @@
 | 前后端导航与空/加载/错误态 | 全局布局 | 部分可用 | React Router + API interceptor | build；文件页/执行页新增错误态；桌面/移动浏览器无溢出 | 部分可用 | 多页面仍有静默 catch（P1） |
 | Docker Compose 启动 | 根目录 Compose | 部分可用 | 10 服务；后端镜像启动先迁移 | config 校验；本轮隔离只启动 4 基础依赖 | 部分可用 | TEI/OCR/OpenClaw/Hermes 镜像/模型未在本机验证；固定 container_name 影响并行部署（P1） |
 | 迁移 | `make db-migrate` | 可用 | Alembic | 空 PG upgrade + current head + check | 可用 | 首次多实例迁移锁策略未加固（P2） |
-| 测试/lint/build | Makefile、GitHub Actions | 可用 | pytest/oxlint/tsc/Vite；后端/前端/Compose 三个 CI job | 77 passed；lint/build、YAML/Compose、手工 Playwright 烟测通过 | 可用 | 浏览器 E2E 尚未纳入 CI（P1） |
+| 测试/lint/build | Makefile、GitHub Actions | 可用 | pytest/oxlint/tsc/Vite；后端/前端/Compose 三个 CI job | 78 passed；lint/build、YAML/Compose、手工 Playwright 烟测通过 | 可用 | 浏览器 E2E 尚未纳入 CI（P1） |
 
 ## 本轮修复与新增能力
 

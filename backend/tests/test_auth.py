@@ -214,6 +214,41 @@ async def test_regular_user_cannot_toggle_user_active_state(client):
 
 
 @pytest.mark.asyncio
+async def test_role_change_applies_to_existing_access_token(client):
+    await client.post("/api/v1/auth/register", json={
+        "email": "role-admin@test.com", "name": "Admin", "password": "secret123",
+    })
+    target_resp = await client.post("/api/v1/auth/register", json={
+        "email": "role-target@test.com", "name": "Target", "password": "secret123",
+    })
+    admin_login = await client.post("/api/v1/auth/login", json={
+        "email": "role-admin@test.com", "password": "secret123",
+    })
+    admin_headers = {"Authorization": f"Bearer {admin_login.json()['access_token']}"}
+    target_id = target_resp.json()["id"]
+
+    promoted = await client.put(
+        f"/api/v1/users/{target_id}/role",
+        params={"role": "admin"},
+        headers=admin_headers,
+    )
+    assert promoted.status_code == 200
+    target_login = await client.post("/api/v1/auth/login", json={
+        "email": "role-target@test.com", "password": "secret123",
+    })
+    target_headers = {"Authorization": f"Bearer {target_login.json()['access_token']}"}
+    assert (await client.get("/api/v1/users", headers=target_headers)).status_code == 200
+
+    demoted = await client.put(
+        f"/api/v1/users/{target_id}/role",
+        params={"role": "user"},
+        headers=admin_headers,
+    )
+    assert demoted.status_code == 200
+    assert (await client.get("/api/v1/users", headers=target_headers)).status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_update_me_encrypts_api_key(client):
     await client.post("/api/v1/auth/register", json={
         "email": "update@test.com", "name": "Update", "password": "secret123",
