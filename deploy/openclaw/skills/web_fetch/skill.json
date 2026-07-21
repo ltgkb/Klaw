@@ -1,0 +1,27 @@
+{
+  "id": "web_fetch",
+  "name": "网页读取",
+  "description": "通过 OpenClaw 内置 web_fetch 工具获取公开网页并提取正文。",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "url": {
+        "type": "string",
+        "format": "uri",
+        "description": "要读取的 HTTP(S) URL"
+      },
+      "extractMode": {
+        "type": "string",
+        "enum": ["markdown", "text"],
+        "default": "markdown"
+      },
+      "maxChars": {
+        "type": "integer",
+        "minimum": 100,
+        "maximum": 50000,
+        "default": 10000
+      }
+    },
+    "required": ["url"]
+  }
+}

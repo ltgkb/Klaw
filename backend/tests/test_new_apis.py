@@ -76,8 +76,8 @@ async def test_local_agent_tools_discovery(client):
     assert resp.status_code == 200
     data = resp.json()
     ids = [t["id"] for t in data]
-    # deploy/openclaw/skills 下应有 web_search / send_notification
-    assert "web_search" in ids
+    # deploy/openclaw/skills 下应有真实 OpenClaw 内置工具 web_fetch / send_notification
+    assert "web_fetch" in ids
     assert "send_notification" in ids
     # deploy/hermes/skills 下应有 data_analysis
     assert "data_analysis" in ids
@@ -88,8 +88,8 @@ async def test_local_agent_tool_call_mock(client):
     """离线工具调用必须明确失败，不能把 mock 结果报告为执行成功。"""
     token = await _register_and_login(client, "toolcall@test.com")
     resp = await client.post(
-        "/api/v1/local-agent/tools/web_search/call",
-        json={"parameters": {"query": "hello"}},
+        "/api/v1/local-agent/tools/web_fetch/call",
+        json={"parameters": {"url": "https://example.com"}},
         headers=_auth_headers(token),
     )
     assert resp.status_code == 200
@@ -370,14 +370,58 @@ async def test_local_agent_tool_call_http_error_not_fake_success(client, monkeyp
 
     token = await _register_and_login(client, "toolfail@test.com")
     resp = await client.post(
-        "/api/v1/local-agent/tools/web_search/call",
-        json={"parameters": {"query": "hello"}},
+        "/api/v1/local-agent/tools/web_fetch/call",
+        json={"parameters": {"url": "https://example.com"}},
         headers=_auth_headers(token),
     )
     assert resp.status_code == 200
     data = resp.json()
     assert data["success"] is False
     assert data["error"]
+
+
+@pytest.mark.asyncio
+async def test_local_agent_tool_call_preserves_openclaw_success_envelope(client, monkeypatch):
+    """OpenClaw ok:true 的真实工具结果必须原样作为成功返回。"""
+    from app.services import local_agent_service
+
+    class _Resp:
+        status_code = 200
+        text = '{"ok":true}'
+
+        def json(self):
+            return {"ok": True, "result": {"details": {"status": 200, "title": "Example Domain"}}}
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return _Resp()
+
+    monkeypatch.setattr(local_agent_service.httpx, "AsyncClient", _FakeClient)
+
+    token = await _register_and_login(client, "toolsuccess@test.com")
+    resp = await client.post(
+        "/api/v1/local-agent/tools/web_fetch/call",
+        json={"parameters": {"url": "https://example.com"}},
+        headers=_auth_headers(token),
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "tool_id": "web_fetch",
+        "success": True,
+        "result": {"details": {"status": 200, "title": "Example Domain"}},
+        "error": None,
+        "source": "openclaw",
+    }
 
 
 @pytest.mark.asyncio

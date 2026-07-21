@@ -10,6 +10,7 @@ import {
   type ModelInfo,
   type ChatResponse,
   type ToolInfo,
+  type ToolCallResponse,
   type PushChannelRead,
   type PushChannelType,
   type EmbeddingConfig,
@@ -22,7 +23,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Loader2, Send, Cpu, Cloud, Server, KeyRound, Trash2, Wrench, Plus, Zap } from "lucide-react"
+import { Loader2, Send, Cpu, Cloud, Server, KeyRound, Trash2, Wrench, Plus, Zap, Play } from "lucide-react"
 
 type StatusMeta = { label: string; dotClass: string }
 
@@ -64,6 +65,10 @@ export function Settings() {
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [models, setModels] = useState<ModelInfo[]>([])
   const [tools, setTools] = useState<ToolInfo[]>([])
+  const [selectedToolId, setSelectedToolId] = useState("web_fetch")
+  const [toolParameters, setToolParameters] = useState('{\n  "url": "https://example.com"\n}')
+  const [toolCalling, setToolCalling] = useState(false)
+  const [toolCallResult, setToolCallResult] = useState<ToolCallResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [chatInput, setChatInput] = useState("")
   const [chatModel, setChatModel] = useState("default")
@@ -115,7 +120,14 @@ export function Settings() {
     ])
     if (providersR.status === "fulfilled") setProviders(providersR.value.data)
     if (modelsR.status === "fulfilled") setModels(modelsR.value.data)
-    if (toolsR.status === "fulfilled") setTools(toolsR.value.data)
+    if (toolsR.status === "fulfilled") {
+      setTools(toolsR.value.data)
+      setSelectedToolId((current) =>
+        toolsR.value.data.some((tool) => tool.id === current)
+          ? current
+          : toolsR.value.data[0]?.id || "",
+      )
+    }
     if (channelsR.status === "fulfilled") setChannels(channelsR.value.data)
     if (embR.status === "fulfilled") {
       setEmb(embR.value.data)
@@ -147,6 +159,34 @@ export function Settings() {
       setChatError(err instanceof Error ? err.message : "请求失败，请检查供应商状态")
     } finally {
       setChatting(false)
+    }
+  }
+
+  const handleToolCall = async () => {
+    if (!selectedToolId || toolCalling) return
+    let parameters: Record<string, unknown>
+    try {
+      const parsed: unknown = JSON.parse(toolParameters)
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("参数必须是 JSON 对象")
+      }
+      parameters = parsed as Record<string, unknown>
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "工具参数不是有效 JSON")
+      return
+    }
+
+    setToolCalling(true)
+    setToolCallResult(null)
+    try {
+      const response = await localAgentApi.callTool(selectedToolId, parameters)
+      setToolCallResult(response.data)
+      if (response.data.success) toast.success("工具调用成功")
+      else toast.error(response.data.error || "工具调用失败")
+    } catch {
+      // The shared API interceptor displays transport and authorization errors.
+    } finally {
+      setToolCalling(false)
     }
   }
 
@@ -603,6 +643,49 @@ export function Settings() {
                       <div className="mt-1 text-xs text-muted-foreground">{t.description}</div>
                     </div>
                   ))}
+                </div>
+              )}
+              {tools.length > 0 && (
+                <div className="space-y-3 border-t pt-3">
+                  <div className="grid gap-3 sm:grid-cols-[minmax(0,220px)_1fr]">
+                    <div className="space-y-2">
+                      <Label htmlFor="tool-select">工具</Label>
+                      <select
+                        id="tool-select"
+                        className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                        value={selectedToolId}
+                        onChange={(event) => {
+                          const toolId = event.target.value
+                          setSelectedToolId(toolId)
+                          setToolCallResult(null)
+                          setToolParameters(toolId === "web_fetch" ? '{\n  "url": "https://example.com"\n}' : "{}")
+                        }}
+                      >
+                        {tools.map((tool) => <option key={tool.id} value={tool.id}>{tool.name}</option>)}
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="tool-parameters">JSON 参数</Label>
+                      <textarea
+                        id="tool-parameters"
+                        className="min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs"
+                        value={toolParameters}
+                        onChange={(event) => setToolParameters(event.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <Button onClick={handleToolCall} disabled={toolCalling || !selectedToolId}>
+                    {toolCalling ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                    调用工具
+                  </Button>
+                  {toolCallResult && (
+                    <pre className={cn(
+                      "max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border p-3 text-xs",
+                      toolCallResult.success ? "border-green-200 bg-green-50" : "border-red-200 bg-red-50",
+                    )}>
+                      {JSON.stringify(toolCallResult, null, 2)}
+                    </pre>
+                  )}
                 </div>
               )}
             </CardContent>

@@ -73,6 +73,106 @@ async def test_non_streaming_prefers_openclaw_over_direct_kaiweb(monkeypatch):
     assert result == "from claw"
 
 
+@pytest.mark.asyncio
+async def test_default_chat_skips_unconfigured_openclaw(monkeypatch):
+    """Compose dev 模式禁用 chat 时，默认请求应立即进入显式 Mock，不等待网关上游。"""
+    async def unexpected_openclaw(*args, **kwargs):
+        raise AssertionError("disabled default routing must not call OpenClaw")
+
+    monkeypatch.setattr(llm_client.settings, "openclaw_chat_enabled", False)
+    monkeypatch.setattr(llm_client, "_call_openclaw", unexpected_openclaw)
+
+    result = await llm_client.chat([{"role": "user", "content": "hello"}])
+
+    assert result.startswith("[Mock LLM")
+
+
+def test_explicit_openclaw_model_still_probes_disabled_default_route(monkeypatch):
+    monkeypatch.setattr(llm_client.settings, "openclaw_chat_enabled", False)
+
+    assert llm_client._should_try_openclaw("default") is False
+    assert llm_client._should_try_openclaw("mock") is False
+    assert llm_client._should_try_openclaw("openclaw") is True
+    assert llm_client._should_try_openclaw("openclaw/main") is True
+
+
+def test_hermes_routing_requires_enablement_or_explicit_model(monkeypatch):
+    monkeypatch.setattr(llm_client.settings, "hermes_chat_enabled", False)
+
+    assert llm_client._should_try_hermes("default") is False
+    assert llm_client._should_try_hermes("hermes") is True
+    assert llm_client._should_try_hermes("hermes/hermes-agent") is True
+    assert llm_client._hermes_model("hermes/hermes-agent") == "hermes-agent"
+
+
+@pytest.mark.asyncio
+async def test_enabled_hermes_is_real_nonstream_fallback(monkeypatch):
+    calls = []
+
+    async def hermes_compatible(messages, model, base_url, api_key, provider, *args, **kwargs):
+        calls.append((model, base_url, api_key, provider))
+        return "from hermes"
+
+    monkeypatch.setattr(llm_client.settings, "openclaw_chat_enabled", False)
+    monkeypatch.setattr(llm_client.settings, "hermes_chat_enabled", True)
+    monkeypatch.setattr(llm_client.settings, "hermes_url", "http://hermes:8642")
+    monkeypatch.setattr(llm_client.settings, "hermes_api_server_key", "hermes-secret")
+    monkeypatch.setattr(llm_client, "_call_openai_compatible", hermes_compatible)
+
+    result = await llm_client.chat([{"role": "user", "content": "hello"}])
+
+    assert result == "from hermes"
+    assert calls == [("hermes-agent", "http://hermes:8642/v1", "hermes-secret", "hermes")]
+
+
+@pytest.mark.asyncio
+async def test_enabled_hermes_streams_before_cloud_fallback(monkeypatch):
+    providers = []
+
+    async def hermes_stream(messages, model, base_url, api_key, provider, *args, **kwargs):
+        providers.append(provider)
+        yield "hermes-stream"
+
+    monkeypatch.setattr(llm_client.settings, "openclaw_chat_enabled", False)
+    monkeypatch.setattr(llm_client.settings, "hermes_chat_enabled", True)
+    monkeypatch.setattr(llm_client.settings, "hermes_api_server_key", "hermes-secret")
+    monkeypatch.setattr(llm_client, "_stream_openai_compatible", hermes_stream)
+
+    chunks = [
+        chunk
+        async for chunk in llm_client.chat_stream([{"role": "user", "content": "hello"}])
+    ]
+
+    assert chunks == ["hermes-stream"]
+    assert providers == ["hermes"]
+
+
+def test_hermes_model_hidden_until_chat_is_enabled(monkeypatch):
+    base = [{"id": "default", "provider": "mock", "name": "Default"}]
+    monkeypatch.setattr(llm_client.settings, "hermes_chat_enabled", False)
+    assert llm_client._with_hermes_model(base) == base
+
+    monkeypatch.setattr(llm_client.settings, "hermes_chat_enabled", True)
+    models = llm_client._with_hermes_model(base)
+    assert models[-1]["id"] == "hermes/hermes-agent"
+    assert models[-1]["provider"] == "hermes"
+
+
+@pytest.mark.asyncio
+async def test_model_discovery_hides_unconfigured_providers(monkeypatch):
+    monkeypatch.setattr(llm_client.settings, "openclaw_chat_enabled", False)
+    monkeypatch.setattr(llm_client.settings, "hermes_chat_enabled", False)
+    monkeypatch.setattr(llm_client.settings, "environment", "dev")
+    monkeypatch.setattr(llm_client.llm_config, "get_key", lambda _provider: "")
+
+    models = await llm_client.list_models()
+
+    assert [(model["id"], model["provider"]) for model in models] == [
+        ("default", "auto"),
+        ("mock", "mock"),
+    ]
+
+
 def test_openclaw_model_contract(monkeypatch):
     monkeypatch.setattr(llm_client.settings, "openclaw_token", "secret")
 
