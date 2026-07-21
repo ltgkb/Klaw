@@ -69,6 +69,21 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value))
 }
 
+function defaultNodeHeight(type: string | undefined, config: Record<string, unknown>) {
+  if (type !== "condition") return DEFAULT_NODE_HEIGHT
+  const cases = Array.isArray(config.cases) ? config.cases.length : 0
+  return Math.max(116, 92 + cases * 24)
+}
+
+function initialNodeStyle(node: Pick<Node, "type" | "data" | "style">) {
+  const config = (node.data as { config?: Record<string, unknown> }).config || {}
+  return {
+    width: DEFAULT_NODE_WIDTH,
+    height: defaultNodeHeight(node.type, config),
+    ...node.style,
+  }
+}
+
 function readStoredWidth(key: string, fallback: number) {
   const value = Number(localStorage.getItem(key))
   return Number.isFinite(value) && value > 0 ? value : fallback
@@ -223,7 +238,7 @@ function FlowCanvasInner() {
       setFlow(resp.data)
       const dag = resp.data.dag || { nodes: [], edges: [] }
       // 转换为 XYFlow 格式 (后端节点 data 里没有 nodeState)
-      setNodes(dag.nodes.map((n) => ({ ...n, style: { width: DEFAULT_NODE_WIDTH, ...n.style } })) as Node[])
+      setNodes(dag.nodes.map((n) => ({ ...n, style: initialNodeStyle(n as Node) })) as Node[])
       setEdges(dag.edges.map((e) => ({ ...e, type: "deletable" })) as Edge[])
     } catch {
       // 错误由拦截器处理
@@ -255,14 +270,25 @@ function FlowCanvasInner() {
     const previousUserSelect = document.body.style.userSelect
     document.body.style.cursor = "col-resize"
     document.body.style.userSelect = "none"
+    let pendingFrame: number | null = null
+    let pendingClientX = startX
 
-    const handlePointerMove = (moveEvent: PointerEvent) => {
-      const width = clamp(startWidth + (moveEvent.clientX - startX) * direction, min, max)
+    const applyWidth = (clientX: number) => {
+      const width = clamp(startWidth + (clientX - startX) * direction, min, max)
       if (panel === "toolbox") setToolboxWidth(width)
       else setConfigWidth(width)
     }
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      pendingClientX = moveEvent.clientX
+      if (pendingFrame !== null) return
+      pendingFrame = requestAnimationFrame(() => {
+        pendingFrame = null
+        applyWidth(pendingClientX)
+      })
+    }
     const handlePointerUp = (upEvent: PointerEvent) => {
-      handlePointerMove(upEvent)
+      if (pendingFrame !== null) cancelAnimationFrame(pendingFrame)
+      applyWidth(upEvent.clientX)
       window.removeEventListener("pointermove", handlePointerMove)
       window.removeEventListener("pointerup", handlePointerUp)
       document.body.style.cursor = previousCursor
@@ -312,7 +338,7 @@ function FlowCanvasInner() {
       id,
       type,
       position: nodePositionAt(),
-      style: { width: DEFAULT_NODE_WIDTH },
+      style: { width: DEFAULT_NODE_WIDTH, height: defaultNodeHeight(type, config) },
       data: {
         label: NODE_LABELS[type],
         config,
@@ -376,7 +402,7 @@ function FlowCanvasInner() {
       id,
       type,
       position,
-      style: { width: DEFAULT_NODE_WIDTH },
+      style: { width: DEFAULT_NODE_WIDTH, height: defaultNodeHeight(type, config) },
       data: { label: NODE_LABELS[type], config },
     }
     setNodes((nds) => [...nds.map((node) => ({ ...node, selected: false })), { ...newNode, selected: true }])
@@ -511,11 +537,11 @@ function FlowCanvasInner() {
       if (n.type === "loop" && typeof config.body_node_id === "string") {
         config.body_node_id = idMap[config.body_node_id] || ""
       }
+      const importedNode = { ...n, data: { ...data, config } }
       return {
-        ...n,
+        ...importedNode,
         id: idMap[n.id],
-        style: { width: DEFAULT_NODE_WIDTH, ...n.style },
-        data: { ...data, config },
+        style: initialNodeStyle(importedNode),
       }
     })
     const newEdges: Edge[] = impEdges.map((edge) => {
