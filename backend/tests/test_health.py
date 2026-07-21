@@ -1,6 +1,14 @@
 """健康检查端点测试: 单点故障 → 整体 degraded。"""
 
+import logging
+
 import pytest
+
+
+def test_http_transport_loggers_do_not_log_sensitive_urls():
+    """Webhook/token 位于 URL 路径时，通用 HTTP transport 不得记录 INFO/DEBUG URL。"""
+    assert logging.getLogger("httpx").getEffectiveLevel() >= logging.WARNING
+    assert logging.getLogger("httpcore").getEffectiveLevel() >= logging.WARNING
 
 
 @pytest.mark.asyncio
