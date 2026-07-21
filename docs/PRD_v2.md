@@ -46,7 +46,7 @@ v1.1 是设计草案。v2.0 以**已落地代码**为准重新对齐：保留 v1
 - ✅ 执行结果通过自建推送服务发送至飞书/企微/Telegram（本轮新增渠道持久化配置）
 - ✅ 支持 OpenAI 作为 OpenClaw / Hermes 的 fallback
 - ✅（本轮新增）dev 环境内置 Mock LLM / 向量兜底，无 API Key 亦可完整演示
-- ✅（Kaiweb 适配）接入自建 OpenAI 兼容网关 https://ai.kaiweb.net，真实 GLM/DeepSeek 模型已可用（默认 glm-4.5-air）
+- ✅（Kaiweb 适配）OpenClaw 接入自建 OpenAI 兼容网关 https://ai.kaiweb.net，真实 GLM 模型已可用（默认 glm-4.5）
 
 ### 2.2 生产级目标（可对外交付）— ⬜ 路线图
 - ⬜ 多租户权限隔离（当前为单租户 owner 隔离）
@@ -63,22 +63,23 @@ v1.1 是设计草案。v2.0 以**已落地代码**为准重新对齐：保留 v1
 - **文档上传**：PDF/DOCX/XLSX/PPTX/TXT/MD/HTML/JSON/EPUB；单文件上传；MinIO 存储；100MB 限制。
 - **文档解析**：DeepDoc（`backend/deepdoc/`，含 parser + vision）；按类型路由；输出标准化 `{content, content_type, page}`。PDF 用 `PlainParser`（无 OCR，M5 启用 Vision）。
 - **分块**：`fixed`（token 窗口）/ `recursive` / `markdown` / `semantic`（降级为 recursive）；表格整块保留；token 计数用 tiktoken。
-- **向量化**：TEI sidecar（BGE-M3，1024 维）；本轮新增**分批 embed（每批 16）**避免 413；dev 环境无 TEI 时回退确定性哈希向量。
+- **向量化**：默认使用 OpenAI 兼容 Embedding API（要求 1024 维）；TEI sidecar（BGE-M3）作为 `local-embedding` 可选 profile 和 API 失败后的本地回退；TEI 分批 embed（每批 16）避免 413；dev 环境均不可用时回退确定性哈希向量。
 - **索引**：Elasticsearch（dense_vector + BM25，IK 分析器）；增量索引。
-- **检索**：`POST /api/v1/knowledge-bases/{id}/search`，kNN + BM25 混合；可选 Cross-Encoder（TEI reranker）重排；阈值可调；引用溯源（doc_id + page + chunk）。
+- **检索**：`POST /api/v1/knowledge-bases/{id}/search`，kNN + BM25 混合；可选 Cross-Encoder（TEI reranker）重排；8GB 默认使用多语言 `mmarco-mMiniLMv2-L12-H384-v1`，高内存环境可通过 `RERANKER_MODEL_ID` 切换 BGE reranker；阈值可调；引用溯源（doc_id + page + chunk）。
 - **Chunk 管理**：`GET /{id}/chunks`（本轮已确认实现，支持 doc_id 过滤）。
 
 ### 3.2 Agent 画布 — ✅
 - **画布引擎**：@xyflow/react；节点拖拽/连线/删除、缩放/平移/minimap、序列化为 DAG JSON。
-- **节点类型**（6 类）：`text` / `llm` / `retrieval` / `condition` / `notify` / `memory`。
+- **节点类型**（9 类）：`start` / `end` / `text` / `llm` / `retrieval` / `condition` / `loop` / `notify` / `memory`。
+- **循环节点**：数组、对象、JSON 或多行文本输入；选择一个未连线节点作为循环体，注入循环项与索引变量，顺序执行并聚合结构化结果；支持 1-100 次上限、单次失败后继续及迭代状态。
 - **执行引擎**：自研 asyncio DAG（Kahn 拓扑排序，逐节点执行，每步写 `node_states`）；后台任务 + SSE 实时状态推送（`progress`/`complete`）；暂停/恢复/取消（DB 状态轮询）；节点失败即终止。
 - **模板与复用**：CRUD 已就绪，预设模板留作路线图。
 - **MCP**：二期。
 
 ### 3.3 模型供应商 — ✅
 - **统一抽象**：`app/core/llm_client.py`，OpenAI 兼容 `chat/completions`；httpx 直调，不引 langchain/openai SDK。
-- **供应商与优先级**：**Kaiweb（自建 OpenAI 兼容网关 https://ai.kaiweb.net/v1，真实 LLM，P0 最高优先）** → OpenClaw（本地）→ OpenAI（云端 fallback）→ Anthropic → dev Mock 兜底。
-- **Kaiweb 适配**（本轮新增）：`_call_openai_compatible` / `_stream_openai_compatible` 通用方法复用于任意 OpenAI 兼容端点；`/v1/models` 拉取真实模型（glm-4.5/4.6/5.x、deepseek-v4 等）；默认模型 `glm-4.5-air`；兼容推理模型（content 为空时回退 `reasoning_content`）；`_resolve_kaiweb_model` 将 `default` 映射为配置模型。
+- **供应商与优先级**：**OpenClaw（本地 Agent 网关，默认上游 Kaiweb glm-4.5）** → Kaiweb 直连 fallback → OpenAI（云端 fallback）→ Anthropic → dev Mock 兜底。
+- **Kaiweb 适配**：OpenClaw 自定义 `openai-completions` provider 指向 `https://ai.kaiweb.net/v1`；Klaw 的 `_call_openai_compatible` / `_stream_openai_compatible` 保留为 OpenClaw 故障时的直连 fallback；兼容推理模型 content 为空时回退 `reasoning_content`。
 - **流式**：`/providers/chat/stream`（SSE）。
 - **本地集成**：OpenClaw `/v1/chat/completions`、`/v1/models`、`/health`；本轮新增 `/api/v1/local-agent/tools` 发现（扫描 `deploy/*/skills/skill.json` + OpenClaw 在线工具合并）与 `/tools/{id}/call`（OpenClaw 不可达时 dev mock）。
 
@@ -205,4 +206,4 @@ API 网关 FastAPI + JWT + RBAC + 全局异常 + 结构化 JSON 日志
 | v1.0 | 2026-07-14 | 初始版本（云端 Kimi Claw） |
 | v1.1 | 2026-07-14 | 模型层改本地 OpenClaw/Hermes；定时/存储/推送/记忆自建 |
 | v2.0 | 2026-07-15 | 按实际实现重生成；标注偏差；本轮补全 P0 接口与 UI；新增 Mock 兜底；修复 paused 枚举 |
-| v2.1 | 2026-07-16 | 接入自建 Kaiweb OpenAI 兼容网关为最高优先真实 LLM 供应商（glm-4.5-air 默认）；兼容推理模型 reasoning_content；取代 Mock 兜底为主路径 |
+| v2.1 | 2026-07-16 | OpenClaw 接入 Kaiweb OpenAI 兼容网关（glm-4.5 默认），Kaiweb 直连作为 fallback；兼容 reasoning_content |

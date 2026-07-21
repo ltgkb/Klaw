@@ -292,7 +292,7 @@ def test_schedule_flow_registers_valid_cron(monkeypatch):
     added = fake.added[0]
     assert added["id"] == "j1"
     assert added["name"] == "任务A"
-    assert added["kwargs"] == {"flow_id": str(flow_id), "input_data": {"a": 1}}
+    assert added["kwargs"] == {"flow_id": str(flow_id), "input_data": {"a": 1}, "job_id": "j1"}
     assert added["replace_existing"] is True
 
 

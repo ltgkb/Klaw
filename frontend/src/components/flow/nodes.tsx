@@ -1,15 +1,17 @@
-import { memo } from "react"
+import { memo, useLayoutEffect } from "react"
 import {
   Handle,
+  NodeResizer,
   Position,
   BaseEdge,
   EdgeLabelRenderer,
   getBezierPath,
   useReactFlow,
+  useUpdateNodeInternals,
   type NodeProps,
   type EdgeProps,
 } from "@xyflow/react"
-import { Brain, Database, GitBranch, Type, Bell, BrainCog, Play, Square, Globe } from "lucide-react"
+import { Brain, Database, GitBranch, Type, Bell, BrainCog, Play, Repeat2, Square, Globe } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { NodeType, NodeState } from "@/lib/api"
 
@@ -29,6 +31,7 @@ const NODE_META: Record<CanvasNodeType, { icon: typeof Brain; color: string; lab
   llm: { icon: Brain, color: "border-blue-400 bg-blue-50", label: "LLM 对话" },
   retrieval: { icon: Database, color: "border-purple-400 bg-purple-50", label: "知识库检索" },
   condition: { icon: GitBranch, color: "border-amber-400 bg-amber-50", label: "条件分支" },
+  loop: { icon: Repeat2, color: "border-cyan-400 bg-cyan-50", label: "循环" },
   text: { icon: Type, color: "border-gray-400 bg-gray-50", label: "文本拼接" },
   notify: { icon: Bell, color: "border-pink-400 bg-pink-50", label: "消息推送" },
   memory: { icon: BrainCog, color: "border-teal-400 bg-teal-50", label: "记忆读写" },
@@ -64,16 +67,33 @@ function BaseNode({ id, type, data, selected }: NodeProps) {
   const isStart = t === "start"
   const isEnd = t === "end"
   const isCondition = t === "condition"
+  const conditionCases = (nodeData.config?.cases as { id?: string; name?: string }[] | undefined) || []
+  const updateNodeInternals = useUpdateNodeInternals()
+  const handleSignature = conditionCases.map((item) => item.id).join("|")
+
+  useLayoutEffect(() => {
+    const frame = requestAnimationFrame(() => updateNodeInternals(id))
+    return () => cancelAnimationFrame(frame)
+  }, [handleSignature, id, updateNodeInternals])
 
   return (
     <div
       className={cn(
-        "min-w-[180px] max-w-[240px] rounded-lg border-2 px-3 py-2 shadow-sm transition-shadow",
+        "relative h-full min-h-[84px] w-full min-w-[180px] rounded-lg border-2 px-3 py-2 shadow-sm transition-shadow",
         meta.color,
         stateClass,
         selected && "ring-2 ring-primary",
       )}
     >
+      <NodeResizer
+        isVisible={selected}
+        minWidth={180}
+        minHeight={isCondition ? Math.max(116, 92 + conditionCases.length * 24) : 84}
+        maxWidth={480}
+        maxHeight={420}
+        color="#2563eb"
+      />
+
       {/* 输入 Handle (开始节点无) */}
       {!isStart && (
         <Handle
@@ -126,9 +146,9 @@ function BaseNode({ id, type, data, selected }: NodeProps) {
       )}
 
       {/* 条件分支: 多个 source handle (每个 case 一个) + 默认 */}
-      {isCondition && (nodeData.config?.cases as { id?: string; name?: string }[] | undefined)?.length ? (
+      {isCondition && conditionCases.length ? (
         <div className="mt-2 space-y-1">
-          {((nodeData.config?.cases as { id: string; name: string }[]) || []).map((c, i) => (
+          {conditionCases.map((c, i) => (
             <div
               key={c.id || i}
               className="relative flex items-center justify-end gap-1 rounded bg-white/70 px-2 py-0.5 text-[11px] text-gray-600"
@@ -203,6 +223,10 @@ function NodeSummary({ type, config }: { type: CanvasNodeType; config: Record<st
     const cases = (config.cases as unknown[]) || []
     return <p className="mt-0.5 text-xs text-gray-400">{cases.length} 个分支</p>
   }
+  if (type === "loop") {
+    const maxIterations = (config.max_iterations as number) || 20
+    return <p className="mt-0.5 text-xs text-gray-400">最多 {maxIterations} 次</p>
+  }
   if (type === "notify") {
     const channels = (config.channels as unknown[]) || []
     return <p className="mt-0.5 text-xs text-gray-400">{channels.length} 渠道</p>
@@ -239,6 +263,7 @@ export const EndNode = memo(BaseNode)
 export const LLMNode = memo(BaseNode)
 export const RetrievalNode = memo(BaseNode)
 export const ConditionNode = memo(BaseNode)
+export const LoopNode = memo(BaseNode)
 export const TextNode = memo(BaseNode)
 export const NotifyNode = memo(BaseNode)
 export const MemoryNode = memo(BaseNode)
@@ -250,6 +275,7 @@ export const nodeTypes = {
   llm: LLMNode,
   retrieval: RetrievalNode,
   condition: ConditionNode,
+  loop: LoopNode,
   text: TextNode,
   notify: NotifyNode,
   memory: MemoryNode,

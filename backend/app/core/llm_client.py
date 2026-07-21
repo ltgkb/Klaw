@@ -1,6 +1,6 @@
 """LLM 统一客户端。
 
-对齐 PRD 第 7 节, 实际降级链: Kaiweb (自建网关) → OpenClaw (本地) → OpenAI → Anthropic → dev mock 兜底。
+对齐 PRD 第 7 节, 实际降级链: OpenClaw (本地 agent 网关, 优先) → Kaiweb 直连 (自建网关兜底) → OpenAI → Anthropic → dev mock 兜底。
 通过 httpx 直调 HTTP API, 不引入 langchain/openai SDK。
 供应商 API Key 经 llm_config 做 DB 热更新: 先读内存缓存, 缓存为空回落 settings (.env)。
 """
@@ -44,8 +44,8 @@ async def chat(
     """调用 LLM 服务, 返回文本回复。
 
     优先级:
-      1. Kaiweb (自建 OpenAI 兼容网关, settings.kaiweb_base_url)
-      2. OpenClaw (本地, settings.openclaw_url) — 数据不出域
+      1. OpenClaw (本地 agent 网关, settings.openclaw_url) — agent 上下文/工具/供应商路由由 OpenClaw 托管, 数据不出域
+      2. Kaiweb 直连 (自建 OpenAI 兼容网关, settings.kaiweb_base_url) — OpenClaw 不可用时兜底
       3. OpenAI (用户 API Key 或全局配置)
       4. Anthropic (全局配置)
       5. dev mock 兜底 (仅 environment=dev)
@@ -64,7 +64,19 @@ async def chat(
     Returns:
         LLM 回复文本
     """
-    # 1. 尝试 Kaiweb (自建 OpenAI 兼容网关, 真实 LLM 优先)
+    # 1. OpenClaw owns agent context, tools, and provider routing.
+    try:
+        result = await _retry_once(
+            lambda: _call_openclaw(messages, model, temperature, max_tokens, timeout),
+            "OpenClaw",
+        )
+        if result:
+            logger.info("LLM 调用成功: OpenClaw (model=%s)", model)
+            return result
+    except Exception as e:
+        logger.warning("OpenClaw 调用失败, 尝试 fallback: %s", e)
+
+    # 2. Kaiweb 直连兜底 (Key 经 llm_config 热更新, 缓存为空回落 settings)
     kaiweb_key = llm_config.get_key("kaiweb")
     if kaiweb_key:
         try:
@@ -76,22 +88,10 @@ async def chat(
                 "Kaiweb",
             )
             if result:
-                logger.info("LLM 调用成功: Kaiweb (model=%s)", model)
+                logger.info("LLM 调用成功: Kaiweb fallback (model=%s)", model)
                 return result
         except Exception as e:
             logger.warning("Kaiweb 调用失败, 尝试 fallback: %s", e)
-
-    # 2. 尝试 OpenClaw (本地优先)
-    try:
-        result = await _retry_once(
-            lambda: _call_openclaw(messages, model, temperature, max_tokens, timeout),
-            "OpenClaw",
-        )
-        if result:
-            logger.info("LLM 调用成功: OpenClaw (model=%s)", model)
-            return result
-    except Exception as e:
-        logger.warning("OpenClaw 调用失败, 尝试 fallback: %s", e)
 
     # 3. 尝试 OpenAI
     openai_key = _get_openai_key(user)
@@ -166,20 +166,15 @@ def _get_openai_key(user) -> str:
 async def _call_openclaw(
     messages: list[dict], model: str, temperature: float, max_tokens: int, timeout: float
 ) -> str:
-    """调用 OpenClaw HTTP API。
-
-    OpenClaw gateway 支持 OpenAI 兼容的 /v1/chat/completions 端点 (需 auth token)。
-    """
-    headers = {"Content-Type": "application/json"}
-    if settings.openclaw_token:
-        headers["Authorization"] = f"Bearer {settings.openclaw_token}"
+    """调用 OpenClaw 的 OpenAI 兼容 Chat Completions API。"""
+    target, headers = _openclaw_request(model)
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
             f"{settings.openclaw_url}/v1/chat/completions",
             headers=headers,
             json={
-                "model": model,
+                "model": target,
                 "messages": messages,
                 "temperature": temperature,
                 "max_tokens": max_tokens,
@@ -187,7 +182,27 @@ async def _call_openclaw(
         )
         resp.raise_for_status()
         data = resp.json()
-        return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        choices = data.get("choices") if isinstance(data, dict) else None
+        if not isinstance(choices, list) or not choices:
+            raise RuntimeError("OpenClaw 返回无效的 Chat Completions 响应")
+        content = choices[0].get("message", {}).get("content", "")
+        return content if isinstance(content, str) else ""
+
+
+def _openclaw_request(model: str) -> tuple[str, dict[str, str]]:
+    """Map platform model names to OpenClaw's agent-first model contract."""
+    headers = {"Content-Type": "application/json"}
+    if settings.openclaw_token:
+        headers["Authorization"] = f"Bearer {settings.openclaw_token}"
+
+    if model in ("", "default", "openclaw", "hermes", "kaiweb", "mock"):
+        return "openclaw/default", headers
+    if model.startswith(("openclaw/", "openclaw:", "agent:")):
+        return model, headers
+
+    # The OpenClaw `model` field selects an agent. Provider models are overrides.
+    headers["x-openclaw-model"] = model
+    return "openclaw/default", headers
 
 
 async def _call_openai(
@@ -286,14 +301,20 @@ async def _call_anthropic(
 
 
 async def health_check() -> bool:
-    """OpenClaw 连通性检查 (含 auth token)。"""
+    """检查 OpenClaw Chat Completions 能力，而不只检查进程存活。"""
     try:
         headers = {}
         if settings.openclaw_token:
             headers["Authorization"] = f"Bearer {settings.openclaw_token}"
-        async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.get(f"{settings.openclaw_url}/health", headers=headers)
-            return resp.status_code < 500
+        async with httpx.AsyncClient(timeout=8) as client:
+            resp = await client.get(f"{settings.openclaw_url}/v1/models", headers=headers)
+            if resp.status_code != 200:
+                return False
+            data = resp.json()
+            models = data.get("data") if isinstance(data, dict) else None
+            return isinstance(models, list) and any(
+                isinstance(item, dict) and item.get("id") for item in models
+            )
     except Exception:
         return False
 
@@ -304,12 +325,16 @@ async def kaiweb_health_check() -> bool:
     if not api_key:
         return False
     try:
-        async with httpx.AsyncClient(timeout=8) as client:
+        timeout = httpx.Timeout(20.0, connect=8.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.get(
                 f"{settings.kaiweb_base_url.rstrip('/')}/models",
                 headers={"Authorization": f"Bearer {api_key}"},
             )
-            return resp.status_code < 400
+            if resp.status_code >= 400:
+                return False
+            data = resp.json()
+            return isinstance(data, dict) and isinstance(data.get("data"), list)
     except Exception:
         return False
 
@@ -324,11 +349,26 @@ async def chat_stream(
 ) -> AsyncGenerator[str, None]:
     """流式调用 LLM, yield 文本增量。
 
-    优先级: Kaiweb → OpenClaw → OpenAI → 非流式 chat() 一次性 yield。
+    优先级: OpenClaw → Kaiweb 直连 → OpenAI → 非流式 chat() 一次性 yield。
     已开始输出 (yield) 后失败不再降级 (避免重复内容), 异常向上抛出;
     流式 0 字节视为失败, 继续降级到下一供应商。
     """
-    # 1. 尝试 Kaiweb 流式 (真实 LLM 优先)
+    # 1. OpenClaw owns the primary streaming path.
+    started = False
+    try:
+        async for chunk in _stream_openclaw(messages, model, temperature, max_tokens, timeout):
+            started = True
+            yield chunk
+        if started:
+            return
+        logger.warning("OpenClaw 流式返回 0 字节, 视为失败继续降级")
+    except Exception as e:
+        if started:
+            logger.error("OpenClaw 流式中途失败, 已输出部分内容, 不再降级: %s", e)
+            raise
+        logger.warning("OpenClaw 流式失败, 尝试 fallback: %s", e)
+
+    # 2. Kaiweb 直连流式兜底 (Key 经 llm_config 热更新, 缓存为空回落 settings)
     kaiweb_key = llm_config.get_key("kaiweb")
     if kaiweb_key:
         started = False
@@ -347,21 +387,6 @@ async def chat_stream(
                 logger.error("Kaiweb 流式中途失败, 已输出部分内容, 不再降级: %s", e)
                 raise
             logger.warning("Kaiweb 流式失败, 尝试 fallback: %s", e)
-
-    # 2. 尝试 OpenClaw 流式
-    started = False
-    try:
-        async for chunk in _stream_openclaw(messages, model, temperature, max_tokens, timeout):
-            started = True
-            yield chunk
-        if started:
-            return
-        logger.warning("OpenClaw 流式返回 0 字节, 视为失败继续降级")
-    except Exception as e:
-        if started:
-            logger.error("OpenClaw 流式中途失败, 已输出部分内容, 不再降级: %s", e)
-            raise
-        logger.warning("OpenClaw 流式失败, 尝试 fallback: %s", e)
 
     # 3. 尝试 OpenAI 流式
     openai_key = _get_openai_key(user)
@@ -388,10 +413,8 @@ async def chat_stream(
 async def _stream_openclaw(
     messages: list[dict], model: str, temperature: float, max_tokens: int, timeout: float
 ) -> AsyncGenerator[str, None]:
-    """OpenClaw SSE 流式调用。兼容推理模型: delta.content 为空时取 reasoning_content。"""
-    headers = {"Content-Type": "application/json"}
-    if settings.openclaw_token:
-        headers["Authorization"] = f"Bearer {settings.openclaw_token}"
+    """OpenClaw SSE 流式调用 (agent-first 模型契约)。兼容推理模型: delta.content 为空时取 reasoning_content。"""
+    target, headers = _openclaw_request(model)
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         async with client.stream(
@@ -399,7 +422,7 @@ async def _stream_openclaw(
             f"{settings.openclaw_url}/v1/chat/completions",
             headers=headers,
             json={
-                "model": model,
+                "model": target,
                 "messages": messages,
                 "temperature": temperature,
                 "max_tokens": max_tokens,
@@ -408,9 +431,9 @@ async def _stream_openclaw(
         ) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
-                if not line.startswith("data: "):
+                if not line.startswith("data:"):
                     continue
-                data_str = line[6:]
+                data_str = line[5:].lstrip()
                 if data_str.strip() == "[DONE]":
                     break
                 try:
@@ -466,9 +489,9 @@ async def _stream_openai_compatible(
         ) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
-                if not line.startswith("data: "):
+                if not line.startswith("data:"):
                     continue
-                data_str = line[6:]
+                data_str = line[5:].lstrip()
                 if data_str.strip() == "[DONE]":
                     break
                 try:
@@ -511,10 +534,15 @@ async def list_models() -> list[dict]:
             headers["Authorization"] = f"Bearer {settings.openclaw_token}"
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(f"{settings.openclaw_url}/v1/models", headers=headers)
-            if resp.status_code < 400:
+            if resp.status_code == 200:
                 data = resp.json()
                 models = data.get("data", [])
-                return [{"id": m.get("id", ""), "provider": "openclaw", "name": m.get("id", "")} for m in models]
+                openclaw_models = [
+                    {"id": m.get("id", ""), "provider": "openclaw", "name": m.get("id", "")}
+                    for m in models if isinstance(m, dict) and m.get("id")
+                ]
+                if openclaw_models:
+                    return openclaw_models
     except Exception:
         pass
 

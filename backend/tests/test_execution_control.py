@@ -113,7 +113,7 @@ async def test_resume_not_paused_400(client, db_session):
 
 @pytest.mark.asyncio
 async def test_sse_stream_wrong_flow_forbidden(client, db_session):
-    """用己方 flow_id + 他人 execution_id 请求 SSE 返回 403; 不存在的 execution 返回 404。"""
+    """用己方 flow_id + 他人 execution_id 请求 SSE 返回 404 (不泄漏存在性); 不存在的 execution 同样 404。"""
     token_a = await _register_and_login(client, "sse_a@test.com")
     flow_a = await _create_flow(client, token_a, "FlowA")
     ex_a = await _insert_execution(
@@ -124,10 +124,10 @@ async def test_sse_stream_wrong_flow_forbidden(client, db_session):
     token_b = await _register_and_login(client, "sse_b@test.com")
     flow_b = await _create_flow(client, token_b, "FlowB")
 
-    # B 用自己的 flow + A 的 execution → 403
+    # B 用自己的 flow + A 的 execution → 404 (deploy 语义: 跨 flow/越权统一 404, 防信息泄漏)
     resp = await client.get(
         f"/api/v1/agent-flows/{flow_b}/executions/{ex_a.id}/stream?token={token_b}")
-    assert resp.status_code == 403
+    assert resp.status_code == 404
 
     # B 用自己的 flow + 不存在的 execution → 404
     resp = await client.get(

@@ -131,6 +131,6 @@ async def health_check() -> bool:
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.get(f"{settings.tei_url}/health")
-            return resp.status_code < 500
+            return resp.status_code == 200
     except Exception:
         return False

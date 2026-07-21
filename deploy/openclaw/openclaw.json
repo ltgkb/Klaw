@@ -1,0 +1,53 @@
+{
+  "gateway": {
+    "mode": "local",
+    "http": {
+      "endpoints": {
+        "chatCompletions": {
+          "enabled": true
+        }
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "workspace": "/home/node/.openclaw/workspace",
+      "model": {
+        "primary": "kaiweb/glm-4.5"
+      },
+      "models": {
+        "kaiweb/glm-4.5": {
+          "alias": "Kaiweb GLM-4.5"
+        }
+      }
+    }
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "kaiweb": {
+        "baseUrl": "https://ai.kaiweb.net/v1",
+        "apiKey": {
+          "source": "env",
+          "provider": "default",
+          "id": "KAIWEB_API_KEY"
+        },
+        "api": "openai-completions",
+        "authHeader": true,
+        "models": [
+          {
+            "id": "glm-4.5",
+            "name": "GLM-4.5",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "compat": {
+              "requiresStringContent": true
+            }
+          }
+        ]
+      }
+    }
+  }
+}

@@ -30,3 +30,6 @@ Thumbs.db
 # Vite
 *.local
 HANDOFF.md
+
+# 本地运维交接（不入库）
+AUTO_ITERATION_HANDOFF.local.md

@@ -19,24 +19,38 @@ import hashlib
 import logging
 import os
 import shutil
+import tempfile
 import threading
+from pathlib import Path
 import tiktoken
 
 from common.file_utils import get_project_base_directory
 
 
 def _ensure_tiktoken_cache() -> str:
-    cache_dir = get_project_base_directory()
-    os.environ["TIKTOKEN_CACHE_DIR"] = cache_dir
+    configured_cache = os.environ.get("TIKTOKEN_CACHE_DIR")
+    if configured_cache:
+        cache_dir = Path(configured_cache).expanduser()
+    else:
+        cache_root = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+        cache_dir = cache_root / "claw" / "tiktoken"
+
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        cache_dir = Path(tempfile.gettempdir()) / "claw-tiktoken-cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+    os.environ["TIKTOKEN_CACHE_DIR"] = str(cache_dir)
 
     bundled_encoding_path = get_project_base_directory("ragflow_deps", "cl100k_base.tiktoken")
     encoding_url = "https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken"
-    cached_encoding_path = os.path.join(cache_dir, hashlib.sha1(encoding_url.encode()).hexdigest())
+    cached_encoding_path = cache_dir / hashlib.sha1(encoding_url.encode()).hexdigest()
 
-    if os.path.exists(bundled_encoding_path) and not os.path.exists(cached_encoding_path):
+    if os.path.exists(bundled_encoding_path) and not cached_encoding_path.exists():
         shutil.copyfile(bundled_encoding_path, cached_encoding_path)
 
-    return cache_dir
+    return str(cache_dir)
 
 
 tiktoken_cache_dir = _ensure_tiktoken_cache()

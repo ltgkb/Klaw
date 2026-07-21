@@ -3,7 +3,11 @@
 DB 层用 SQLite 内存库。LLM/检索外部服务通过 monkeypatch mock。
 """
 
+import asyncio
+import uuid
+
 import pytest
+from sqlalchemy import select
 
 
 # ── 辅助函数 ──
@@ -242,6 +246,136 @@ async def test_execute_flow_condition(client, mock_llm, db_engine, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_execute_flow_loop_runs_detached_body_for_each_item(
+    client, mock_llm, db_engine, monkeypatch
+):
+    """循环节点逐项执行循环体、聚合结果，并遵守最大次数。"""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    import app.core.database as db_module
+
+    test_factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    monkeypatch.setattr(db_module, "async_session_factory", test_factory)
+
+    token = await _register_and_login(client, "loop@test.com")
+    dag = {
+        "nodes": [
+            {
+                "id": "loop",
+                "type": "loop",
+                "position": {"x": 100, "y": 0},
+                "data": {
+                    "label": "批量处理",
+                    "config": {
+                        "items_template": "{items}",
+                        "body_node_id": "body",
+                        "item_variable": "item",
+                        "index_variable": "index",
+                        "max_iterations": 2,
+                        "continue_on_error": False,
+                    },
+                },
+            },
+            {
+                "id": "body",
+                "type": "text",
+                "position": {"x": 100, "y": 180},
+                "data": {"label": "格式化", "config": {"template": "{index}:{item.name}"}},
+            },
+            {
+                "id": "end",
+                "type": "end",
+                "position": {"x": 400, "y": 0},
+                "data": {"label": "结束", "config": {"output": "{批量处理}"}},
+            },
+        ],
+        "edges": [{"id": "e1", "source": "loop", "target": "end"}],
+    }
+    flow = (
+        await client.post(
+            "/api/v1/agent-flows",
+            json={"name": "Loop Flow", "dag": dag},
+            headers=_auth_headers(token),
+        )
+    ).json()
+
+    response = await client.post(
+        f"/api/v1/agent-flows/{flow['id']}/execute",
+        json={"input": {"items": [{"name": "alpha"}, {"name": "beta"}, {"name": "gamma"}]}},
+        headers=_auth_headers(token),
+    )
+    execution_id = response.json()["execution_id"]
+    detail = (
+        await client.get(
+            f"/api/v1/agent-flows/{flow['id']}/executions/{execution_id}",
+            headers=_auth_headers(token),
+        )
+    ).json()
+
+    assert detail["status"] == "success"
+    assert detail["output"]["loop"] == ["0:alpha", "1:beta"]
+    assert detail["output"]["end"] == '["0:alpha", "1:beta"]'
+    assert detail["node_states"]["body"]["status"] == "success"
+    assert detail["node_states"]["body"]["iterations"] == 2
+    assert detail["node_states"]["loop"]["output"] == '["0:alpha", "1:beta"]'
+
+
+@pytest.mark.asyncio
+async def test_execute_flow_loop_rejects_connected_body(client, db_engine, monkeypatch):
+    """循环体必须由循环节点独占，避免在主 DAG 中被重复执行。"""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    import app.core.database as db_module
+
+    test_factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    monkeypatch.setattr(db_module, "async_session_factory", test_factory)
+
+    token = await _register_and_login(client, "loop-invalid@test.com")
+    dag = {
+        "nodes": [
+            {
+                "id": "loop",
+                "type": "loop",
+                "position": {"x": 0, "y": 0},
+                "data": {
+                    "label": "循环",
+                    "config": {"items_template": "[1]", "body_node_id": "body"},
+                },
+            },
+            {
+                "id": "body",
+                "type": "text",
+                "position": {"x": 200, "y": 0},
+                "data": {"label": "循环体", "config": {"template": "{item}"}},
+            },
+        ],
+        "edges": [{"id": "e1", "source": "loop", "target": "body"}],
+    }
+    flow = (
+        await client.post(
+            "/api/v1/agent-flows",
+            json={"name": "Invalid Loop", "dag": dag},
+            headers=_auth_headers(token),
+        )
+    ).json()
+    response = await client.post(
+        f"/api/v1/agent-flows/{flow['id']}/execute",
+        json={"input": {}},
+        headers=_auth_headers(token),
+    )
+    execution_id = response.json()["execution_id"]
+    detail = (
+        await client.get(
+            f"/api/v1/agent-flows/{flow['id']}/executions/{execution_id}",
+            headers=_auth_headers(token),
+        )
+    ).json()
+
+    assert detail["status"] == "failed"
+    assert "必须保持未连线" in detail["error_message"]
+
+
+@pytest.mark.asyncio
 async def test_list_executions(client, mock_llm, db_engine, monkeypatch):
     """测试执行历史列表。"""
     from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -293,3 +427,105 @@ async def test_execute_empty_flow(client, db_engine, monkeypatch):
     )
     detail = detail_resp.json()
     assert detail["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_execution_controls_reject_mismatched_flow(client, db_session):
+    """A user cannot control an execution by pairing it with another owned flow."""
+    token_a = await _register_and_login(client, "control-a@test.com")
+    token_b = await _register_and_login(client, "control-b@test.com")
+
+    flow_a = (await client.post(
+        "/api/v1/agent-flows",
+        json={"name": "Flow A"},
+        headers=_auth_headers(token_a),
+    )).json()
+    flow_b = (await client.post(
+        "/api/v1/agent-flows",
+        json={"name": "Flow B"},
+        headers=_auth_headers(token_b),
+    )).json()
+
+    from app.models.execution import Execution, ExecutionStatus
+
+    execution = Execution(
+        flow_id=uuid.UUID(flow_a["id"]),
+        status=ExecutionStatus.running,
+        input={},
+        node_states={},
+    )
+    db_session.add(execution)
+    await db_session.commit()
+    await db_session.refresh(execution)
+
+    for action in ("pause", "resume", "cancel"):
+        response = await client.post(
+            f"/api/v1/agent-flows/{flow_b['id']}/executions/{execution.id}/{action}",
+            headers=_auth_headers(token_b),
+        )
+        assert response.status_code == 404
+
+    stream_response = await client.get(
+        f"/api/v1/agent-flows/{flow_b['id']}/executions/{execution.id}/stream",
+        params={"token": token_b},
+    )
+    assert stream_response.status_code == 404
+
+    await db_session.refresh(execution)
+    assert execution.status == ExecutionStatus.running
+
+
+@pytest.mark.asyncio
+async def test_cancelled_execution_is_not_overwritten(
+    client, db_engine, db_session, monkeypatch
+):
+    """Cancellation during a long node remains terminal after the node returns."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    import app.core.database as db_module
+    from app.models.execution import Execution, ExecutionStatus
+    from app.services import agent_flow_service, execution_service
+
+    test_factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    monkeypatch.setattr(db_module, "async_session_factory", test_factory)
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_chat(*args, **kwargs):
+        started.set()
+        await release.wait()
+        return "late result"
+
+    monkeypatch.setattr(execution_service, "llm_chat", slow_chat)
+
+    token = await _register_and_login(client, "cancel@test.com")
+    dag = {
+        "nodes": [
+            {"id": "llm", "type": "llm", "position": {"x": 0, "y": 0},
+             "data": {"label": "LLM", "config": {"user_template": "hello"}}},
+            {"id": "after", "type": "text", "position": {"x": 200, "y": 0},
+             "data": {"label": "After", "config": {"template": "must not run"}}},
+        ],
+        "edges": [{"id": "e1", "source": "llm", "target": "after"}],
+    }
+    flow = (await client.post(
+        "/api/v1/agent-flows",
+        json={"name": "Cancel Flow", "dag": dag},
+        headers=_auth_headers(token),
+    )).json()
+    flow_id = uuid.UUID(flow["id"])
+    execution = await agent_flow_service.create_execution(db_session, flow_id, {})
+
+    task = asyncio.create_task(execution_service.run_flow(execution.id, flow_id))
+    await asyncio.wait_for(started.wait(), timeout=2)
+    assert await execution_service.cancel_execution(db_session, execution.id)
+    release.set()
+    await asyncio.wait_for(task, timeout=2)
+
+    result = await db_session.execute(select(Execution).where(Execution.id == execution.id))
+    final = result.scalar_one()
+    await db_session.refresh(final)
+    assert final.status == ExecutionStatus.cancelled
+    assert final.node_states["llm"]["status"] == "cancelled"
+    assert "after" not in final.node_states

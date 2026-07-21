@@ -105,7 +105,7 @@ async def parse_and_index(doc_id: uuid.UUID, kb_id: uuid.UUID) -> None:
                 return
 
             # ── 4. 分块 (基于 DeepDoc 已有的块 + 知识库 chunk_strategy) ──
-            chunks_data = _create_chunks(blocks, kb)
+            chunks_data = await asyncio.to_thread(_create_chunks, blocks, kb)
 
             # ── 5. TEI 批量向量化 ──
             texts = [c["content"] for c in chunks_data]
@@ -283,7 +283,7 @@ async def delete_document(db: AsyncSession, doc: Document) -> None:
 
     # 2. 删除 MinIO 文件
     try:
-        delete_file(doc.file_path)
+        await asyncio.to_thread(delete_file, doc.file_path)
     except Exception as e:
         logger.warning("删除 MinIO 文件失败 (doc=%s): %s", doc.id, e)
 

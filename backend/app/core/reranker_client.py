@@ -1,6 +1,6 @@
 """Cross-Encoder 重排序客户端。
 
-通过 TEI (Text Embeddings Inference) sidecar 加载 BAAI/bge-reranker-v2-m3,
+通过 TEI (Text Embeddings Inference) sidecar 加载 BAAI BGE reranker,
 调用 /rerank HTTP API 对检索结果进行二次排序, 提升相关性精度。
 
 TEI Rerank API:
@@ -65,6 +65,6 @@ async def health_check() -> bool:
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.get(f"{settings.reranker_url}/health")
-            return resp.status_code < 500
+            return resp.status_code == 200
     except Exception:
         return False

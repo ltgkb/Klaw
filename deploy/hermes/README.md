@@ -18,11 +18,16 @@ Hermes 是智能体框架，支持自定义 Skill 开发，本地部署。
 在 `.env` 中设置：
 ```
 HERMES_IMAGE=nousresearch/hermes-agent:latest
-HERMES_LLM_BASE_URL=http://your-llm-endpoint:8000
+HERMES_API_SERVER_KEY=replace-with-a-random-secret-at-least-16-characters
 ```
+
+Compose 会启用 Hermes API Server，在容器内监听 8642，并映射到宿主机 8081。
+Hermes 的上游模型和消息渠道仍需通过其配置向导或对应环境变量配置。
 
 ## 验证
 
 ```bash
 curl http://localhost:8081/health
+curl http://localhost:8081/v1/models \
+  -H "Authorization: Bearer $HERMES_API_SERVER_KEY"
 ```

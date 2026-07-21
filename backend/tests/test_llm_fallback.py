@@ -33,30 +33,30 @@ def _http_error(status_code: int) -> httpx.HTTPStatusError:
 
 @pytest.mark.asyncio
 async def test_fallback_order(monkeypatch):
-    """Kaiweb 空结果 → OpenClaw 异常 → OpenAI 成功, 按顺序降级。"""
+    """OpenClaw 异常 → Kaiweb 空结果 → OpenAI 成功, 按顺序降级 (OpenClaw 优先)。"""
     calls = []
-
-    async def fake_kaiweb(messages, model, base_url, api_key, provider, *a, **k):
-        calls.append("kaiweb")
-        return ""  # 空结果视为失败
 
     async def fake_openclaw(*a, **k):
         calls.append("openclaw")
         raise RuntimeError("openclaw down")
 
+    async def fake_kaiweb(messages, model, base_url, api_key, provider, *a, **k):
+        calls.append("kaiweb")
+        return ""  # 空结果视为失败
+
     async def fake_openai(messages, model, api_key, *a, **k):
         calls.append("openai")
         return "openai-ok"
 
-    monkeypatch.setattr(llm_client, "_call_openai_compatible", fake_kaiweb)
     monkeypatch.setattr(llm_client, "_call_openclaw", fake_openclaw)
+    monkeypatch.setattr(llm_client, "_call_openai_compatible", fake_kaiweb)
     monkeypatch.setattr(llm_client, "_call_openai", fake_openai)
     monkeypatch.setattr(settings, "kaiweb_api_key", "kw-key")
     monkeypatch.setattr(settings, "openai_api_key", "oa-key")
 
     result = await llm_client.chat(MESSAGES)
     assert result == "openai-ok"
-    assert calls == ["kaiweb", "openclaw", "openai"]
+    assert calls == ["openclaw", "kaiweb", "openai"]
 
 
 # ── 5xx / 连接错误重试 ──
@@ -93,14 +93,19 @@ async def test_no_retry_on_4xx(monkeypatch):
         raise _http_error(401)
 
     async def fake_openclaw(*a, **k):
-        return "openclaw-ok"
+        raise RuntimeError("openclaw down")
+
+    async def fake_openai(messages, model, api_key, *a, **k):
+        return "openai-ok"
 
     monkeypatch.setattr(llm_client, "_call_openai_compatible", unauthorized)
     monkeypatch.setattr(llm_client, "_call_openclaw", fake_openclaw)
+    monkeypatch.setattr(llm_client, "_call_openai", fake_openai)
     monkeypatch.setattr(settings, "kaiweb_api_key", "kw-key")
+    monkeypatch.setattr(settings, "openai_api_key", "oa-key")
 
     result = await llm_client.chat(MESSAGES)
-    assert result == "openclaw-ok"
+    assert result == "openai-ok"
     assert attempts == 1
 
 
@@ -115,14 +120,19 @@ async def test_retry_once_on_connect_error(monkeypatch):
         raise httpx.ConnectError("connection refused")
 
     async def fake_openclaw(*a, **k):
-        return "openclaw-ok"
+        raise RuntimeError("openclaw down")
+
+    async def fake_openai(messages, model, api_key, *a, **k):
+        return "openai-ok"
 
     monkeypatch.setattr(llm_client, "_call_openai_compatible", unreachable)
     monkeypatch.setattr(llm_client, "_call_openclaw", fake_openclaw)
+    monkeypatch.setattr(llm_client, "_call_openai", fake_openai)
     monkeypatch.setattr(settings, "kaiweb_api_key", "kw-key")
+    monkeypatch.setattr(settings, "openai_api_key", "oa-key")
 
     result = await llm_client.chat(MESSAGES)
-    assert result == "openclaw-ok"
+    assert result == "openai-ok"
     assert attempts == 2
 
 
@@ -164,18 +174,18 @@ async def test_stream_zero_byte_falls_back(monkeypatch):
 @pytest.mark.asyncio
 async def test_stream_no_fallback_after_started(monkeypatch):
     """已 yield 内容后流式失败不再降级 (避免重复内容), 异常向上抛出。"""
-    called = {"openclaw": False}
+    called = {"kaiweb": False}
 
-    async def kaiweb_stream(*a, **k):
+    async def openclaw_stream(*a, **k):
         yield "partial"
         raise RuntimeError("mid-stream boom")
 
-    async def openclaw_stream(*a, **k):
-        called["openclaw"] = True
+    async def kaiweb_stream(*a, **k):
+        called["kaiweb"] = True
         yield "x"
 
-    monkeypatch.setattr(llm_client, "_stream_openai_compatible", kaiweb_stream)
     monkeypatch.setattr(llm_client, "_stream_openclaw", openclaw_stream)
+    monkeypatch.setattr(llm_client, "_stream_openai_compatible", kaiweb_stream)
     monkeypatch.setattr(settings, "kaiweb_api_key", "kw-key")
 
     chunks = []
@@ -183,7 +193,7 @@ async def test_stream_no_fallback_after_started(monkeypatch):
         async for c in llm_client.chat_stream(MESSAGES):
             chunks.append(c)
     assert chunks == ["partial"]
-    assert not called["openclaw"]
+    assert not called["kaiweb"]
 
 
 @pytest.mark.asyncio

@@ -18,8 +18,6 @@ logger = logging.getLogger("claw.scheduler")
 
 scheduler: AsyncIOScheduler | None = None
 
-_CRON_FIELDS = ("minute", "hour", "day", "month", "day_of_week")
-
 
 def _scheduler_timezone() -> str:
     """调度器时区 (WP1 在 config.py 新增 scheduler_timezone; 未就绪时回落默认值)。"""
@@ -74,25 +72,29 @@ def schedule_flow(
         logger.error("调度器未初始化")
         return None
 
-    # 严格校验 cron: 必须 5 段, 且能被 CronTrigger 解析 (非法表达式抛 ValueError)
-    parts = cron.split()
-    if len(parts) != 5:
-        raise ValueError(f"cron 表达式必须包含 5 个字段 (分 时 日 月 周): {cron}")
-    trigger = CronTrigger(
-        timezone=_scheduler_timezone(),
-        **dict(zip(_CRON_FIELDS, parts)),
-    )
+    trigger = validate_cron(cron)
 
     job = scheduler.add_job(
         _execute_scheduled_flow,
-        trigger,
+        trigger=trigger,
         id=job_id,
         name=name,
-        kwargs={"flow_id": str(flow_id), "input_data": input_data or {}},
+        kwargs={
+            "flow_id": str(flow_id),
+            "input_data": input_data or {},
+            "job_id": job_id,
+        },
         replace_existing=True,
     )
     logger.info("定时任务已添加: job_id=%s flow=%s cron=%s next_run=%s", job_id, flow_id, cron, job.next_run_time)
     return job.next_run_time
+
+
+def validate_cron(cron: str) -> CronTrigger:
+    """严格校验标准 5 段 cron 表达式并构造 CronTrigger (非法表达式抛 ValueError)。"""
+    if len(cron.split()) != 5:
+        raise ValueError(f"cron 表达式必须包含 5 个字段 (分 时 日 月 周): {cron}")
+    return CronTrigger.from_crontab(cron, timezone=_scheduler_timezone())
 
 
 def unschedule_flow(job_id: str):
@@ -140,7 +142,9 @@ def get_next_run_time(job_id: str) -> datetime | None:
         return None
 
 
-async def _execute_scheduled_flow(flow_id: str, input_data: dict):
+async def _execute_scheduled_flow(
+    flow_id: str, input_data: dict, job_id: str | None = None
+):
     """APScheduler 回调: 创建 Execution + 调 execution_service.run_flow。"""
     from app.core.database import async_session_factory
     from app.services import agent_flow_service, execution_service
@@ -154,3 +158,20 @@ async def _execute_scheduled_flow(flow_id: str, input_data: dict):
         await execution_service.run_flow(execution.id, uuid.UUID(flow_id))
     except Exception:
         logger.exception("定时任务执行失败: flow=%s", flow_id)
+    finally:
+        if job_id:
+            try:
+                from sqlalchemy import select
+
+                from app.models.schedule_job import ScheduleJob
+
+                async with async_session_factory() as db:
+                    result = await db.execute(
+                        select(ScheduleJob).where(ScheduleJob.id == uuid.UUID(job_id))
+                    )
+                    schedule_job = result.scalar_one_or_none()
+                    if schedule_job is not None:
+                        schedule_job.next_run_time = get_next_run_time(job_id)
+                        await db.commit()
+            except Exception:
+                logger.exception("更新定时任务下次运行时间失败: job_id=%s", job_id)

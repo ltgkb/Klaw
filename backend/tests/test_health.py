@@ -18,19 +18,24 @@ async def test_health_returns_status_and_checks(client):
 
 @pytest.mark.asyncio
 async def test_health_single_component_failure_degraded(client, monkeypatch):
-    """单个组件 (TEI) 故障 → 整体状态 degraded, 该组件标记 error。"""
-    from app.core import tei_client
+    """单个组件 (embedding 后端) 故障 → 整体状态 degraded, 该组件标记 error。
+
+    health 端点以 "embedding" 命名该检查 (embedding API 优先, TEI 为可选兜底);
+    未配置 embedding API 时回落 TEI health_check, 其结果体现在 checks["embedding"]。
+    """
+    from app.core import embedding_config, tei_client
 
     async def fake_tei_health():
         return False
 
+    monkeypatch.setattr(embedding_config, "is_configured", lambda: False)
     monkeypatch.setattr(tei_client, "health_check", fake_tei_health)
 
     resp = await client.get("/api/v1/health")
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "degraded"
-    assert data["checks"]["tei"] == "error: unhealthy"
+    assert data["checks"]["embedding"] == "error: unhealthy"
 
 
 @pytest.mark.asyncio

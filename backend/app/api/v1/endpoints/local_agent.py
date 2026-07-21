@@ -34,7 +34,7 @@ async def call_tool(
 ):
     """调用本地工具 (Skill)。
 
-    优先调用 OpenClaw gateway; 不可达时 dev 返回 mock 结构化结果。
+    通过 OpenClaw gateway 调用；不可达或工具未注册时返回明确失败。
     """
     result = await local_agent_service.call_tool(tool_id, data.parameters)
     return ToolCallResponse(**result)

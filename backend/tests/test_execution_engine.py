@@ -92,7 +92,7 @@ async def test_cancel_before_start(db_session, patch_session_factory, mock_llm):
 
 @pytest.mark.asyncio
 async def test_cancel_while_running(db_session, patch_session_factory, mock_llm, monkeypatch):
-    """运行中被取消: 在下一节点边界检出并终止, 最终状态保持 cancelled 不被覆写为 success。"""
+    """运行中被取消: 节点让出控制权后立即检出并终止, 最终状态保持 cancelled 不被覆写为 success。"""
     user = await _make_user(db_session)
     dag = {
         "nodes": [
@@ -118,9 +118,10 @@ async def test_cancel_while_running(db_session, patch_session_factory, mock_llm,
     await execution_service.run_flow(ex.id, flow.id)
 
     await db_session.refresh(ex)
-    assert ex.status == ExecutionStatus.cancelled  # 未被 :199 覆写为 success
+    assert ex.status == ExecutionStatus.cancelled  # 未被覆写为 success
     states = ex.node_states or {}
-    assert states["n1"]["status"] == "success"
+    # 取消在 n1 执行期间到达 → n1 让出控制权后立即标记 cancelled (deploy 语义)
+    assert states["n1"]["status"] == "cancelled"
     assert "duration_ms" in states["n1"]
     assert "n2" not in states  # 后续节点未执行
 

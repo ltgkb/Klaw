@@ -15,7 +15,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
@@ -35,7 +35,7 @@ services:
       - xpack.security.enabled=false
       - ES_JAVA_OPTS=-Xms512m -Xmx512m
     ports:
-      - "9200:9200"
+      - "127.0.0.1:9200:9200"
     volumes:
       - es_data:/usr/share/elasticsearch/data
     healthcheck:
@@ -48,40 +48,44 @@ services:
 
   # ── Embedding 服务 (BGE-M3, 1024维, 本地推理) ──
   tei:
-    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.5
+    profiles: ["local-embedding"]
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
     container_name: claw-tei
     restart: unless-stopped
     platform: linux/amd64
     ports:
-      - "8082:80"
+      - "127.0.0.1:8082:80"
     volumes:
       - tei_data:/data
-      - /tmp/bge-m3-model:/models/bge-m3:ro
-    command: ["--model-id", "/models/bge-m3", "--max-batch-tokens", "16384"]
+    command: ["--model-id", "${TEI_MODEL_ID:-BAAI/bge-m3}", "--max-batch-tokens", "${TEI_MAX_BATCH_TOKENS:-512}"]
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/80 && echo -e \"GET /health HTTP/1.0\\r\\n\\r\\n\" >&3 && grep -q \"200\" <&3'"]
       interval: 30s
       timeout: 10s
       retries: 10
-      start_period: 300s
+      start_period: 30m
+    mem_limit: 4g
     networks:
       - agent-network
 
-  # ── Cross-Encoder 重排序服务 (BGE-reranker-v2-m3) ──
+  # ── Cross-Encoder 重排序服务 (8GB 默认使用多语言 MiniLM) ──
   reranker:
-    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.5
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
     container_name: claw-reranker
     restart: unless-stopped
     platform: linux/amd64
     ports:
-      - "8083:80"
+      - "127.0.0.1:8083:80"
     volumes:
       - reranker_data:/data
-      - /tmp/bge-reranker-v2-m3:/models/reranker:ro
-    command: ["--model-id", "/models/reranker", "--max-batch-tokens", "8192"]
+    command: ["--model-id", "${RERANKER_MODEL_ID:-cross-encoder/mmarco-mMiniLMv2-L12-H384-v1}", "--dtype", "${RERANKER_DTYPE:-float32}", "--max-batch-tokens", "${RERANKER_MAX_BATCH_TOKENS:-512}"]
     healthcheck:
-      disable: true
-    mem_limit: 8g
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/80 && echo -e \"GET /health HTTP/1.0\\r\\n\\r\\n\" >&3 && grep -q \"200\" <&3'"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 30m
+    mem_limit: 4g
     networks:
       - agent-network
 
@@ -90,7 +94,7 @@ services:
     container_name: claw-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -110,8 +114,8 @@ services:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - minio_data:/data
     healthcheck:
@@ -124,28 +128,60 @@ services:
 
   # ── 本地 Agent 层 (OpenClaw / Hermes) ──
 
+  openclaw-init:
+    image: ${OPENCLAW_IMAGE:-openclaw/openclaw:latest}
+    user: "0:0"
+    entrypoint: ["sh", "-c"]
+    command: ["chown -R 1000:1000 /home/node/.openclaw"]
+    network_mode: "none"
+    volumes:
+      - openclaw_data:/home/node/.openclaw
+    restart: "no"
+
   openclaw:
     # OpenClaw: 本地 AI 智能体框架, Docker 原生, Skills 系统, 可配置模型
     # 仓库: https://github.com/openclaw/openclaw
     image: ${OPENCLAW_IMAGE:-openclaw/openclaw:latest}
     container_name: claw-openclaw
     restart: unless-stopped
-    entrypoint: ["tini", "-s", "--"]
-    command: ["openclaw", "gateway", "--allow-unconfigured", "--auth", "token", "--token", "${OPENCLAW_GATEWAY_TOKEN:-dev-token-claw}", "--bind", "auto", "--port", "8080"]
+    command:
+      - sh
+      - -c
+      - |
+        if [ ! -f "$${OPENCLAW_CONFIG_PATH}" ]; then
+          cp /opt/klaw/openclaw.json "$${OPENCLAW_CONFIG_PATH}"
+        else
+          node dist/index.js config patch --file /opt/klaw/openclaw.json >/dev/null
+        fi
+        node dist/index.js config set gateway.http.endpoints.chatCompletions.enabled true --strict-json >/dev/null
+        exec node dist/index.js gateway --bind lan --port 8080
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
-      - openclaw_data:/root/.openclaw
-      - ./deploy/openclaw/skills:/app/skills
-      - ./deploy/openclaw/config:/root/.openclaw/config
+      - openclaw_data:/home/node/.openclaw
+      - ./deploy/openclaw/openclaw.json:/opt/klaw/openclaw.json:ro
+      - ./deploy/openclaw/skills:/home/node/.openclaw/workspace/skills:ro
     environment:
-      - SKILLS_DIR=/app/skills
+      - HOME=/home/node
+      - OPENCLAW_HOME=/home/node
+      - OPENCLAW_STATE_DIR=/home/node/.openclaw
+      - OPENCLAW_CONFIG_PATH=/home/node/.openclaw/openclaw.json
+      - OPENCLAW_CONFIG_DIR=/home/node/.openclaw
+      - OPENCLAW_WORKSPACE_DIR=/home/node/.openclaw/workspace
+      - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-dev-token-claw}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - KAIWEB_API_KEY=${KAIWEB_API_KEY:-}
+      - OPENCLAW_DISABLE_BONJOUR=1
+    depends_on:
+      openclaw-init:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD-SHELL", "openclaw gateway status 2>/dev/null || exit 1"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/readyz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     networks:
       - agent-network
 
@@ -157,7 +193,7 @@ services:
     restart: unless-stopped
     command: ["gateway", "run"]
     ports:
-      - "8081:8080"
+      - "127.0.0.1:8081:8642"
     volumes:
       - hermes_data:/opt/data
       - ./deploy/hermes/skills:/opt/hermes/skills
@@ -165,6 +201,10 @@ services:
     environment:
       - HERMES_UID=10000
       - HERMES_GID=10000
+      - API_SERVER_ENABLED=true
+      - API_SERVER_HOST=0.0.0.0
+      - API_SERVER_PORT=8642
+      - API_SERVER_KEY=${HERMES_API_SERVER_KEY:-6f3a80c274be419d9a52e781c6430fb7}
     healthcheck:
       test: ["CMD-SHELL", "pgrep -f hermes >/dev/null 2>&1 || exit 1"]
       interval: 30s
@@ -191,7 +231,7 @@ services:
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
       - OPENCLAW_URL=http://openclaw:8080
       - OPENCLAW_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-dev-token-claw}
-      - HERMES_URL=http://hermes:8080
+      - HERMES_URL=http://hermes:8642
       - TEI_URL=http://tei:80
       - RERANKER_URL=http://reranker:80
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
@@ -211,7 +251,7 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-      tei:
+      reranker:
         condition: service_healthy
     volumes:
       - ./backend:/app

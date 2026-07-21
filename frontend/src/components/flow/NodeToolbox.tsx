@@ -1,4 +1,4 @@
-import { Brain, Database, GitBranch, Type, Bell, BrainCog, Play, Square, Globe } from "lucide-react"
+import { Brain, Database, GitBranch, Type, Bell, BrainCog, Play, Repeat2, Square, Globe } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { CanvasNodeType } from "@/components/flow/nodes"
 
@@ -8,6 +8,7 @@ const TOOLBOX_ITEMS: { type: CanvasNodeType; label: string; icon: typeof Brain; 
   { type: "llm", label: "LLM 对话", icon: Brain, color: "border-blue-300 bg-blue-50 hover:bg-blue-100" },
   { type: "retrieval", label: "知识库检索", icon: Database, color: "border-purple-300 bg-purple-50 hover:bg-purple-100" },
   { type: "condition", label: "条件分支", icon: GitBranch, color: "border-amber-300 bg-amber-50 hover:bg-amber-100" },
+  { type: "loop", label: "循环", icon: Repeat2, color: "border-cyan-300 bg-cyan-50 hover:bg-cyan-100" },
   { type: "text", label: "文本拼接", icon: Type, color: "border-gray-300 bg-gray-50 hover:bg-gray-100" },
   { type: "notify", label: "消息推送", icon: Bell, color: "border-pink-300 bg-pink-50 hover:bg-pink-100" },
   { type: "memory", label: "记忆读写", icon: BrainCog, color: "border-teal-300 bg-teal-50 hover:bg-teal-100" },
@@ -16,13 +17,14 @@ const TOOLBOX_ITEMS: { type: CanvasNodeType; label: string; icon: typeof Brain; 
 
 interface Props {
   onAdd: (type: CanvasNodeType) => void
+  width?: number
 }
 
-export function NodeToolbox({ onAdd }: Props) {
+export function NodeToolbox({ onAdd, width = 176 }: Props) {
   return (
-    <div className="flex w-44 flex-col border-r bg-secondary/20">
+    <div className="flex shrink-0 flex-col overflow-hidden border-r bg-secondary/20" style={{ width }}>
       <div className="border-b p-3">
-        <p className="text-xs font-semibold text-muted-foreground">节点工具箱</p>
+        <p className="text-xs font-semibold text-muted-foreground">元素栏</p>
         <p className="mt-0.5 text-[10px] text-muted-foreground">点击添加到画布</p>
       </div>
       <div className="flex flex-col gap-2 p-3">

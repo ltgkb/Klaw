@@ -28,14 +28,19 @@ async def send_feishu(webhook_url: str, title: str, content: str) -> bool:
                 "elements": [{"tag": "markdown", "content": content}],
             },
         })
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            raise RuntimeError(f"飞书 Webhook HTTP {resp.status_code}")
         data = resp.json()
         # 显式存在性判断: code / StatusCode 都缺失时不得误判成功
         if "code" in data:
-            return data["code"] == 0
-        if "StatusCode" in data:
-            return data["StatusCode"] == 0
-        return False
+            success = data["code"] == 0
+        elif "StatusCode" in data:
+            success = data["StatusCode"] == 0
+        else:
+            success = False
+        if not success:
+            logger.warning("飞书拒绝推送: code=%s", data.get("code", data.get("StatusCode")))
+        return success
 
 
 async def send_wechat(webhook_url: str, title: str, content: str) -> bool:
@@ -46,10 +51,14 @@ async def send_wechat(webhook_url: str, title: str, content: str) -> bool:
             "msgtype": "markdown",
             "markdown": {"content": text},
         })
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            raise RuntimeError(f"企业微信 Webhook HTTP {resp.status_code}")
         data = resp.json()
         # 显式存在性判断: 缺少 errcode 字段视为失败
-        return "errcode" in data and data["errcode"] == 0
+        success = "errcode" in data and data["errcode"] == 0
+        if not success:
+            logger.warning("企业微信拒绝推送: errcode=%s", data.get("errcode"))
+        return success
 
 
 async def send_telegram(bot_token: str, chat_id: str, text: str) -> bool:
@@ -92,16 +101,14 @@ async def send_hermes(channel: str, message: str) -> bool:
 
     Hermes 默认不暴露 HTTP API, 此方法为可选通道。
     """
-    try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.post(
-                f"{settings.hermes_url}/api/send",
-                json={"channel": channel, "message": message},
-            )
-            return resp.status_code < 400
-    except Exception:
-        logger.warning("Hermes 推送不可用 (gateway mode)")
-        return False
+    async with httpx.AsyncClient(timeout=5) as client:
+        resp = await client.post(
+            f"{settings.hermes_url}/api/send",
+            json={"channel": channel, "message": message},
+        )
+        if resp.status_code >= 400:
+            raise RuntimeError(f"Hermes API HTTP {resp.status_code}")
+        return True
 
 
 async def notify(channels: list[dict], title: str, content: str) -> list[dict]:
@@ -141,6 +148,9 @@ async def notify(channels: list[dict], title: str, content: str) -> list[dict]:
             logger.warning("推送被安全校验拦截: %s — %s", ch_type, e)
         except Exception as e:
             error = str(e)
+
+        if not success and error is None:
+            error = "渠道返回失败状态"
 
         results.append({"channel": ch_type, "success": success, "error": error})
         if success:
