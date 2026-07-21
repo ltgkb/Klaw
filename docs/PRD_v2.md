@@ -189,7 +189,7 @@ API 网关 FastAPI + JWT + RBAC + 全局异常 + 结构化 JSON 日志
 ---
 
 ## 10. 验证状态（2026-07-21 审计更新）
-- 后端测试：`uv run pytest -q` → **58 passed**（含本轮新增 6 项：本地工具/文件工作区/推送渠道）。
+- 后端测试：历史基线 `uv run pytest -q` → **58 passed**；本轮审计回归 → **67 passed**（新增执行控制、轻量解析、调度一致性、生产工具 fallback 等覆盖）。
 - 端到端（本地运行，轻量基础设施 postgres+redis+minio+es，OpenClaw/Hermes/TEI 可用）：
   - 注册/登录/JWT ✅
   - 知识库：创建→上传 txt→DeepDoc 解析→TEI 向量化→ES 索引→混合检索（3 hits，BM25+kNN 排序）✅

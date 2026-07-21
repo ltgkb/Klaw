@@ -6,7 +6,7 @@
 
 ## 证据摘要
 
-- 后端：`uv run pytest -q` → **66 passed**；另行运行 `uv run python -m compileall -q app deepdoc common` 通过。
+- 后端：`uv run pytest -q` → **67 passed**；另行运行 `uv run python -m compileall -q app deepdoc common` 通过。
 - 前端：`npm run lint` 通过（3 个既有 Fast Refresh warning）；`npm run build` 通过（Vite 产生约 602 kB 主 JS，存在 code-splitting warning）。
 - Compose：基础 `docker compose config --quiet` 通过；隔离覆盖配置也通过。
 - 真实依赖：隔离 PostgreSQL 16、Redis 7、MinIO、Elasticsearch 8.11 全部 healthy；Alembic 从空库升级到 `4b2e9a1c7d33 (head)`，`alembic check` 无漂移。
