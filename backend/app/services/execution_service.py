@@ -198,6 +198,11 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
                     logger.info("节点执行成功: %s (%s)", node_id, node_type)
 
                 except Exception as node_err:
+                    await db.refresh(execution)
+                    if execution.status == ExecutionStatus.cancelled:
+                        execution.output = node_outputs
+                        await db.commit()
+                        return
                     # 节点执行失败
                     node_states = dict(execution.node_states or {})
                     node_states[node_id] = {
@@ -229,6 +234,11 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
 
         except Exception as e:
             logger.exception("工作流执行异常: %s — %s", flow_id, e)
+            await db.refresh(execution)
+            if execution.status == ExecutionStatus.cancelled:
+                execution.output = execution.output or {}
+                await db.commit()
+                return
             execution.status = ExecutionStatus.failed
             execution.error_message = str(e)
             await db.commit()

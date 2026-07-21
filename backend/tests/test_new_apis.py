@@ -98,6 +98,21 @@ async def test_push_channel_crud(client):
 
 
 @pytest.mark.asyncio
+async def test_system_settings_require_admin(client):
+    """全局 embedding/LLM 配置不能由普通用户修改。"""
+    token_admin = await _register_and_login(client, "settings-admin@test.com")
+    token_user = await _register_and_login(client, "settings-user@test.com")
+    resp = await client.put(
+        "/api/v1/system/llm-config",
+        json={"default_model": "mock"},
+        headers=_auth_headers(token_user),
+    )
+    assert resp.status_code == 403
+    resp = await client.get("/api/v1/system/llm-config", headers=_auth_headers(token_admin))
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_notify_by_channel_id(client, monkeypatch):
     """测试通过已配置渠道 id 推送 (解密 + 调用, notify 被 mock)。"""
     from app.core import notify_client
