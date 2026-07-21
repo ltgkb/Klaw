@@ -62,9 +62,9 @@
 
 ## 对标参考（官方资料，检索日期 2026-07-21）
 
-- [RAGFlow README](https://github.com/infiniflow/ragflow) / [DeepDoc 文档](https://ragflow.io/docs/dev): 借鉴按文件类型的深度解析、块级 metadata/citation 和检索可解释性；本仓库保留轻量 DeepDoc 路由，OCR/多模态列入 M5，不复制实现。
-- [Dify README](https://github.com/langgenius/dify) / [Workflow 文档](https://docs.dify.ai/guides/workflow): 借鉴变量上下文、条件分支、模型/工具入口和错误可见性；本轮补强真正 handle 分支裁剪和执行状态 UI，尚未扩展迭代节点/评测。
-- [LangChain README](https://github.com/langchain-ai/langchain) / [LangGraph persistence 文档](https://langchain-ai.github.io/langgraph/concepts/persistence/): 借鉴 provider/tool 抽象、streaming、checkpoint/持久执行的验收维度；当前保留自研轻量 DAG，待引入 LangGraph 前先补迁移、checkpoint 和回退测试。
+- [RAGFlow README](https://github.com/infiniflow/ragflow) / [DeepDoc 文档](https://ragflow.io/docs/dev)（官方 latest `v0.26.4`，2026-07-07）：借鉴按文件类型的深度解析、块级 metadata/citation 和检索可解释性；本仓库保留轻量 DeepDoc 路由，OCR/多模态列入 M5，不复制实现。
+- [Dify README](https://github.com/langgenius/dify) / [Workflow 文档](https://docs.dify.ai/guides/workflow)（官方 latest `1.16.0`，2026-07-17）：借鉴变量上下文、条件分支、模型/工具入口和错误可见性；本轮补强真正 handle 分支裁剪和执行状态 UI，尚未扩展迭代节点/评测。
+- [LangChain README](https://github.com/langchain-ai/langchain)（`langchain-core==1.4.9`，2026-07-08）/ [LangGraph persistence 文档](https://langchain-ai.github.io/langgraph/concepts/persistence/)（`1.2.9`，2026-07-10）：借鉴 provider/tool 抽象、streaming、checkpoint/持久执行的验收维度；当前保留自研轻量 DAG，待引入 LangGraph 前先补迁移、checkpoint 和回退测试。
 
 ## 遗留项
 
