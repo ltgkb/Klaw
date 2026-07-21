@@ -95,11 +95,21 @@ async def call_tool(tool_id: str, parameters: dict) -> dict:
     """调用本地工具。OpenClaw 网关为权威来源; 网关不可达/报错时明确失败 (不伪装成功)。
 
     语义:
+      - tool_id 必须存在于仓库 manifest allowlist，未知工具不接触网关
       - 网关返回 ok:true → 成功, 取 result
       - 网关返回无效响应 / HTTP 错误 → success=False + error (source=mock)
-      - 连接级失败 (网关不可达) → 先回查本地清单: 未知工具报"不存在" (source=local),
-        已知工具报网关不可用 (source=mock)
+      - 连接级失败 (网关不可达) → success=False，明确报告网关不可用
     """
+    allowed_tool_ids = {tool.id for tool in await discover_tools()}
+    if tool_id not in allowed_tool_ids:
+        return {
+            "tool_id": tool_id,
+            "success": False,
+            "result": None,
+            "error": f"本地工具不存在: {tool_id}",
+            "source": "local",
+        }
+
     headers = {"Content-Type": "application/json"}
     if settings.openclaw_token:
         headers["Authorization"] = f"Bearer {settings.openclaw_token}"
@@ -115,15 +125,6 @@ async def call_tool(tool_id: str, parameters: dict) -> dict:
             )
     except Exception as e:
         logger.debug("OpenClaw 工具调用连接失败: %s", e)
-        # 网关不可达: 本地清单是唯一的工具来源, 未知工具直接报不存在
-        if tool_id not in {t.id for t in await discover_tools()}:
-            return {
-                "tool_id": tool_id,
-                "success": False,
-                "result": None,
-                "error": f"本地工具不存在: {tool_id}",
-                "source": "local",
-            }
         error = f"OpenClaw 工具服务不可用 ({e.__class__.__name__})"
         return _tool_failure(tool_id, parameters, error)
 

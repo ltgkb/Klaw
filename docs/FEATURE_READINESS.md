@@ -39,7 +39,7 @@
 | 模型发现/切换 | 设置、LLM 节点 | 仅展示已启用本地模型 | OpenClaw→Hermes→Kaiweb→OpenAI→Anthropic；本地路由有独立开关 | Hermes models/chat 接口真实探测；适配自动化 | 部分可用 | Hermes 无推理供应商、其它无真实 LLM 凭据（P0 部署条件） |
 | provider 流式/fallback/错误 | `/providers/chat/stream`、设置 | 设置测试为非流式 | SSE delta；多级 fallback；dev Mock 显式标记 | fallback/stream tests | 部分可用 | UI 未消费 token stream；真实 provider 未验证（P1） |
 | OpenClaw/Hermes 发现 | 设置 | 3 个清单可见 | 本地 manifest；网关健康 | OpenClaw/Hermes healthy | 可用 | `send_notification`、`data_analysis` 仍仅清单（P1） |
-| 本地工具调用 | 设置工具调用器 | JSON 参数、结果/错误可见 | `/local-agent/tools/{id}/call` -> OpenClaw `/tools/invoke` | 真实 `web_fetch` 获取 example.com，HTTP 200 | 部分可用 | 只有 web_fetch 完成真实调用；缺画布 tool node（P1） |
+| 本地工具调用 | 设置工具调用器 | JSON 参数、结果/错误可见 | manifest allowlist 后调用 OpenClaw `/tools/invoke` | 真实 `web_fetch` HTTP 200；未知工具零网关请求 | 部分可用 | 只有 web_fetch 完成真实调用；缺画布 tool node（P1） |
 | APScheduler CRUD/控制/触发 | `/schedules` | 创建/编辑/暂停/恢复 | PG SQLAlchemyJobStore | 每分钟任务真实触发 success | 可用 | 多实例无 leader/分布式锁（P1/P2） |
 | 调度重启持久化 | `/schedules` | next run 可见 | PG JobStore 恢复 | 后端重启后 next run 恢复并再次触发；暂停清空 next run | 可用 | 多实例重复触发风险（P1） |
 | PostgreSQL/Redis 记忆 | `/memories` | PG 记忆 UI 可用 | PG CRUD/search/upsert；Redis 只探活 | memory tests；Redis healthy | 部分可用 | Redis TTL 短期会话记忆缺失（P2） |

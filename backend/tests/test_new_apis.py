@@ -425,8 +425,16 @@ async def test_local_agent_tool_call_preserves_openclaw_success_envelope(client,
 
 
 @pytest.mark.asyncio
-async def test_local_agent_tool_call_unknown_tool(client):
+async def test_local_agent_tool_call_unknown_tool(client, monkeypatch):
     """调用前校验 tool_id: 不存在的工具 → success=False。"""
+    from app.services import local_agent_service
+
+    class _UnexpectedClient:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("unknown tool must be rejected before contacting OpenClaw")
+
+    monkeypatch.setattr(local_agent_service.httpx, "AsyncClient", _UnexpectedClient)
+
     token = await _register_and_login(client, "tool404@test.com")
     resp = await client.post(
         "/api/v1/local-agent/tools/nonexistent_tool_xyz/call",
