@@ -11,7 +11,7 @@ import {
   Clock,
   AlertCircle,
 } from "lucide-react"
-import { kbApi, type KBRead, type DocumentRead, type SearchHit } from "@/lib/api"
+import { kbApi, type KBRead, type DocumentRead, type SearchHit, type ChunkRead } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -44,6 +44,16 @@ export function KBDetail() {
   const [query, setQuery] = useState("")
   const [searching, setSearching] = useState(false)
   const [hits, setHits] = useState<SearchHit[]>([])
+  const [rerank, setRerank] = useState(false)
+  // 只有真正执行过检索才显示「无匹配结果」 (P2-11)
+  const [hasSearched, setHasSearched] = useState(false)
+
+  // Chunk 浏览 (分页)
+  const [chunks, setChunks] = useState<ChunkRead[]>([])
+  const [chunkTotal, setChunkTotal] = useState(0)
+  const [chunkPage, setChunkPage] = useState(1)
+  const [chunksLoading, setChunksLoading] = useState(false)
+  const CHUNK_PAGE_SIZE = 10
 
   const fetchAll = async () => {
     if (!kbId) return
@@ -64,6 +74,27 @@ export function KBDetail() {
 
   useEffect(() => {
     fetchAll()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kbId])
+
+  // Chunk 分页加载
+  const fetchChunks = async (page: number) => {
+    if (!kbId) return
+    setChunksLoading(true)
+    try {
+      const resp = await kbApi.listChunks(kbId, page, CHUNK_PAGE_SIZE)
+      setChunks(resp.data.items)
+      setChunkTotal(resp.data.total)
+      setChunkPage(resp.data.page)
+    } catch {
+      // 错误由拦截器处理
+    } finally {
+      setChunksLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchChunks(1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kbId])
 
@@ -107,8 +138,9 @@ export function KBDetail() {
     if (!kbId || !query.trim()) return
     setSearching(true)
     try {
-      const resp = await kbApi.search(kbId, { query, top_k: 10 })
+      const resp = await kbApi.search(kbId, { query, top_k: 10, rerank })
       setHits(resp.data.hits)
+      setHasSearched(true)
     } catch {
       // 错误由拦截器处理
     } finally {
@@ -243,7 +275,10 @@ export function KBDetail() {
           <div className="flex gap-2">
             <Input
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => {
+                setQuery(e.target.value)
+                setHasSearched(false)
+              }}
               placeholder="输入检索内容..."
               onKeyDown={(e) => e.key === "Enter" && handleSearch()}
             />
@@ -252,6 +287,16 @@ export function KBDetail() {
               检索
             </Button>
           </div>
+
+          <label className="flex items-center gap-2 text-sm text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={rerank}
+              onChange={(e) => setRerank(e.target.checked)}
+              className="h-4 w-4"
+            />
+            Cross-Encoder 重排序 (rerank)
+          </label>
 
           {hits.length > 0 && (
             <div className="space-y-3">
@@ -264,6 +309,7 @@ export function KBDetail() {
                     </span>
                     <span className="text-xs text-muted-foreground">
                       score: {hit.score.toFixed(4)}
+                      {hit.rerank_score != null && ` · rerank: ${hit.rerank_score.toFixed(4)}`}
                     </span>
                   </div>
                   <p className="text-sm whitespace-pre-wrap">{hit.content}</p>
@@ -272,8 +318,64 @@ export function KBDetail() {
             </div>
           )}
 
-          {hits.length === 0 && query && !searching && (
+          {hasSearched && hits.length === 0 && !searching && (
             <p className="text-sm text-muted-foreground">无匹配结果</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Chunk 浏览 (分页) */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Chunk 浏览</CardTitle>
+          <CardDescription>共 {chunkTotal} 个分块 · 每页 {CHUNK_PAGE_SIZE} 条</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {chunksLoading ? (
+            <div className="flex items-center justify-center py-6">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : chunks.length === 0 ? (
+            <p className="py-4 text-center text-sm text-muted-foreground">暂无分块，请先上传并解析文档</p>
+          ) : (
+            <div className="space-y-2">
+              {chunks.map((chunk) => (
+                <div key={chunk.id} className="rounded-md border p-3">
+                  <div className="mb-1 flex items-center justify-between">
+                    <span className="rounded bg-secondary px-1.5 py-0.5 text-xs">
+                      {chunk.content_type}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      第 {chunk.page} 页{chunk.embedding_stored ? " · 已向量化" : ""}
+                    </span>
+                  </div>
+                  <p className="line-clamp-3 text-sm whitespace-pre-wrap">{chunk.content}</p>
+                </div>
+              ))}
+            </div>
+          )}
+          {chunkTotal > CHUNK_PAGE_SIZE && (
+            <div className="flex items-center justify-between">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={chunkPage <= 1 || chunksLoading}
+                onClick={() => fetchChunks(chunkPage - 1)}
+              >
+                上一页
+              </Button>
+              <span className="text-xs text-muted-foreground">
+                第 {chunkPage} / {Math.ceil(chunkTotal / CHUNK_PAGE_SIZE)} 页
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={chunkPage >= Math.ceil(chunkTotal / CHUNK_PAGE_SIZE) || chunksLoading}
+                onClick={() => fetchChunks(chunkPage + 1)}
+              >
+                下一页
+              </Button>
+            </div>
           )}
         </CardContent>
       </Card>

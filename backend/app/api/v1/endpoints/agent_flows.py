@@ -225,6 +225,13 @@ async def stream_execution(
     if flow is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="工作流不存在")
 
+    # 越权校验: execution 必须属于该 flow, 防止用己方 flow_id 流式读取他人执行记录
+    execution = await agent_flow_service.get_execution(db, execution_id)
+    if execution is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="执行记录不存在")
+    if execution.flow_id != flow_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权访问该执行记录")
+
     async def event_generator():
         while True:
             execution = await agent_flow_service.get_execution(db, execution_id)

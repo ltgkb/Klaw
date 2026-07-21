@@ -1,4 +1,5 @@
 import axios from "axios"
+import { toast } from "./toast"
 
 const API_BASE = "/api/v1"
 
@@ -16,16 +17,92 @@ api.interceptors.request.use((config) => {
   return config
 })
 
-// 响应拦截器：401 跳登录
+// ── 401 自动续期: access token 过期时用 refresh token 换新, 无感续登 ──
+let isRefreshing = false
+// 队列元素携带 retry/fail: 续期成功后 retry 重放; 续期失败逐个 fail reject, 避免请求悬挂 (Auth P2-5)
+let waitQueue: Array<{ retry: () => void; fail: (err: unknown) => void }> = []
+
+async function tryRefresh(): Promise<string | null> {
+  const refreshToken = localStorage.getItem("refresh_token")
+  if (!refreshToken) return null
+  try {
+    // 用裸 axios 调用, 绕过本拦截器避免递归
+    const r = await axios.post(`${API_BASE}/auth/refresh`, { refresh_token: refreshToken })
+    const { access_token, refresh_token } = r.data
+    localStorage.setItem("access_token", access_token)
+    localStorage.setItem("refresh_token", refresh_token)
+    return access_token
+  } catch {
+    return null
+  }
+}
+
+function forceLogout() {
+  localStorage.removeItem("access_token")
+  localStorage.removeItem("refresh_token")
+  if (window.location.pathname !== "/login") {
+    window.location.href = "/login"
+  }
+}
+
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
-      localStorage.removeItem("access_token")
-      localStorage.removeItem("refresh_token")
-      if (window.location.pathname !== "/login") {
-        window.location.href = "/login"
+  async (error) => {
+    const original = error.config
+    // 401 且非 auth 接口 且未重试过 → 尝试续期
+    if (
+      error.response?.status === 401 &&
+      original &&
+      !original._retry &&
+      !String(original.url || "").includes("/auth/")
+    ) {
+      original._retry = true
+      // 已有续期在进行中, 排队等待
+      if (isRefreshing) {
+        return new Promise((resolve, reject) => {
+          waitQueue.push({
+            retry: () => {
+              original.headers.Authorization = `Bearer ${localStorage.getItem("access_token")}`
+              api(original).then(resolve, reject)
+            },
+            fail: reject,
+          })
+        })
       }
+      isRefreshing = true
+      const newToken = await tryRefresh()
+      isRefreshing = false
+      if (newToken) {
+        // 续期成功: 放行排队的请求 + 重试当前请求
+        waitQueue.forEach((entry) => entry.retry())
+        waitQueue = []
+        original.headers.Authorization = `Bearer ${newToken}`
+        return api(original)
+      }
+      // 续期失败: 逐个 reject 排队请求 (不悬挂), 再登出
+      const pending = waitQueue
+      waitQueue = []
+      forceLogout()
+      pending.forEach((entry) => entry.fail(error))
+      return Promise.reject(error)
+    }
+    // refresh 接口本身 401 或其它 401 → 登出
+    if (error.response?.status === 401) {
+      forceLogout()
+      return Promise.reject(error)
+    }
+    // 非 401 错误统一 toast 提示 (FE P1-3); /auth/ 接口由登录/注册页自行展示, 不重复提示
+    if (!String(original?.url || "").includes("/auth/")) {
+      const detail = (error.response?.data as { detail?: unknown } | undefined)?.detail
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((d: { msg?: string }) => d?.msg ?? String(d)).join("；")
+            : error.response
+              ? `请求失败 (${error.response.status})`
+              : "网络错误，请检查后端服务是否可用"
+      toast.error(message)
     }
     return Promise.reject(error)
   },
@@ -106,12 +183,25 @@ export interface SearchHit {
   page: number
   score: number
   metadata: Record<string, unknown>
+  /** Cross-Encoder 重排序分数 (rerank=true 时后端填充) */
+  rerank_score?: number | null
 }
 
 export interface SearchResponse {
   query: string
   total: number
   hits: SearchHit[]
+}
+
+export interface ChunkRead {
+  id: string
+  doc_id: string
+  kb_id: string
+  content: string
+  content_type: string
+  page: number
+  embedding_stored: boolean
+  created_at: string
 }
 
 export const kbApi = {
@@ -150,8 +240,14 @@ export const kbApi = {
   deleteDocument: (kbId: string, docId: string) =>
     api.delete(`/knowledge-bases/${kbId}/documents/${docId}`),
 
+  // Chunk 查询 (契约4)
+  listChunks: (kbId: string, page = 1, pageSize = 10) =>
+    api.get<PageResponse<ChunkRead>>(`/knowledge-bases/${kbId}/chunks`, {
+      params: { page, page_size: pageSize },
+    }),
+
   // 检索
-  search: (kbId: string, data: { query: string; top_k?: number; threshold?: number }) =>
+  search: (kbId: string, data: { query: string; top_k?: number; threshold?: number; rerank?: boolean }) =>
     api.post<SearchResponse>(`/knowledge-bases/${kbId}/search`, data),
 }
 
@@ -392,6 +488,16 @@ export const userApi = {
     api.put<UserRead>("/users/me", data),
 }
 
+// ── 用户管理 API (admin, 契约4) ──
+
+export const usersApi = {
+  list: () => api.get<UserRead[]>("/users"),
+
+  /** 修改用户角色 (admin); 后端以 query param 接收 role */
+  updateRole: (id: string, role: UserRead["role"]) =>
+    api.put<UserRead>(`/users/${id}/role`, null, { params: { role } }),
+}
+
 // ── 系统配置 (embedding 模型 API 等, admin) ──
 
 export interface EmbeddingConfig {
@@ -468,6 +574,8 @@ export const fileApi = {
     })
   },
   downloadUrl: (id: string) => `/api/v1/files/${id}`,
+  /** 带 JWT 的 blob 下载 (直接 <a href> 不会带 Authorization 头) */
+  download: (id: string) => api.get<Blob>(`/files/${id}`, { responseType: "blob" }),
   delete: (id: string) => api.delete(`/files/${id}`),
   share: (id: string) => api.get<FileShare>(`/files/${id}/share`),
 }

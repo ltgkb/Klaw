@@ -3,10 +3,12 @@
 对齐 PRD 第 3.1 节完整管线。异步解析通过 FastAPI BackgroundTasks 触发。
 """
 
+import asyncio
 import logging
 import uuid
 
-from sqlalchemy import select
+from fastapi import HTTPException
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.es_client import delete_doc_chunks, hybrid_search as es_hybrid_search, index_chunks_bulk
@@ -30,8 +32,8 @@ async def upload_document(
     doc_id = uuid.uuid4()
     object_name = f"{kb.id}/{doc_id}/{filename}"
 
-    # 存储到 MinIO
-    upload_file(object_name, file_data, content_type)
+    # 存储到 MinIO (同步 SDK 调用放入线程池, 避免阻塞事件循环)
+    await asyncio.to_thread(upload_file, object_name, file_data, content_type)
 
     # 创建 DB 记录
     doc = Document(
@@ -82,12 +84,13 @@ async def parse_and_index(doc_id: uuid.UUID, kb_id: uuid.UUID) -> None:
             doc.parse_status = ParseStatus.parsing
             await db.commit()
 
-            # ── 2. 从 MinIO 下载 ──
-            file_data = download_file(doc.file_path)
+            # ── 2. 从 MinIO 下载 (同步 SDK 调用放入线程池) ──
+            file_data = await asyncio.to_thread(download_file, doc.file_path)
 
-            # ── 3. DeepDoc 解析 ──
-            blocks = deepdoc_service.parse_document(
-                doc.filename, file_data, chunk_token_num=kb.chunk_size
+            # ── 3. DeepDoc 解析 (CPU 密集 + 同步, 放入线程池) ──
+            blocks = await asyncio.to_thread(
+                deepdoc_service.parse_document,
+                doc.filename, file_data, chunk_token_num=kb.chunk_size,
             )
             doc.page_count = len({b["page"] for b in blocks}) if blocks else 0
             doc.parse_result = {
@@ -108,6 +111,10 @@ async def parse_and_index(doc_id: uuid.UUID, kb_id: uuid.UUID) -> None:
             texts = [c["content"] for c in chunks_data]
             logger.info("开始向量化 %d chunks (doc=%s)", len(texts), doc_id)
             embeddings = await embed_texts(texts)
+            if len(embeddings) != len(chunks_data):
+                raise RuntimeError(
+                    f"向量化数量不符: 期望 {len(chunks_data)}, 实际 {len(embeddings)}"
+                )
 
             # ── 6. 写入 DB chunk 记录 ──
             chunk_records = []
@@ -144,6 +151,8 @@ async def parse_and_index(doc_id: uuid.UUID, kb_id: uuid.UUID) -> None:
 
             # ── 7. ES 批量索引 ──
             indexed = await index_chunks_bulk(es_docs)
+            if indexed != len(es_docs):
+                raise RuntimeError(f"ES 索引数量不符: 期望 {len(es_docs)}, 实际 {indexed}")
             logger.info("ES 索引完成: %d/%d chunks (doc=%s)", indexed, len(es_docs), doc_id)
 
             # ── 8. 标记完成 ──
@@ -155,6 +164,8 @@ async def parse_and_index(doc_id: uuid.UUID, kb_id: uuid.UUID) -> None:
         except Exception as e:
             logger.exception("文档解析失败: %s — %s", doc.filename, e)
             doc.parse_status = ParseStatus.failed
+            # 失败原因写入 parse_result, 供前端/排查查看
+            doc.parse_result = {"error": f"{type(e).__name__}: {e}"[:1000]}
             await db.commit()
 
 
@@ -170,7 +181,7 @@ def _create_chunks(blocks: list[dict], kb: KnowledgeBase) -> list[dict]:
 
     Token 计数/截断使用 common.token_utils (tiktoken), 与 DeepDoc 一致。
     """
-    from common.token_utils import num_tokens_from_string, truncate
+    from common.token_utils import num_tokens_from_string
 
     chunks = []
     chunk_size = kb.chunk_size
@@ -200,13 +211,13 @@ def _create_chunks(blocks: list[dict], kb: KnowledgeBase) -> list[dict]:
         if kb.chunk_strategy.value == "fixed":
             # 固定长度切分 (按 token)
             _split_and_append(content, content_type, page, chunk_size, chunk_overlap,
-                              token_count, "fixed", chunks, truncate, num_tokens_from_string)
+                              token_count, "fixed", chunks)
         else:
             # recursive / markdown / semantic → 保留 DeepDoc 分块
             # 如果块太大 (超过 chunk_size*2), 按 token 截断切分
             if token_count > chunk_size * 2:
                 _split_and_append(content, content_type, page, chunk_size, chunk_overlap,
-                                  token_count, "recursive_split", chunks, truncate, num_tokens_from_string)
+                                  token_count, "recursive_split", chunks)
             else:
                 chunks.append({
                     "content": content,
@@ -221,25 +232,16 @@ def _create_chunks(blocks: list[dict], kb: KnowledgeBase) -> list[dict]:
 def _split_and_append(
     content: str, content_type: str, page: int,
     chunk_size: int, chunk_overlap: int, token_count: int,
-    source: str, chunks: list, truncate_fn, count_fn
+    source: str, chunks: list
 ) -> None:
-    """按 token 窗口切分文本块, 追加到 chunks 列表。"""
+    """按 token 窗口切分文本块, 追加到 chunks 列表 (基于 slice_tokens 精确切片)。"""
+    from common.token_utils import slice_tokens
+
     pos = 0
     step = max(1, chunk_size - chunk_overlap)
     while pos < token_count:
         end = min(pos + chunk_size, token_count)
-        # 用 tiktoken 截取 [pos, end) 范围的 token, 再 decode 回文本
-        full_tokens = token_count  # 已知总数
-        # truncate(text, max_len) 截取前 max_len tokens; 逐段截取需先截前 end 再取后 (end-pos)
-        prefix = truncate_fn(content, end)
-        if pos > 0:
-            # 去掉前 pos 个 token
-            full_text = truncate_fn(content, end)
-            prefix_text = truncate_fn(content, pos)
-            # 简单方式: 去掉 prefix_text 开头
-            chunk_text = full_text[len(prefix_text):] if full_text.startswith(prefix_text) else full_text
-        else:
-            chunk_text = prefix
+        chunk_text = slice_tokens(content, pos, end)
 
         if chunk_text.strip():
             chunks.append({
@@ -294,6 +296,28 @@ async def delete_document(db: AsyncSession, doc: Document) -> None:
     logger.info("文档删除: %s", doc_id_str)
 
 
+async def reset_document_for_reparse(db: AsyncSession, doc: Document) -> None:
+    """重解析前置: 清除旧 chunk (DB + ES), 重置解析状态为 pending。"""
+    doc_id_str = str(doc.id)
+
+    # 1. 删除 ES 中的旧 chunk 索引
+    try:
+        await delete_doc_chunks(doc_id_str)
+    except Exception as e:
+        logger.warning("删除 ES chunk 索引失败 (doc=%s): %s", doc_id_str, e)
+
+    # 2. 删除 DB 中的旧 chunk
+    await db.execute(delete(Chunk).where(Chunk.doc_id == doc.id))
+
+    # 3. 重置解析状态
+    doc.parse_status = ParseStatus.pending
+    doc.page_count = 0
+    doc.parse_result = None
+    await db.commit()
+    await db.refresh(doc)  # 刷新 onupdate 服务端列 (updated_at), 供响应序列化
+    logger.info("文档重置待重解析: %s", doc_id_str)
+
+
 # ── Chunk 查询 ──
 
 async def list_chunks(db: AsyncSession, kb_id, doc_id=None, page: int = 1, page_size: int = 20) -> tuple[list[Chunk], int]:
@@ -315,50 +339,61 @@ async def list_chunks(db: AsyncSession, kb_id, doc_id=None, page: int = 1, page_
 # ── 检索 ──
 
 async def search(db: AsyncSession, kb_id, request: SearchRequest) -> SearchResponse:
-    """混合检索: TEI 向量化 query → ES kNN + BM25 + (可选) Cross-Encoder 重排序。"""
+    """混合检索: TEI 向量化 query → ES kNN + BM25 + (可选) Cross-Encoder 重排序。
+
+    底层依赖 (embedding/ES) 异常统一转为 503, 不向调用方泄漏内部错误细节。
+    """
     kb_id_str = str(kb_id)
 
-    # 1. 向量化查询
-    query_vector = await embed_query(request.query)
+    try:
+        # 1. 向量化查询
+        query_vector = await embed_query(request.query)
 
-    # 2. ES 混合检索 — 如果启用重排序, over-fetch 候选 (4x) 供 reranker 精排
-    fetch_k = request.top_k * 4 if request.rerank else request.top_k
-    hits = await es_hybrid_search(
-        kb_id=kb_id_str,
-        query_vector=query_vector,
-        query_text=request.query,
-        top_k=fetch_k,
-    )
+        # 2. ES 混合检索 — 如果启用重排序, over-fetch 候选 (4x) 供 reranker 精排
+        fetch_k = request.top_k * 4 if request.rerank else request.top_k
+        hits = await es_hybrid_search(
+            kb_id=kb_id_str,
+            query_vector=query_vector,
+            query_text=request.query,
+            top_k=fetch_k,
+        )
 
-    # 3. Cross-Encoder 重排序 (M4)
-    if request.rerank and hits:
-        try:
-            from app.core.reranker_client import rerank as rerank_docs
-            documents = [h["content"] for h in hits]
-            rerank_top_k = request.rerank_top_k or request.top_k
-            ranked = await rerank_docs(request.query, documents, top_k=rerank_top_k)
-            # 按 reranker 的 index 重新排列 hits, 写入 rerank_score
-            reranked_hits = []
-            for item in ranked:
-                idx = item["index"]
-                if 0 <= idx < len(hits):
-                    h = dict(hits[idx])
-                    h["rerank_score"] = item["score"]
-                    reranked_hits.append(h)
-            hits = reranked_hits
-            logger.info("重排序生效: %d → %d hits", len(documents), len(hits))
-        except Exception as e:
-            logger.warning("重排序失败, 使用原始检索结果: %s", e)
+        # 3. Cross-Encoder 重排序 (M4)
+        if request.rerank and hits:
+            try:
+                from app.core.reranker_client import rerank as rerank_docs
+                documents = [h["content"] for h in hits]
+                rerank_top_k = request.rerank_top_k or request.top_k
+                ranked = await rerank_docs(request.query, documents, top_k=rerank_top_k)
+                # 按 reranker 的 index 重新排列 hits, 写入 rerank_score
+                reranked_hits = []
+                for item in ranked:
+                    idx = item["index"]
+                    if 0 <= idx < len(hits):
+                        h = dict(hits[idx])
+                        h["rerank_score"] = item["score"]
+                        reranked_hits.append(h)
+                hits = reranked_hits
+                logger.info("重排序生效: %d → %d hits", len(documents), len(hits))
+            except Exception as e:
+                logger.warning("重排序失败, 使用原始检索结果: %s", e)
 
-    # 4. 过滤阈值
-    if request.threshold > 0:
-        hits = [h for h in hits if h["score"] >= request.threshold]
+        # 4. 过滤阈值
+        if request.threshold > 0:
+            hits = [h for h in hits if h["score"] >= request.threshold]
 
-    search_hits = [SearchHit(**h) for h in hits]
-    logger.info("检索完成 kb=%s query='%s' rerank=%s → %d hits", kb_id_str, request.query[:50], request.rerank, len(search_hits))
+        search_hits = [SearchHit(**h) for h in hits]
+        logger.info("检索完成 kb=%s query='%s' rerank=%s → %d hits", kb_id_str, request.query[:50], request.rerank, len(search_hits))
 
-    return SearchResponse(
-        query=request.query,
-        total=len(search_hits),
-        hits=search_hits,
-    )
+        return SearchResponse(
+            query=request.query,
+            total=len(search_hits),
+            hits=search_hits,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("检索失败 kb=%s: %s", kb_id_str, e)
+        raise HTTPException(
+            status_code=503, detail="检索服务暂不可用，请稍后重试"
+        ) from e

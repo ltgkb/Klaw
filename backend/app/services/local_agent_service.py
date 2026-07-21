@@ -18,11 +18,6 @@ from app.schemas.local_agent import ToolInfo
 
 logger = logging.getLogger("claw.local_agent")
 
-# Skills 目录 (相对于项目根)
-SKILLS_DIRS = [
-    ("openclaw", Path(settings.openclaw_skills_dir) if hasattr(settings, "openclaw_skills_dir") else None),
-]
-
 
 def _project_root() -> Path:
     """项目根目录 (backend/ 的上一级)。"""
@@ -118,7 +113,18 @@ async def discover_tools() -> list[ToolInfo]:
 
 
 async def call_tool(tool_id: str, parameters: dict) -> dict:
-    """调用本地工具。优先 OpenClaw HTTP, 不可达时 dev 返回 mock 结果。"""
+    """调用本地工具。优先 OpenClaw HTTP; 仅连接异常且 dev 环境时返回 mock。"""
+    # 0. 校验 tool_id 存在 (本地 Skills 目录 + OpenClaw 在线工具)
+    tools = await discover_tools()
+    if tool_id not in {t.id for t in tools}:
+        return {
+            "tool_id": tool_id,
+            "success": False,
+            "result": None,
+            "error": f"本地工具不存在: {tool_id}",
+            "source": "local",
+        }
+
     # 1. 尝试 OpenClaw
     try:
         headers = {"Content-Type": "application/json"}
@@ -132,20 +138,36 @@ async def call_tool(tool_id: str, parameters: dict) -> dict:
             )
             if resp.status_code < 400:
                 return {"tool_id": tool_id, "success": True, "result": resp.json(), "source": "openclaw"}
+            # 4xx/5xx → 明确失败, 不伪装成功
             logger.warning("OpenClaw 工具调用返回 %s: %s", resp.status_code, resp.text[:200])
+            return {
+                "tool_id": tool_id,
+                "success": False,
+                "result": None,
+                "error": f"OpenClaw 工具调用失败 (HTTP {resp.status_code}): {resp.text[:200]}",
+                "source": "openclaw",
+            }
     except Exception as e:
-        logger.debug("OpenClaw 工具调用不可用, 回退 mock: %s", e)
+        logger.debug("OpenClaw 工具调用连接失败: %s", e)
 
-    # 2. dev 兜底: mock 结构化结果
+    # 2. 仅 dev 环境连接异常时 mock 兜底; 其它环境明确报错
+    if settings.environment == "dev":
+        return {
+            "tool_id": tool_id,
+            "success": True,
+            "result": {
+                "mock": True,
+                "message": f"[Mock 工具调用] {tool_id} 已接收参数 (离线兜底)",
+                "echo_parameters": parameters,
+            },
+            "source": "mock",
+        }
     return {
         "tool_id": tool_id,
-        "success": True,
-        "result": {
-            "mock": True,
-            "message": f"[Mock 工具调用] {tool_id} 已接收参数 (离线兜底)",
-            "echo_parameters": parameters,
-        },
-        "source": "mock",
+        "success": False,
+        "result": None,
+        "error": "OpenClaw 网关不可达, 且非 dev 环境不提供 mock 兜底",
+        "source": "openclaw",
     }
 
 
@@ -158,7 +180,7 @@ async def health() -> dict:
     try:
         async with httpx.AsyncClient(timeout=3) as client:
             resp = await client.get(f"{settings.hermes_url}/")
-            hermes_ok = resp.status_code < 500
+            hermes_ok = resp.status_code < 400
     except Exception:
         hermes_ok = False
 

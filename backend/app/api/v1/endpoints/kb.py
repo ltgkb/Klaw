@@ -21,7 +21,7 @@ from app.schemas.knowledge_base import (
     SearchRequest,
     SearchResponse,
 )
-from app.services import document_service, kb_service
+from app.services import deepdoc_service, document_service, kb_service
 
 router = APIRouter(prefix="/knowledge-bases", tags=["知识库"])
 
@@ -110,6 +110,14 @@ async def upload_document(
     if kb is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识库不存在")
 
+    # 校验文件扩展名 (与 DeepDoc 支持的 parser 类型一致)
+    filename = file.filename or "untitled"
+    if deepdoc_service.get_parser_type(filename) is None:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"不支持的文件类型: {filename}",
+        )
+
     # 读取文件内容
     file_data = await file.read()
     if len(file_data) > settings.max_upload_size:
@@ -166,6 +174,27 @@ async def delete_document(
     if doc is None or doc.kb_id != kb_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在")
     await document_service.delete_document(db, doc)
+
+
+@router.post("/{kb_id}/documents/{doc_id}/reparse", response_model=DocumentRead)
+async def reparse_document(
+    kb_id: uuid.UUID,
+    doc_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    current_user: CurrentUser,
+    db: DBSession,
+):
+    """重新解析文档: 清除旧 chunk 后后台重新执行 解析→分块→向量化→索引 管线。"""
+    kb = await kb_service.get_kb(db, kb_id, current_user.id)
+    if kb is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识库不存在")
+    doc = await document_service.get_document(db, doc_id)
+    if doc is None or doc.kb_id != kb_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在")
+
+    await document_service.reset_document_for_reparse(db, doc)
+    background_tasks.add_task(document_service.parse_and_index, doc.id, kb.id)
+    return DocumentRead.model_validate(doc)
 
 
 # ── Chunk 查询 ──

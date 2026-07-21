@@ -1,15 +1,47 @@
 """Agent 工作流 CRUD 业务逻辑。对齐 PRD 5.1 / 6.2。"""
 
 import logging
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent_flow import AgentFlow
-from app.models.execution import Execution
+from app.models.execution import Execution, ExecutionStatus
 from app.schemas.agent_flow import FlowCreate, FlowUpdate
 
 logger = logging.getLogger("claw.flow_service")
+
+# 惰性回收阈值: running/paused 超过该时长未更新即视为服务重启中断
+STALE_EXECUTION_MINUTES = 30
+
+
+async def _reap_stale_executions(db: AsyncSession, executions: list[Execution]) -> None:
+    """惰性回收: list/get 执行时, 把 running/paused 且 updated_at 超 30 分钟的记录置 failed。
+
+    服务重启后后台任务已丢失, DB 中的 running/paused 状态永远不会再推进,
+    这里在读取路径上惰性修正, 避免引入额外的后台巡检 (不改 main.py)。
+    """
+    now = datetime.now(timezone.utc)
+    reaped: list[Execution] = []
+    for ex in executions:
+        if ex.status not in (ExecutionStatus.running, ExecutionStatus.paused):
+            continue
+        updated = ex.updated_at
+        if updated is None:
+            continue
+        if updated.tzinfo is None:
+            updated = updated.replace(tzinfo=timezone.utc)
+        if now - updated > timedelta(minutes=STALE_EXECUTION_MINUTES):
+            ex.status = ExecutionStatus.failed
+            ex.error_message = "服务重启中断"
+            reaped.append(ex)
+    if reaped:
+        await db.commit()
+        # commit 后 updated_at (onupdate=func.now()) 会被标记过期, 刷新以便调用方直接读取
+        for ex in reaped:
+            await db.refresh(ex)
+        logger.info("惰性回收过期执行记录 %d 条", len(reaped))
 
 
 async def create_flow(db: AsyncSession, owner_id, data: FlowCreate) -> AgentFlow:
@@ -78,7 +110,14 @@ async def update_flow(db: AsyncSession, flow: AgentFlow, data: FlowUpdate) -> Ag
 
 
 async def delete_flow(db: AsyncSession, flow: AgentFlow) -> None:
-    """删除工作流及其执行记录 (cascade)。"""
+    """删除工作流及其执行记录 (cascade); 删除前摘除关联的定时任务 (契约3)。"""
+    from app.core import scheduler as scheduler_module
+    from app.models.schedule_job import ScheduleJob
+
+    jobs_result = await db.execute(select(ScheduleJob).where(ScheduleJob.flow_id == flow.id))
+    for job in jobs_result.scalars().all():
+        scheduler_module.unschedule_flow(str(job.id))
+
     await db.delete(flow)
     await db.commit()
     logger.info("工作流删除: %s", flow.id)
@@ -101,14 +140,19 @@ async def create_execution(db: AsyncSession, flow_id, input_data: dict | None = 
 
 
 async def list_executions(db: AsyncSession, flow_id) -> list[Execution]:
-    """列出工作流的执行记录。"""
+    """列出工作流的执行记录 (惰性回收过期 running/paused)。"""
     result = await db.execute(
         select(Execution).where(Execution.flow_id == flow_id).order_by(Execution.created_at.desc())
     )
-    return list(result.scalars().all())
+    executions = list(result.scalars().all())
+    await _reap_stale_executions(db, executions)
+    return executions
 
 
 async def get_execution(db: AsyncSession, execution_id) -> Execution | None:
-    """获取执行记录。"""
+    """获取执行记录 (惰性回收过期 running/paused)。"""
     result = await db.execute(select(Execution).where(Execution.id == execution_id))
-    return result.scalar_one_or_none()
+    execution = result.scalar_one_or_none()
+    if execution is not None:
+        await _reap_stale_executions(db, [execution])
+    return execution

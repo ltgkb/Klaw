@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from "react-router-dom"
-import { LayoutDashboard, BookOpen, Workflow, Settings, Clock, Brain, LogOut, Bot } from "lucide-react"
+import { LayoutDashboard, BookOpen, Workflow, Settings, Clock, Brain, LogOut, Bot, FolderOpen, Users } from "lucide-react"
 import { useAuthStore } from "@/store/auth"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -11,6 +11,8 @@ const navItems = [
   { to: "/agents", label: "对话 Agent", icon: Bot },
   { to: "/schedules", label: "定时任务", icon: Clock },
   { to: "/memories", label: "记忆系统", icon: Brain },
+  { to: "/files", label: "文件", icon: FolderOpen },
+  { to: "/users", label: "用户管理", icon: Users, adminOnly: true },
   { to: "/settings", label: "系统配置", icon: Settings },
 ]
 
@@ -31,7 +33,9 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           🐾 Claw-Native Agent
         </div>
         <nav className="flex-1 space-y-1 p-2">
-          {navItems.map((item) => (
+          {navItems
+            .filter((item) => !("adminOnly" in item) || user?.role === "admin")
+            .map((item) => (
             <NavLink
               key={item.to}
               to={item.to}

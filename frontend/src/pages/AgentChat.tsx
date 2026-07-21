@@ -16,14 +16,24 @@ export function AgentChat() {
   const [thinkingInfo, setThinkingInfo] = useState<string>("")
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // 当前选中的 flowId 快照, 供轮询回调校验, 防止切换 Agent 后旧轮询串台
+  const selectedIdRef = useRef<string | null>(null)
+  selectedIdRef.current = selectedId
 
   // 加载工作流列表
   useEffect(() => {
     flowApi.list().then((r) => setFlows(r.data.items)).catch(() => {})
   }, [])
 
-  // 选中工作流时加载历史
+  // 选中工作流时加载历史; 切换时停止上一轮轮询并复位 thinking (P1-2)
   useEffect(() => {
+    if (pollTimer.current) {
+      clearTimeout(pollTimer.current)
+      pollTimer.current = null
+    }
+    setThinking(false)
+    setThinkingInfo("")
+    setMessages([])
     if (!selectedId) return
     setLoadingMsgs(true)
     chatApi
@@ -80,9 +90,12 @@ export function AgentChat() {
     // 轮询消息, 直到出现新的助手回复 (最多 ~3 分钟)
     let attempts = 0
     const poll = async () => {
+      // 已切换到其它 Agent: 停止轮询, 不写消息 (P1-2 防串台)
+      if (selectedIdRef.current !== flowId) return
       attempts += 1
       try {
         const r = await chatApi.messages(flowId)
+        if (selectedIdRef.current !== flowId) return
         const list = r.data
         // 持久化列表已含本次用户消息; 若又多出一条助手消息, 即为回答
         if (list.length > beforeCount + 1) {
@@ -115,7 +128,7 @@ export function AgentChat() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-3.5rem)]">
+    <div className="flex h-screen">
       {/* 左侧: Agent 列表 */}
       <div className="w-60 shrink-0 border-r bg-secondary/20 overflow-y-auto">
         <div className="border-b p-3">
@@ -162,13 +175,20 @@ export function AgentChat() {
           </div>
         ) : (
           <>
-            <div className="border-b px-4 py-2">
-              <h1 className="text-sm font-semibold">
-                {flows.find((f) => f.id === selectedId)?.name}
-              </h1>
-              <p className="text-[11px] text-muted-foreground">
-                对话式运行 · 多轮历史作为 {`{history}`} 注入 LLM 节点
-              </p>
+            <div className="flex items-center gap-2 border-b px-4 py-2">
+              <Link to="/flows" title="返回工作流列表">
+                <Button variant="ghost" size="sm">
+                  <ArrowLeft className="h-4 w-4" />
+                </Button>
+              </Link>
+              <div>
+                <h1 className="text-sm font-semibold">
+                  {flows.find((f) => f.id === selectedId)?.name}
+                </h1>
+                <p className="text-[11px] text-muted-foreground">
+                  对话式运行 · 多轮历史作为 {`{history}`} 注入 LLM 节点
+                </p>
+              </div>
             </div>
 
             <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto p-4">

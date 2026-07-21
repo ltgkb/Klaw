@@ -34,7 +34,8 @@ export function ScheduleList() {
 
   const fetchFlows = async () => {
     try {
-      const resp = await flowApi.list()
+      // 拉取足够大的分页, 避免工作流超过 20 个时下拉选项缺失 (P2-13)
+      const resp = await flowApi.list(1, 100)
       setFlows(resp.data.items)
     } catch {
       // 错误由拦截器处理

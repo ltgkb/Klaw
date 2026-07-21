@@ -33,10 +33,22 @@ def _mock_vector(text: str) -> list[float]:
     return [v / norm for v in vec]
 
 
+def _validate_vectors(vectors: list[list[float]], expected_count: int) -> None:
+    """校验向量数量与维度, 不符即 raise (调用方据此降级或置 failed)。"""
+    if len(vectors) != expected_count:
+        raise ValueError(f"向量数量不符: 期望 {expected_count}, 实际 {len(vectors)}")
+    for v in vectors:
+        if len(v) != settings.embedding_dim:
+            raise ValueError(
+                f"向量维度不符: 期望 {settings.embedding_dim}, 实际 {len(v)}"
+            )
+
+
 async def embed_texts(texts: list[str], timeout: float = 60.0) -> list[list[float]]:
     """批量文本向量化。返回与输入等长的向量列表 (每个 embedding_dim 维)。
 
     优先级: Embedding API (OpenAI 兼容 /v1/embeddings) → TEI sidecar → dev 哈希兜底。
+    返回值均经过 _validate_vectors 校验, 数量/维度不符即 raise。
     """
     if not texts:
         return []
@@ -48,7 +60,9 @@ async def embed_texts(texts: list[str], timeout: float = 60.0) -> list[list[floa
     cfg = embedding_config.get()
     if cfg["base_url"] and cfg["api_key"]:
         try:
-            return await _embed_via_api(cleaned, cfg["base_url"], cfg["api_key"], cfg["model"], timeout)
+            vectors = await _embed_via_api(cleaned, cfg["base_url"], cfg["api_key"], cfg["model"], timeout)
+            _validate_vectors(vectors, len(cleaned))
+            return vectors
         except Exception as e:
             logger.warning("Embedding API 调用失败, 回落 TEI: %s", e)
 
@@ -65,31 +79,43 @@ async def embed_texts(texts: list[str], timeout: float = 60.0) -> list[list[floa
                 )
                 resp.raise_for_status()
                 out.extend(resp.json())
-        logger.info("TEI 向量化: %d texts → %d dims", len(cleaned), len(out[0]) if out else 0)
-        return out
     except Exception as e:
         if settings.environment == "dev":
             logger.warning("TEI 不可达, dev 回退哈希向量: %s", e)
             return [_mock_vector(t) for t in cleaned]
         raise
 
+    # 维度/数量校验放在 try 外: TEI 返回了错误数据时即使 dev 也不应静默兜底
+    _validate_vectors(out, len(cleaned))
+    logger.info("TEI 向量化: %d texts → %d dims", len(cleaned), len(out[0]) if out else 0)
+    return out
+
 
 async def _embed_via_api(
     texts: list[str], base_url: str, api_key: str, model: str, timeout: float
 ) -> list[list[float]]:
-    """调用 OpenAI 兼容的 /v1/embeddings 端点。"""
+    """调用 OpenAI 兼容的 /v1/embeddings 端点 (分批 64, 避免超长 payload)。
+
+    返回数量与输入不符时 raise, 由调用方降级到 TEI。
+    """
     payload_model = model or settings.embedding_model
+    BATCH = 64
+    vectors: list[list[float]] = []
     async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(
-            f"{base_url.rstrip('/')}/embeddings",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={"model": payload_model, "input": texts},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    # OpenAI 格式: {data: [{embedding: [...]}, ...]} (按 index 排序)
-    items = sorted(data.get("data", []), key=lambda x: x.get("index", 0))
-    vectors = [it["embedding"] for it in items]
+        for i in range(0, len(texts), BATCH):
+            batch = texts[i:i + BATCH]
+            resp = await client.post(
+                f"{base_url.rstrip('/')}/embeddings",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"model": payload_model, "input": batch},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            # OpenAI 格式: {data: [{embedding: [...]}, ...]} (按 index 排序)
+            items = sorted(data.get("data", []), key=lambda x: x.get("index", 0))
+            vectors.extend(it["embedding"] for it in items)
+    if len(vectors) != len(texts):
+        raise ValueError(f"Embedding API 返回数量不符: 期望 {len(texts)}, 实际 {len(vectors)}")
     logger.info("Embedding API 向量化: %d texts → %d dims", len(vectors), len(vectors[0]) if vectors else 0)
     return vectors
 

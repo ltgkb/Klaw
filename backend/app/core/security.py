@@ -11,17 +11,20 @@ from app.core.config import settings
 
 # ── 密码 ──
 
+def _to_bcrypt_bytes(password: str) -> bytes:
+    """bcrypt 只处理前 72 字节，统一在此截断，避免超长密码触发 ValueError。"""
+    return password.encode("utf-8")[:72]
+
+
 def hash_password(password: str) -> str:
     """bcrypt 哈希密码。bcrypt 限制 72 字节，先截断。"""
-    pwd_bytes = password.encode("utf-8")[:72]
-    return bcrypt.hashpw(pwd_bytes, bcrypt.gensalt()).decode("ascii")
+    return bcrypt.hashpw(_to_bcrypt_bytes(password), bcrypt.gensalt()).decode("ascii")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
     """校验明文密码与哈希。"""
-    pwd_bytes = plain.encode("utf-8")[:72]
     try:
-        return bcrypt.checkpw(pwd_bytes, hashed.encode("ascii"))
+        return bcrypt.checkpw(_to_bcrypt_bytes(plain), hashed.encode("ascii"))
     except (ValueError, TypeError):
         return False
 

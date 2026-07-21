@@ -10,12 +10,20 @@ from datetime import datetime
 
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 from app.core.config import settings
 
 logger = logging.getLogger("claw.scheduler")
 
 scheduler: AsyncIOScheduler | None = None
+
+_CRON_FIELDS = ("minute", "hour", "day", "month", "day_of_week")
+
+
+def _scheduler_timezone() -> str:
+    """调度器时区 (WP1 在 config.py 新增 scheduler_timezone; 未就绪时回落默认值)。"""
+    return getattr(settings, "scheduler_timezone", "Asia/Shanghai")
 
 
 def init_scheduler():
@@ -24,7 +32,12 @@ def init_scheduler():
     jobstore = SQLAlchemyJobStore(url=settings.sync_postgres_url)
     scheduler = AsyncIOScheduler(
         jobstores={"default": jobstore},
-        timezone="Asia/Shanghai",
+        timezone=_scheduler_timezone(),
+        job_defaults={
+            "misfire_grace_time": 3600,  # 错过触发 1 小时内仍补执行
+            "coalesce": True,            # 多次错过只补跑一次
+            "max_instances": 1,          # 同一 job 不并发执行
+        },
     )
     scheduler.start()
     logger.info("APScheduler 已启动 (PostgreSQL JobStore)")
@@ -61,21 +74,21 @@ def schedule_flow(
         logger.error("调度器未初始化")
         return None
 
-    # 解析 cron 表达式为 APScheduler CronTrigger 字段
+    # 严格校验 cron: 必须 5 段, 且能被 CronTrigger 解析 (非法表达式抛 ValueError)
     parts = cron.split()
-    trigger_kwargs = {}
-    cron_fields = ["minute", "hour", "day", "month", "day_of_week"]
-    for i, part in enumerate(parts):
-        if i < len(cron_fields):
-            trigger_kwargs[cron_fields[i]] = part
+    if len(parts) != 5:
+        raise ValueError(f"cron 表达式必须包含 5 个字段 (分 时 日 月 周): {cron}")
+    trigger = CronTrigger(
+        timezone=_scheduler_timezone(),
+        **dict(zip(_CRON_FIELDS, parts)),
+    )
 
     job = scheduler.add_job(
         _execute_scheduled_flow,
-        "cron",
+        trigger,
         id=job_id,
         name=name,
         kwargs={"flow_id": str(flow_id), "input_data": input_data or {}},
-        **trigger_kwargs,
         replace_existing=True,
     )
     logger.info("定时任务已添加: job_id=%s flow=%s cron=%s next_run=%s", job_id, flow_id, cron, job.next_run_time)

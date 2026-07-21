@@ -4,10 +4,14 @@
 存储复用 MinIO (路径 /workspaces/{user_id}/{file_id}/{filename})。
 """
 
+import asyncio
+import logging
 import uuid
+from urllib.parse import quote
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.responses import Response
+from minio.error import S3Error
 from sqlalchemy import select
 
 from app.core.config import settings
@@ -21,7 +25,23 @@ from app.core.minio_client import (
 from app.models.workspace_file import WorkspaceFile
 from app.schemas.file import FileRead, FileShareResponse
 
+logger = logging.getLogger("claw.files")
+
 router = APIRouter(prefix="/files", tags=["文件工作区"])
+
+
+def _content_disposition(filename: str) -> str:
+    """RFC 5987 编码的 Content-Disposition, 支持中文等非 ASCII 文件名。"""
+    fallback = filename.encode("ascii", "replace").decode("ascii").replace('"', "_")
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename, safe='')}"
+
+
+def _storage_unavailable(e: Exception) -> HTTPException:
+    logger.warning("MinIO 对象存储不可用: %s", e)
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="对象存储服务暂不可用, 请稍后重试",
+    )
 
 
 @router.post("", response_model=FileRead, status_code=status.HTTP_201_CREATED)
@@ -44,7 +64,12 @@ async def upload_workspace_file(
     filename = file.filename or "untitled"
     object_name = f"workspaces/{current_user.id}/{file_id}/{filename}"
 
-    upload_file(object_name, file_data, file.content_type or "application/octet-stream")
+    try:
+        await asyncio.to_thread(
+            upload_file, object_name, file_data, file.content_type or "application/octet-stream"
+        )
+    except S3Error as e:
+        raise _storage_unavailable(e) from e
 
     wf = WorkspaceFile(
         id=file_id,
@@ -75,11 +100,14 @@ async def list_workspace_files(current_user: CurrentUser, db: DBSession):
 async def download_workspace_file(file_id: uuid.UUID, current_user: CurrentUser, db: DBSession):
     """下载工作区文件。"""
     wf = await _get_owned_file(db, file_id, current_user.id)
-    data = download_file(wf.object_name)
+    try:
+        data = await asyncio.to_thread(download_file, wf.object_name)
+    except S3Error as e:
+        raise _storage_unavailable(e) from e
     return Response(
         content=data,
         media_type=wf.content_type,
-        headers={"Content-Disposition": f'attachment; filename="{wf.filename}"'},
+        headers={"Content-Disposition": _content_disposition(wf.filename)},
     )
 
 
@@ -88,9 +116,10 @@ async def delete_workspace_file(file_id: uuid.UUID, current_user: CurrentUser, d
     """删除工作区文件 (含 MinIO 对象)。"""
     wf = await _get_owned_file(db, file_id, current_user.id)
     try:
-        delete_file(wf.object_name)
-    except Exception:
-        pass
+        await asyncio.to_thread(delete_file, wf.object_name)
+    except Exception as e:
+        # 对象存储删除失败不阻塞元数据删除, 但记录告警便于排查孤儿对象
+        logger.warning("MinIO 删除对象失败 %s: %s", wf.object_name, e)
     await db.delete(wf)
     await db.commit()
 
@@ -99,7 +128,10 @@ async def delete_workspace_file(file_id: uuid.UUID, current_user: CurrentUser, d
 async def share_workspace_file(file_id: uuid.UUID, current_user: CurrentUser, db: DBSession):
     """生成预签名分享链接 (默认 1 小时有效)。"""
     wf = await _get_owned_file(db, file_id, current_user.id)
-    url = get_presigned_url(wf.object_name, expires_hours=1)
+    try:
+        url = await asyncio.to_thread(get_presigned_url, wf.object_name, 1)
+    except S3Error as e:
+        raise _storage_unavailable(e) from e
     return FileShareResponse(url=url, expires_hours=1)
 
 

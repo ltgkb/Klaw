@@ -5,6 +5,7 @@ import {
   localAgentApi,
   pushChannelApi,
   systemApi,
+  notifyApi,
   type ProviderInfo,
   type ModelInfo,
   type ChatResponse,
@@ -12,14 +13,16 @@ import {
   type PushChannelRead,
   type PushChannelType,
   type EmbeddingConfig,
+  type LocalAgentHealth,
 } from "@/lib/api"
+import { toast } from "@/lib/toast"
 import { useAuthStore } from "@/store/auth"
 import { cn } from "@/lib/utils"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Loader2, Send, Cpu, Cloud, Server, KeyRound, Trash2, Wrench, Plus } from "lucide-react"
+import { Loader2, Send, Cpu, Cloud, Server, KeyRound, Trash2, Wrench, Plus, Zap } from "lucide-react"
 
 type StatusMeta = { label: string; dotClass: string }
 
@@ -80,6 +83,10 @@ export function Settings() {
   const [chField1, setChField1] = useState("")
   const [chField2, setChField2] = useState("")
   const [chSaving, setChSaving] = useState(false)
+  const [testingId, setTestingId] = useState<string | null>(null)
+
+  // 本地 Agent 健康 (openclaw / hermes 连通性)
+  const [agentHealth, setAgentHealth] = useState<LocalAgentHealth | null>(null)
 
   // Embedding 模型 API
   const [emb, setEmb] = useState<EmbeddingConfig | null>(null)
@@ -96,28 +103,28 @@ export function Settings() {
 
   const loadAll = async () => {
     setLoading(true)
-    try {
-      const [providersResp, modelsResp, toolsResp, channelsResp, embResp, llmResp] = await Promise.all([
-        providerApi.list(),
-        providerApi.listModels(),
-        localAgentApi.listTools(),
-        pushChannelApi.list(),
-        systemApi.getEmbedding(),
-        systemApi.getLlmDefault(),
-      ])
-      setProviders(providersResp.data)
-      setModels(modelsResp.data)
-      setTools(toolsResp.data)
-      setChannels(channelsResp.data)
-      setEmb(embResp.data)
-      setEmbBase(embResp.data.base_url)
-      setEmbModel(embResp.data.model)
-      setLlmDefault(llmResp.data.default_model || "")
-    } catch {
-      // 错误由拦截器处理
-    } finally {
-      setLoading(false)
+    // 各区块独立加载, 单个接口失败不影响其它区块展示 (Promise.allSettled)
+    const [providersR, modelsR, toolsR, channelsR, embR, llmR, healthR] = await Promise.allSettled([
+      providerApi.list(),
+      providerApi.listModels(),
+      localAgentApi.listTools(),
+      pushChannelApi.list(),
+      systemApi.getEmbedding(),
+      systemApi.getLlmDefault(),
+      localAgentApi.health(),
+    ])
+    if (providersR.status === "fulfilled") setProviders(providersR.value.data)
+    if (modelsR.status === "fulfilled") setModels(modelsR.value.data)
+    if (toolsR.status === "fulfilled") setTools(toolsR.value.data)
+    if (channelsR.status === "fulfilled") setChannels(channelsR.value.data)
+    if (embR.status === "fulfilled") {
+      setEmb(embR.value.data)
+      setEmbBase(embR.value.data.base_url)
+      setEmbModel(embR.value.data.model)
     }
+    if (llmR.status === "fulfilled") setLlmDefault(llmR.value.data.default_model || "")
+    if (healthR.status === "fulfilled") setAgentHealth(healthR.value.data)
+    setLoading(false)
   }
 
   useEffect(() => {
@@ -194,9 +201,38 @@ export function Settings() {
     }
   }
 
-  const handleDeleteChannel = async (id: string) => {
-    await pushChannelApi.delete(id)
-    await loadAll()
+  const handleDeleteChannel = async (id: string, name: string) => {
+    if (!confirm(`确认删除推送渠道「${name}」？`)) return
+    try {
+      await pushChannelApi.delete(id)
+      toast.success("渠道已删除")
+      await loadAll()
+    } catch {
+      // 拦截器处理
+    }
+  }
+
+  // 测试发送: 用已保存渠道发一条测试消息
+  const handleTestChannel = async (c: PushChannelRead) => {
+    setTestingId(c.id)
+    try {
+      const resp = await notifyApi.send({
+        title: "测试推送",
+        content: `来自 Claw 平台的渠道连通性测试 (${c.name})`,
+        channels: [],
+        channel_ids: [c.id],
+      })
+      const failed = resp.data.results.filter((r) => !r.success)
+      if (failed.length === 0) {
+        toast.success(`渠道「${c.name}」测试发送成功`)
+      } else {
+        toast.error(`渠道「${c.name}」发送失败: ${failed[0].error ?? "未知错误"}`)
+      }
+    } catch {
+      // 拦截器处理
+    } finally {
+      setTestingId(null)
+    }
   }
 
   const handleSaveEmb = async () => {
@@ -465,9 +501,25 @@ export function Settings() {
                           {c.type}
                         </span>
                       </div>
-                      <Button variant="ghost" size="icon" onClick={() => handleDeleteChannel(c.id)}>
-                        <Trash2 className="h-4 w-4 text-destructive" />
-                      </Button>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          title="测试发送"
+                          disabled={testingId === c.id}
+                          onClick={() => handleTestChannel(c)}
+                        >
+                          {testingId === c.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Zap className="h-4 w-4" />
+                          )}
+                          测试
+                        </Button>
+                        <Button variant="ghost" size="icon" onClick={() => handleDeleteChannel(c.id, c.name)}>
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </div>
                     </div>
                   ))
                 )}
@@ -521,7 +573,21 @@ export function Settings() {
                 </div>
               </div>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-3">
+              {/* OpenClaw / Hermes 健康状态 */}
+              <div className="flex flex-wrap items-center gap-4 rounded-lg border p-3 text-sm">
+                <span className="text-muted-foreground">本地 Agent 健康:</span>
+                <span className="flex items-center gap-1.5">
+                  <span className={agentHealth?.openclaw ? "h-2 w-2 rounded-full bg-green-500" : "h-2 w-2 rounded-full bg-red-500"} />
+                  OpenClaw
+                  <span className="text-xs text-muted-foreground">{agentHealth?.openclaw ? "在线" : "离线"}</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className={agentHealth?.hermes ? "h-2 w-2 rounded-full bg-green-500" : "h-2 w-2 rounded-full bg-red-500"} />
+                  Hermes
+                  <span className="text-xs text-muted-foreground">{agentHealth?.hermes ? "在线" : "离线"}</span>
+                </span>
+              </div>
               {tools.length === 0 ? (
                 <p className="py-4 text-center text-sm text-muted-foreground">未发现本地工具</p>
               ) : (

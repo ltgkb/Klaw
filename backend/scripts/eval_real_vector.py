@@ -2,7 +2,7 @@
 
 用与 eval_retrieval.py 相同的数据集, 用真实语义向量(paraphrase-multilingual-MiniLM-L12-v2)
 做检索, 产出 Hit@5/MRR/Recall@5, 与远端 BM25/哈希向量数字对比。
-用法 (Mac 本地): cd backend && PYTHONPATH=$PWD uv run python scripts/eval_real_vector.py
+用法 (Mac 本地): cd backend && PYTHONPATH=$PWD uv run --group eval python scripts/eval_real_vector.py
 """
 
 DOCS = [

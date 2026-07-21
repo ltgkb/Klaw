@@ -10,12 +10,15 @@
 """
 
 import asyncio
+import json
 import logging
 import re
+import time
 import uuid
 from collections import defaultdict, deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -59,6 +62,11 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
 
         try:
             # ── 1. 标记为 running ──
+            # 启动前先复查: pending 期可能已被取消, 避免取消后仍被执行
+            await db.refresh(execution)
+            if execution.status == ExecutionStatus.cancelled:
+                logger.info("执行启动前已取消: %s", execution_id)
+                return
             execution.status = ExecutionStatus.running
             execution.node_states = {}
             await db.commit()
@@ -109,10 +117,19 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
                 if node_id not in reachable:
                     continue
 
-                # ── 暂停检查 (人机交互) ──
+                # ── 暂停/取消检查 (人机交互) ──
                 await db.refresh(execution)
+                if execution.status == ExecutionStatus.cancelled:
+                    # 运行中被取消: 保存已有输出后终止, 不执行后续节点
+                    execution.output = node_outputs
+                    await db.commit()
+                    logger.info("执行运行中被取消: %s", execution_id)
+                    return
                 if execution.status == ExecutionStatus.paused:
-                    # 等待恢复 (轮询 DB, 每 2s 检查一次)
+                    # 等待恢复 (轮询 DB, 每 2s 检查一次); 暂停超 24h 自动取消
+                    paused_at = execution.updated_at or datetime.now(timezone.utc)
+                    if paused_at.tzinfo is None:
+                        paused_at = paused_at.replace(tzinfo=timezone.utc)
                     while execution.status == ExecutionStatus.paused:
                         await asyncio.sleep(2)
                         await db.refresh(execution)
@@ -120,8 +137,16 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
                             execution.output = node_outputs
                             await db.commit()
                             return
+                        if datetime.now(timezone.utc) - paused_at > timedelta(hours=24):
+                            execution.status = ExecutionStatus.cancelled
+                            execution.error_message = "暂停超过 24 小时, 自动取消"
+                            execution.output = node_outputs
+                            await db.commit()
+                            logger.info("执行暂停超时自动取消: %s", execution_id)
+                            return
 
                 # 初始化节点状态
+                start_mono = time.monotonic()
                 node_states = dict(execution.node_states or {})
                 node_states[node_id] = {
                     "status": "running",
@@ -140,7 +165,9 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
                         matched_case_id, case_name = _evaluate_condition_cases(config, context)
                         output = case_name
                     else:
-                        output = await _execute_node(node_type, config, context, user, node_outputs, label=label)
+                        output = await _run_with_retry(
+                            node_type, config, context, user, node_outputs, label
+                        )
                     node_outputs[node_id] = output
                     # 按节点 id + label 都存, 支持引用 {label} / {node_id}; @content 为别名
                     context[node_id] = output
@@ -168,6 +195,7 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
                         "status": "success",
                         "output": output if isinstance(output, str) else str(output),
                         "ended_at": datetime.now(timezone.utc).isoformat(),
+                        "duration_ms": int((time.monotonic() - start_mono) * 1000),
                     }
                     if matched_case_id is not None:
                         node_states[node_id]["matched_case"] = matched_case_id
@@ -185,6 +213,7 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
                         "status": "failed",
                         "error": str(node_err),
                         "ended_at": datetime.now(timezone.utc).isoformat(),
+                        "duration_ms": int((time.monotonic() - start_mono) * 1000),
                     }
                     execution.node_states = node_states
                     flag_modified(execution, "node_states")
@@ -196,8 +225,24 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
                     return
 
             # ── 5. 全部完成 ──
-            execution.status = ExecutionStatus.success
+            await db.refresh(execution)
+            # 被条件分支裁剪、未执行的节点补 skipped 标记 (契约2)
+            node_states = dict(execution.node_states or {})
+            for n in nodes:
+                nid = n["id"]
+                if nid not in node_states:
+                    n_data = n.get("data", {})
+                    node_states[nid] = {
+                        "status": "skipped",
+                        "label": n_data.get("label", nid),
+                        "type": n.get("type", "text"),
+                    }
+            execution.node_states = node_states
+            flag_modified(execution, "node_states")
             execution.output = node_outputs
+            # 仅仍为 running 时才置 success (最后节点执行期间可能已被取消)
+            if execution.status == ExecutionStatus.running:
+                execution.status = ExecutionStatus.success
             await db.commit()
 
             logger.info("工作流执行完成: flow=%s execution=%s", flow_id, execution_id)
@@ -244,6 +289,35 @@ def _topological_sort(nodes: list[dict], edges: list[dict]) -> list[dict]:
     return ordered
 
 
+async def _run_with_retry(
+    node_type: str,
+    config: dict,
+    context: dict,
+    user,
+    node_outputs: dict,
+    label: str,
+) -> str:
+    """按节点 config 的 retry / retry_interval 做指数退避重试。
+
+    config:
+      - retry: 失败后的重试次数 (默认 0, 不重试)
+      - retry_interval: 基础重试间隔秒数 (默认 1), 第 n 次重试等待 interval * 2^(n-1)
+    """
+    max_retries = int(config.get("retry") or 0)
+    base_interval = float(config.get("retry_interval") or 1)
+    attempt = 0
+    while True:
+        try:
+            return await _execute_node(node_type, config, context, user, node_outputs, label=label)
+        except Exception:
+            if attempt >= max_retries:
+                raise
+            delay = base_interval * (2 ** attempt)
+            logger.warning("节点 %s 执行失败, %.2fs 后进行第 %d 次重试", label, delay, attempt + 1)
+            await asyncio.sleep(delay)
+            attempt += 1
+
+
 async def _execute_node(
     node_type: str,
     config: dict,
@@ -255,7 +329,7 @@ async def _execute_node(
     """执行单个节点, 返回输出文本。
 
     Args:
-        node_type: start / end / llm / retrieval / condition / text / notify / memory
+        node_type: start / end / llm / retrieval / condition / text / http / notify / memory
         config: 节点配置 (从 dag.data.config 读取)
         context: 累积上下文 (按 节点id / label / 命名变量 存)
         user: User 对象 (LLM API Key)
@@ -269,7 +343,9 @@ async def _execute_node(
     elif node_type == "llm":
         return await _execute_llm_node(config, context, user)
     elif node_type == "retrieval":
-        return await _execute_retrieval_node(config, context)
+        return await _execute_retrieval_node(config, context, user)
+    elif node_type == "http":
+        return await _execute_http_node(config, context)
     elif node_type == "condition":
         return await _execute_condition_node(config, context)
     elif node_type == "text":
@@ -351,15 +427,18 @@ async def _execute_llm_node(config: dict, context: dict, user=None) -> str:
     return await llm_chat(messages, model=model, user=user)
 
 
-async def _execute_retrieval_node(config: dict, context: dict) -> str:
+async def _execute_retrieval_node(config: dict, context: dict, user=None) -> str:
     """知识库检索节点。复用 M2 混合检索。
 
     config:
       - kb_id: 知识库 UUID
       - query_template: 查询模板 (支持 {var})
       - top_k: 返回条数
+
+    安全: 校验 KB.owner == flow.owner, 防止跨用户检索他人知识库。
     """
     from app.core.database import async_session_factory
+    from app.models.knowledge_base import KnowledgeBase
 
     kb_id = config.get("kb_id")
     if not kb_id:
@@ -370,6 +449,17 @@ async def _execute_retrieval_node(config: dict, context: dict) -> str:
     query = _render_template(query_template, context)
 
     async with async_session_factory() as db:
+        try:
+            kb_uuid = uuid.UUID(str(kb_id))
+        except (ValueError, AttributeError, TypeError):
+            return "[检索节点 kb_id 无效]"
+        kb_result = await db.execute(select(KnowledgeBase).where(KnowledgeBase.id == kb_uuid))
+        kb = kb_result.scalar_one_or_none()
+        if kb is None:
+            return "[知识库不存在]"
+        if user is None or kb.owner_id != user.id:
+            raise PermissionError("检索节点无权访问该知识库 (KB 归属与工作流归属不一致)")
+
         request = SearchRequest(query=query, top_k=top_k)
         result = await document_service.search(db, kb_id, request)
 
@@ -452,6 +542,64 @@ def _execute_text_node(config: dict, context: dict) -> str:
     """
     template = config.get("template", "")
     return _render_template(template, context)
+
+
+async def _execute_http_node(config: dict, context: dict) -> str:
+    """HTTP 请求节点 (契约2): 调外部 HTTP API, 响应文本存入 context 供下游引用。
+
+    config:
+      - method: HTTP 方法 (GET/POST/PUT/PATCH/DELETE, 默认 GET)
+      - url: 请求地址 (支持 {var} 占位符)
+      - headers: 请求头 dict (值支持 {var})
+      - body: 请求体 (dict/list 或可解析为 JSON 的字符串按 JSON 发送, 字符串值支持 {var};
+              其它字符串按模板渲染后以文本发送)
+      - timeout_s: 超时秒数 (默认 30)
+    """
+    method = (config.get("method") or "GET").upper()
+    url = _render_template(str(config.get("url") or ""), context).strip()
+    if not url:
+        return "[HTTP 节点未配置 url]"
+
+    headers = {
+        str(k): _render_template(str(v), context)
+        for k, v in (config.get("headers") or {}).items()
+    }
+    timeout_s = float(config.get("timeout_s") or 30)
+
+    request_kwargs: dict = {}
+    body = config.get("body")
+    if body is not None and method not in ("GET", "HEAD"):
+        payload = body if isinstance(body, (dict, list)) else _try_parse_json(str(body))
+        if payload is not None:
+            # JSON body: 递归渲染其中的字符串值, 避免 {var} 与 JSON 花括号互相干扰
+            request_kwargs["json"] = _render_json_templates(payload, context)
+        else:
+            request_kwargs["content"] = _render_template(str(body), context)
+
+    async with httpx.AsyncClient(timeout=timeout_s) as client:
+        resp = await client.request(method, url, headers=headers, **request_kwargs)
+    resp.raise_for_status()
+    return resp.text
+
+
+def _try_parse_json(raw: str):
+    """尝试把字符串解析为 JSON dict/list; 失败返回 None。"""
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    return parsed if isinstance(parsed, (dict, list)) else None
+
+
+def _render_json_templates(value, context: dict):
+    """递归渲染 JSON 结构中的字符串模板。"""
+    if isinstance(value, str):
+        return _render_template(value, context)
+    if isinstance(value, dict):
+        return {k: _render_json_templates(v, context) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_render_json_templates(v, context) for v in value]
+    return value
 
 
 def _render_template(template: str, context: dict) -> str:

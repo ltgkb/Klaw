@@ -6,7 +6,7 @@ ES 8.11 原生支持 dense_vector + knn，IK 插件提供中文分词。
 
 import logging
 
-from elasticsearch import AsyncElasticsearch
+from elasticsearch import AsyncElasticsearch, NotFoundError
 
 from app.core.config import settings
 
@@ -81,10 +81,13 @@ async def index_chunks_bulk(chunks: list[dict]) -> int:
     """批量索引 chunk 到 ES。
 
     每个 chunk dict 需包含: chunk_id, kb_id, doc_id, content, content_type, page, embedding, metadata。
+    开头确保索引存在; bulk 响应中任何条目出错即解析错误并 raise。
     返回成功索引的文档数。
     """
     if not chunks:
         return 0
+
+    await ensure_kb_index()
 
     es = get_es_client()
     index_name = settings.es_kb_index
@@ -105,10 +108,10 @@ async def index_chunks_bulk(chunks: list[dict]) -> int:
 
     result = await es.bulk(operations=actions, refresh=True)
     if result.get("errors"):
-        errors = [item for item in result.get("items", []) if "error" in item.get("index", {})]
-        logger.error("ES bulk 索引部分失败: %d/%d", len(errors), len(chunks))
-    else:
-        logger.info("ES bulk 索引成功: %d chunks", len(chunks))
+        errors = [item["index"]["error"] for item in result.get("items", []) if "error" in item.get("index", {})]
+        logger.error("ES bulk 索引部分失败: %d/%d — %s", len(errors), len(chunks), errors[:3])
+        raise RuntimeError(f"ES bulk 索引失败 {len(errors)}/{len(chunks)}: {errors[0] if errors else 'unknown'}")
+    logger.info("ES bulk 索引成功: %d chunks", len(chunks))
     return len(chunks)
 
 
@@ -117,15 +120,19 @@ async def hybrid_search(
     query_vector: list[float],
     query_text: str,
     top_k: int = 10,
-    num_candidates: int = 200,
+    num_candidates: int | None = None,
 ) -> list[dict]:
     """混合检索: kNN 向量 + BM25 全文 (disjunction)。
 
     ES 8.11 使用 knn + query bool should 组合 (RRF retriever 需 8.14+)。
+    num_candidates 默认 max(200, top_k*10), 保证 kNN 召回质量。
+    索引缺失 (NotFound) 时自动重建索引并重试一次。
     返回 [{chunk_id, doc_id, content, content_type, page, score, metadata}, ...]
     """
     es = get_es_client()
     index_name = settings.es_kb_index
+    if num_candidates is None:
+        num_candidates = max(200, top_k * 10)
 
     body = {
         "size": top_k,
@@ -144,7 +151,12 @@ async def hybrid_search(
         },
     }
 
-    result = await es.search(index=index_name, body=body)
+    try:
+        result = await es.search(index=index_name, body=body)
+    except NotFoundError:
+        logger.warning("ES 索引不存在, 重建后重试一次: %s", index_name)
+        await ensure_kb_index()
+        result = await es.search(index=index_name, body=body)
     hits = result.get("hits", {}).get("hits", [])
 
     results = []

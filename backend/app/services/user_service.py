@@ -1,6 +1,7 @@
 """用户业务逻辑。"""
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import create_access_token, create_refresh_token, hash_password, verify_password
@@ -28,7 +29,12 @@ async def register_user(db: AsyncSession, data: UserRegister) -> User:
         role=UserRole.admin if is_first else UserRole.user,
     )
     db.add(user)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # 并发注册竞态：邮箱唯一约束兜底，转 409
+        await db.rollback()
+        raise ValueError("该邮箱已注册") from None
     await db.refresh(user)
     return user
 

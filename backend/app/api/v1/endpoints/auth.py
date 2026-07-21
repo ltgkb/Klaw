@@ -47,7 +47,16 @@ async def refresh_token(data: RefreshRequest, db: DBSession):
     if payload is None or payload.get("type") != "refresh":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="无效的 refresh token")
 
-    result = await db.execute(select(User).where(User.id == uuid.UUID(payload["sub"])))
+    # 畸形 sub（缺失或非合法 UUID）按未认证处理，不抛 500
+    sub = payload.get("sub")
+    try:
+        user_uuid = uuid.UUID(sub)
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="无效的 refresh token"
+        ) from None
+
+    result = await db.execute(select(User).where(User.id == user_uuid))
     user = result.scalar_one_or_none()
     if user is None or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在或已禁用")

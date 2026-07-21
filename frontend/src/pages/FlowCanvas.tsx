@@ -34,13 +34,14 @@ import {
   Bell,
   BrainCog,
   Square,
+  Globe,
 } from "lucide-react"
 import { flowApi, systemApi, type FlowRead, type NodeType, type ExecutionRead, type NodeState } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { NodeToolbox } from "@/components/flow/NodeToolbox"
 import { NodeConfigPanel } from "@/components/flow/NodeConfigPanel"
-import { nodeTypes, edgeTypes } from "@/components/flow/nodes"
+import { nodeTypes, edgeTypes, type CanvasNodeType } from "@/components/flow/nodes"
 import { cn } from "@/lib/utils"
 
 let nodeIdCounter = 0
@@ -49,7 +50,23 @@ function genNodeId() {
   return `node-${Date.now().toString(36)}-${nodeIdCounter}`
 }
 
-const DEFAULT_CONFIGS: Record<NodeType, Record<string, unknown>> = {
+/** 连线 id: 含 sourceHandle, 避免条件分支多条出边 id 冲突 */
+function genEdgeId(source: string, sourceHandle: string | null | undefined, target: string) {
+  return `e-${source}:${sourceHandle ?? ""}-${target}`
+}
+
+/** 序列化连线: 保留 sourceHandle/targetHandle (后端条件分支路由依赖 sourceHandle) */
+function serializeEdge(e: Edge) {
+  return {
+    id: e.id,
+    source: e.source,
+    target: e.target,
+    sourceHandle: e.sourceHandle ?? null,
+    targetHandle: e.targetHandle ?? null,
+  }
+}
+
+const DEFAULT_CONFIGS: Record<CanvasNodeType, Record<string, unknown>> = {
   start: { template: "{input}" },
   end: { template: "" },
   llm: { model: "default", system_prompt: "", user_template: "{input}" },
@@ -58,9 +75,10 @@ const DEFAULT_CONFIGS: Record<NodeType, Record<string, unknown>> = {
   text: { template: "" },
   notify: { title_template: "Agent 通知", content_template: "{input}", channels: [] },
   memory: { action: "save", key: "", value_template: "{input}", session_id: "" },
+  http: { method: "GET", url: "", headers: {}, body: "", timeout_s: 30 },
 }
 
-const NODE_LABELS: Record<NodeType, string> = {
+const NODE_LABELS: Record<CanvasNodeType, string> = {
   start: "开始",
   end: "结束",
   llm: "LLM 对话",
@@ -69,10 +87,11 @@ const NODE_LABELS: Record<NodeType, string> = {
   text: "文本拼接",
   notify: "消息推送",
   memory: "记忆读写",
+  http: "HTTP 请求",
 }
 
 // 拖线弹出菜单可添加的节点 (不含 start, start 是入口)
-const ADDABLE_TYPES: { type: NodeType; label: string; icon: typeof Brain }[] = [
+const ADDABLE_TYPES: { type: CanvasNodeType; label: string; icon: typeof Brain }[] = [
   { type: "end", label: "结束", icon: Square },
   { type: "llm", label: "LLM 对话", icon: Brain },
   { type: "retrieval", label: "知识库检索", icon: Database },
@@ -80,6 +99,7 @@ const ADDABLE_TYPES: { type: NodeType; label: string; icon: typeof Brain }[] = [
   { type: "text", label: "文本拼接", icon: Type },
   { type: "notify", label: "消息推送", icon: Bell },
   { type: "memory", label: "记忆读写", icon: BrainCog },
+  { type: "http", label: "HTTP 请求", icon: Globe },
 ]
 
 function FlowCanvasInner() {
@@ -137,15 +157,18 @@ function FlowCanvasInner() {
     fetchFlow()
   }, [fetchFlow])
 
-  // ── SSE 清理 ──
+  // ── SSE 清理 + 卸载标记 (P2-9: 兜底轮询在卸载后不再 setState) ──
+  const mountedRef = useRef(true)
   useEffect(() => {
+    mountedRef.current = true
     return () => {
+      mountedRef.current = false
       eventSourceRef.current?.close()
     }
   }, [])
 
   // ── 添加节点 ──
-  const handleAddNode = useCallback((type: NodeType) => {
+  const handleAddNode = useCallback((type: CanvasNodeType) => {
     const id = genNodeId()
     const config = { ...DEFAULT_CONFIGS[type] }
     if (type === "llm" && defaultLlmModel) config.model = defaultLlmModel
@@ -169,15 +192,24 @@ function FlowCanvasInner() {
   const onConnect = useCallback(
     (connection: Connection) => {
       setEdges((eds) =>
-        addEdge({ ...connection, id: `e-${connection.source}-${connection.target}`, type: "deletable" }, eds),
+        addEdge(
+          {
+            ...connection,
+            id: genEdgeId(connection.source, connection.sourceHandle, connection.target),
+            type: "deletable",
+          },
+          eds,
+        ),
       )
     },
     [setEdges],
   )
 
-  // ── 拖线开始: 记录源节点 ──
-  const onConnectStart = useCallback<OnConnectStart>((_, { nodeId }) => {
+  // ── 拖线开始: 记录源节点与源 handle (条件分支需保留 sourceHandle) ──
+  const connectingHandleId = useRef<string | null>(null)
+  const onConnectStart = useCallback<OnConnectStart>((_, { nodeId, handleId }) => {
     connectingNodeId.current = nodeId
+    connectingHandleId.current = handleId
   }, [])
 
   // ── 拖线结束: 若松开在空白处, 弹出节点菜单 ──
@@ -188,6 +220,7 @@ function FlowCanvasInner() {
     const isPane = !!target?.classList?.contains("react-flow__pane")
     if (!isPane) {
       connectingNodeId.current = null
+      connectingHandleId.current = null
       return
     }
     const e = event as unknown as {
@@ -203,8 +236,9 @@ function FlowCanvasInner() {
   }, [])
 
   // ── 从菜单添加节点并自动连线 ──
-  const handleAddNodeFromMenu = useCallback((type: NodeType) => {
+  const handleAddNodeFromMenu = useCallback((type: CanvasNodeType) => {
     const sourceId = connectingNodeId.current
+    const sourceHandle = connectingHandleId.current
     const position = screenToFlowPosition({ x: addMenu.x, y: addMenu.y })
     const id = genNodeId()
     const config = { ...DEFAULT_CONFIGS[type] }
@@ -217,11 +251,23 @@ function FlowCanvasInner() {
     }
     setNodes((nds) => [...nds, newNode])
     if (sourceId) {
-      setEdges((eds) => addEdge({ source: sourceId, target: id, id: `e-${sourceId}-${id}`, type: "deletable" }, eds))
+      setEdges((eds) =>
+        addEdge(
+          {
+            source: sourceId,
+            sourceHandle,
+            target: id,
+            id: genEdgeId(sourceId, sourceHandle, id),
+            type: "deletable",
+          },
+          eds,
+        ),
+      )
     }
     setSelectedNodeId(id)
     setAddMenu({ open: false, x: 0, y: 0 })
     connectingNodeId.current = null
+    connectingHandleId.current = null
   }, [addMenu.x, addMenu.y, screenToFlowPosition, setEdges, setNodes, defaultLlmModel])
 
   // ── 选中节点 ──
@@ -235,6 +281,7 @@ function FlowCanvasInner() {
     setSelectedNodeId(null)
     setAddMenu({ open: false, x: 0, y: 0 })
     connectingNodeId.current = null
+    connectingHandleId.current = null
   }, [])
 
   // ── 节点数据变更 ──
@@ -265,11 +312,7 @@ function FlowCanvasInner() {
           position: n.position,
           data: { label: (n.data as { label: string }).label, config: (n.data as { config: Record<string, unknown> }).config },
         })),
-        edges: edges.map((e) => ({
-          id: e.id,
-          source: e.source,
-          target: e.target,
-        })),
+        edges: edges.map(serializeEdge),
       }
       await flowApi.update(flowId, { dag })
       await fetchFlow()
@@ -296,7 +339,7 @@ function FlowCanvasInner() {
           config: (n.data as { config: Record<string, unknown> }).config,
         },
       })),
-      edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle ?? null })),
+      edges: edges.map(serializeEdge),
     }
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" })
     const url = URL.createObjectURL(blob)
@@ -336,7 +379,7 @@ function FlowCanvasInner() {
     const newEdges: Edge[] = impEdges.map((edge) => {
       const s = idMap[edge.source] || edge.source
       const t = idMap[edge.target] || edge.target
-      return { ...edge, id: `e-${s}-${t}`, source: s, target: t }
+      return { ...edge, id: genEdgeId(s, edge.sourceHandle, t), source: s, target: t }
     })
     setNodes(newNodes)
     setEdges(newEdges)
@@ -353,7 +396,7 @@ function FlowCanvasInner() {
             config: (n.data as { config: Record<string, unknown> }).config,
           },
         })),
-        edges: newEdges.map((edge) => ({ id: edge.id, source: edge.source, target: edge.target, sourceHandle: edge.sourceHandle ?? null })),
+        edges: newEdges.map(serializeEdge),
       }
       await flowApi.update(flowId, { dag })
       await fetchFlow()
@@ -377,7 +420,7 @@ function FlowCanvasInner() {
           position: n.position,
           data: { label: (n.data as { label: string }).label, config: (n.data as { config: Record<string, unknown> }).config },
         })),
-        edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle ?? null })),
+        edges: edges.map(serializeEdge),
       }
       await flowApi.update(flowId, { dag })
     } catch {
@@ -472,11 +515,13 @@ function FlowCanvasInner() {
     }
   }
 
-  // ── SSE 断开时兜底轮询 ──
+  // ── SSE 断开时兜底轮询 (P2-9: 组件卸载后立即停轮, 不再 setState) ──
   const pollExecution = async (fid: string, eid: string) => {
     for (let i = 0; i < 30; i++) {
+      if (!mountedRef.current) return
       try {
         const resp = await flowApi.getExecution(fid, eid)
+        if (!mountedRef.current) return
         setExecution(resp.data)
         updateNodeStates(resp.data.node_states || {})
         if (["success", "failed", "cancelled"].includes(resp.data.status)) break
@@ -485,7 +530,7 @@ function FlowCanvasInner() {
       }
       await new Promise((r) => setTimeout(r, 1000))
     }
-    setExecuting(false)
+    if (mountedRef.current) setExecuting(false)
   }
 
   // ── 更新节点执行状态 (高亮) ──
@@ -521,7 +566,7 @@ function FlowCanvasInner() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-3.5rem)] flex-col">
+    <div className="flex h-screen flex-col">
       {/* 顶部工具栏 */}
       <div className="flex items-center gap-3 border-b px-4 py-2">
         <Button variant="ghost" size="sm" onClick={() => navigate("/flows")}>
@@ -628,10 +673,11 @@ function FlowCanvasInner() {
             <MiniMap
               className="!rounded-lg !border"
               nodeColor={(n) => {
-                const state = (n.data as { nodeState?: NodeState })?.nodeState?.status
+                const state = (n.data as { nodeState?: { status?: string } })?.nodeState?.status
                 if (state === "success") return "#22c55e"
                 if (state === "running") return "#3b82f6"
                 if (state === "failed") return "#ef4444"
+                if (state === "skipped") return "#9ca3af"
                 return "#d1d5db"
               }}
             />

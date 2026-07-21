@@ -7,6 +7,7 @@
 import logging
 
 from sqlalchemy import Text, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.memory import Memory, MemoryType
@@ -22,16 +23,8 @@ async def save_memory(
     value: dict,
     session_id: str | None = None,
 ) -> Memory:
-    """保存记忆。如果同 user+key+session 已存在则更新。"""
-    # 查找已有记忆 (同 user + key + session_id)
-    query = select(Memory).where(Memory.user_id == user_id, Memory.key == key)
-    if session_id:
-        query = query.where(Memory.session_id == session_id)
-    else:
-        query = query.where(Memory.session_id.is_(None))
-    result = await db.execute(query)
-    existing = result.scalar_one_or_none()
-
+    """保存记忆。如果同 user+key+session 已存在则更新 (upsert)。"""
+    existing = await get_memory(db, user_id, key, session_id)
     if existing:
         existing.value = value
         existing.type = type
@@ -48,7 +41,20 @@ async def save_memory(
         session_id=session_id,
     )
     db.add(memory)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # 并发下同 user+key+session 已被其他事务插入 → 回退为更新
+        await db.rollback()
+        existing = await get_memory(db, user_id, key, session_id)
+        if existing is None:
+            raise
+        existing.value = value
+        existing.type = type
+        await db.commit()
+        await db.refresh(existing)
+        logger.info("记忆并发冲突转更新: key=%s user=%s", key, user_id)
+        return existing
     await db.refresh(memory)
     logger.info("记忆创建: key=%s user=%s", key, user_id)
     return memory
@@ -94,6 +100,11 @@ async def delete_memory(db: AsyncSession, memory: Memory) -> None:
     logger.info("记忆删除: %s", memory.id)
 
 
+def _escape_ilike(term: str) -> str:
+    """转义 ilike 通配符 (% _ \\), 防止用户输入被当作模式匹配。"""
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 async def search_memories(
     db: AsyncSession,
     user_id,
@@ -103,12 +114,12 @@ async def search_memories(
 ) -> list[Memory]:
     """关键词搜索记忆 (在 key 和 value 的文本中匹配)。"""
     # PostgreSQL JSON 文本搜索 (简化: 在 key 和 value::text 中 ilike)
-    pattern = f"%{query}%"
+    pattern = f"%{_escape_ilike(query)}%"
     stmt = select(Memory).where(
         Memory.user_id == user_id,
         or_(
-            Memory.key.ilike(pattern),
-            Memory.value.cast(Text).ilike(pattern),
+            Memory.key.ilike(pattern, escape="\\"),
+            Memory.value.cast(Text).ilike(pattern, escape="\\"),
         ),
     )
     if session_id:

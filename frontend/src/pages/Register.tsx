@@ -12,6 +12,7 @@ export function Register() {
   const [name, setName] = useState("")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
+  const [passwordConfirm, setPasswordConfirm] = useState("")
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
 
@@ -20,6 +21,10 @@ export function Register() {
     setError("")
     if (password.length < 6) {
       setError("密码至少 6 位")
+      return
+    }
+    if (password !== passwordConfirm) {
+      setError("两次输入的密码不一致")
       return
     }
     setLoading(true)
@@ -77,6 +82,17 @@ export function Register() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="至少 6 位"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="password-confirm">确认密码</Label>
+              <Input
+                id="password-confirm"
+                type="password"
+                required
+                value={passwordConfirm}
+                onChange={(e) => setPasswordConfirm(e.target.value)}
+                placeholder="再次输入密码"
               />
             </div>
           </CardContent>

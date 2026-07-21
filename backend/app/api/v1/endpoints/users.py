@@ -3,7 +3,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import CurrentUser, DBSession, require_roles
@@ -66,6 +66,18 @@ async def update_user_role(
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+    # 保护最后一个 admin：不允许将其降级，否则系统将无管理员
+    if user.role == UserRole.admin and role != UserRole.admin:
+        admin_count = (
+            await db.execute(
+                select(func.count()).select_from(User).where(User.role == UserRole.admin)
+            )
+        ).scalar_one()
+        if admin_count <= 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="不能降级最后一个 admin，请先指定其他 admin",
+            )
     user.role = role
     await db.commit()
     await db.refresh(user)

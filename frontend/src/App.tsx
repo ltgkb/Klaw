@@ -14,6 +14,8 @@ import { Settings } from "@/pages/Settings"
 import { ScheduleList } from "@/pages/ScheduleList"
 import { MemoryList } from "@/pages/MemoryList"
 import { AgentChat } from "@/pages/AgentChat"
+import { Files } from "@/pages/Files"
+import { UserManagement } from "@/pages/UserManagement"
 
 /** 路由守卫：未登录跳转 /login */
 function ProtectedRoute({ children }: { children: ReactNode }) {
@@ -131,6 +133,26 @@ function App() {
             <ProtectedRoute>
               <AppLayout>
                 <MemoryList />
+              </AppLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/files"
+          element={
+            <ProtectedRoute>
+              <AppLayout>
+                <Files />
+              </AppLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/users"
+          element={
+            <ProtectedRoute>
+              <AppLayout>
+                <UserManagement />
               </AppLayout>
             </ProtectedRoute>
           }

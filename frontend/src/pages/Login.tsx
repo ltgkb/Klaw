@@ -21,8 +21,18 @@ export function Login() {
     try {
       await login(email, password)
       navigate("/")
-    } catch {
-      setError("邮箱或密码错误")
+    } catch (err) {
+      // 区分错误类型 (P2-12): 凭据错误 / 账号禁用 / 网络故障
+      const status = (err as { response?: { status?: number } }).response?.status
+      if (status === 401) {
+        setError("邮箱或密码错误")
+      } else if (status === 403) {
+        setError("账号已被禁用，请联系管理员")
+      } else if (!status) {
+        setError("无法连接服务器，请检查网络后重试")
+      } else {
+        setError("登录失败，请稍后重试")
+      }
     } finally {
       setLoading(false)
     }

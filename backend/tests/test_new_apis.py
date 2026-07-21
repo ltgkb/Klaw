@@ -183,3 +183,221 @@ async def test_file_workspace_crud(client, mock_minio):
     assert resp.status_code == 204
     resp = await client.get("/api/v1/files", headers=h)
     assert len(resp.json()) == 0
+
+
+# ── WP6: 文件记忆与本地工具修复 ──
+
+@pytest.mark.asyncio
+async def test_file_download_chinese_filename(client, mock_minio):
+    """中文文件名下载: Content-Disposition 使用 RFC5987 编码。"""
+    from urllib.parse import quote
+
+    token = await _register_and_login(client, "zhfile@test.com")
+    h = _auth_headers(token)
+    resp = await client.post(
+        "/api/v1/files",
+        files={"file": ("报告 2026.txt", b"data", "text/plain")},
+        headers=h,
+    )
+    assert resp.status_code == 201
+    file_id = resp.json()["id"]
+
+    resp = await client.get(f"/api/v1/files/{file_id}", headers=h)
+    assert resp.status_code == 200
+    cd = resp.headers["content-disposition"]
+    assert "filename*=UTF-8''" in cd
+    assert quote("报告 2026.txt", safe="") in cd
+
+
+@pytest.mark.asyncio
+async def test_file_upload_minio_failure_503(client, monkeypatch):
+    """MinIO S3Error → 503, 不暴露内部错误。"""
+    from minio.error import S3Error
+
+    from app.api.v1.endpoints import files as files_ep
+
+    def boom(*args, **kwargs):
+        raise S3Error(None, "NoSuchBucket", "bucket gone", "res", "req", "host")
+
+    monkeypatch.setattr(files_ep, "upload_file", boom)
+
+    token = await _register_and_login(client, "s3fail@test.com")
+    resp = await client.post(
+        "/api/v1/files",
+        files={"file": ("a.txt", b"hello", "text/plain")},
+        headers=_auth_headers(token),
+    )
+    assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_file_download_minio_failure_503(client, mock_minio, monkeypatch):
+    """下载时 MinIO S3Error → 503。"""
+    from minio.error import S3Error
+
+    from app.api.v1.endpoints import files as files_ep
+
+    token = await _register_and_login(client, "s3dl@test.com")
+    h = _auth_headers(token)
+    resp = await client.post(
+        "/api/v1/files",
+        files={"file": ("a.txt", b"hello", "text/plain")},
+        headers=h,
+    )
+    file_id = resp.json()["id"]
+
+    def boom(*args, **kwargs):
+        raise S3Error(None, "InternalError", "minio down", "res", "req", "host")
+
+    monkeypatch.setattr(files_ep, "download_file", boom)
+    resp = await client.get(f"/api/v1/files/{file_id}", headers=h)
+    assert resp.status_code == 503
+
+
+def test_minio_presigned_public_host(monkeypatch):
+    """预签名 URL 按 minio_public_url 替换公网 host (契约1)。"""
+    from app.core import minio_client
+    from app.core.config import settings
+
+    raw = "http://localhost:9000/bucket/obj.txt?X-Amz-Signature=abc"
+    # 未配置 → 原样返回
+    assert minio_client._apply_public_host(raw) == raw
+    # 带 scheme 的公网地址
+    monkeypatch.setattr(settings, "minio_public_url", "https://files.example.com", raising=False)
+    url = minio_client._apply_public_host(raw)
+    assert url == "https://files.example.com/bucket/obj.txt?X-Amz-Signature=abc"
+    # 纯 host:port 写法保留原 scheme
+    monkeypatch.setattr(settings, "minio_public_url", "files.example.com:9443", raising=False)
+    url = minio_client._apply_public_host(raw)
+    assert url == "http://files.example.com:9443/bucket/obj.txt?X-Amz-Signature=abc"
+
+
+@pytest.mark.asyncio
+async def test_local_agent_tool_call_http_error_not_fake_success(client, monkeypatch):
+    """OpenClaw 返回 5xx → success=False + error, 不伪装成功。"""
+    from app.services import local_agent_service
+
+    class _Resp:
+        status_code = 500
+        text = "internal error"
+
+        def json(self):
+            return {}
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, *args, **kwargs):
+            return _Resp()
+
+        async def post(self, *args, **kwargs):
+            return _Resp()
+
+    monkeypatch.setattr(local_agent_service.httpx, "AsyncClient", _FakeClient)
+
+    token = await _register_and_login(client, "toolfail@test.com")
+    resp = await client.post(
+        "/api/v1/local-agent/tools/web_search/call",
+        json={"parameters": {"query": "hello"}},
+        headers=_auth_headers(token),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is False
+    assert data["error"]
+
+
+@pytest.mark.asyncio
+async def test_local_agent_tool_call_unknown_tool(client):
+    """调用前校验 tool_id: 不存在的工具 → success=False。"""
+    token = await _register_and_login(client, "tool404@test.com")
+    resp = await client.post(
+        "/api/v1/local-agent/tools/nonexistent_tool_xyz/call",
+        json={"parameters": {}},
+        headers=_auth_headers(token),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is False
+    assert "不存在" in data["error"]
+
+
+@pytest.mark.asyncio
+async def test_memory_upsert_same_key(client):
+    """同 user+key+session 重复创建 → 更新而非新增 (upsert)。"""
+    token = await _register_and_login(client, "memup@test.com")
+    h = _auth_headers(token)
+
+    r1 = await client.post("/api/v1/memories", json={
+        "type": "context", "key": "fav", "value": {"v": 1},
+    }, headers=h)
+    assert r1.status_code == 201
+    r2 = await client.post("/api/v1/memories", json={
+        "type": "preference", "key": "fav", "value": {"v": 2},
+    }, headers=h)
+    assert r2.status_code == 201
+    assert r2.json()["id"] == r1.json()["id"]
+    assert r2.json()["value"] == {"v": 2}
+    assert r2.json()["type"] == "preference"
+
+    resp = await client.get("/api/v1/memories", headers=h)
+    assert len(resp.json()) == 1
+
+
+@pytest.mark.asyncio
+async def test_memory_upsert_integrity_fallback(db_engine, monkeypatch):
+    """模拟并发竞态: 预查不可见 → 插入撞唯一约束 → IntegrityError 转 update。"""
+    import uuid as _uuid
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.models.memory import MemoryType
+    from app.services import memory_service
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    uid = _uuid.uuid4()
+
+    async with factory() as s1:
+        m1 = await memory_service.save_memory(s1, uid, MemoryType.context, "race", {"v": 1}, session_id="s-1")
+
+    real_get = memory_service.get_memory
+    calls = {"n": 0}
+
+    async def fake_get(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None  # 模拟竞态: 预查时对方事务尚未可见
+        return await real_get(*args, **kwargs)
+
+    monkeypatch.setattr(memory_service, "get_memory", fake_get)
+
+    async with factory() as s2:
+        m2 = await memory_service.save_memory(s2, uid, MemoryType.context, "race", {"v": 2}, session_id="s-1")
+    assert m2.id == m1.id
+    assert m2.value == {"v": 2}
+
+
+@pytest.mark.asyncio
+async def test_memory_search_escapes_wildcards(client):
+    """搜索关键词中的 % _ 被转义, 不作为通配符匹配。"""
+    token = await _register_and_login(client, "memesc@test.com")
+    h = _auth_headers(token)
+
+    await client.post("/api/v1/memories", json={
+        "type": "context", "key": "100% complete", "value": {"note": "a"},
+    }, headers=h)
+    await client.post("/api/v1/memories", json={
+        "type": "context", "key": "1000 items", "value": {"note": "b"},
+    }, headers=h)
+
+    resp = await client.get("/api/v1/memories/search", params={"q": "100%"}, headers=h)
+    assert resp.status_code == 200
+    keys = [m["key"] for m in resp.json()]
+    assert keys == ["100% complete"]

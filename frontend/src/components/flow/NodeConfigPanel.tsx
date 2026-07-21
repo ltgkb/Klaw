@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from "react"
-import { Brain, Database, GitBranch, Type, Bell, BrainCog, Trash2, Plus, X, Play, Square } from "lucide-react"
-import { providerApi, type NodeType, type ModelInfo } from "@/lib/api"
+import { Brain, Database, GitBranch, Type, Bell, BrainCog, Trash2, Plus, X, Play, Square, Globe } from "lucide-react"
+import { providerApi, type ModelInfo } from "@/lib/api"
 import type { Node } from "@xyflow/react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { cn } from "@/lib/utils"
-import type { FlowNodeData } from "@/components/flow/nodes"
+import type { FlowNodeData, CanvasNodeType } from "@/components/flow/nodes"
 
-const NODE_ICONS: Record<NodeType, typeof Brain> = {
+const NODE_ICONS: Record<CanvasNodeType, typeof Brain> = {
   start: Play,
   end: Square,
   llm: Brain,
@@ -17,9 +17,10 @@ const NODE_ICONS: Record<NodeType, typeof Brain> = {
   text: Type,
   notify: Bell,
   memory: BrainCog,
+  http: Globe,
 }
 
-const NODE_LABELS: Record<NodeType, string> = {
+const NODE_LABELS: Record<CanvasNodeType, string> = {
   start: "开始",
   end: "结束",
   llm: "LLM 对话",
@@ -28,6 +29,7 @@ const NODE_LABELS: Record<NodeType, string> = {
   text: "文本拼接",
   notify: "消息推送",
   memory: "记忆读写",
+  http: "HTTP 请求",
 }
 
 /** 模型选择器: 从 /providers/models 拉取真实模型列表 */
@@ -153,7 +155,7 @@ export function NodeConfigPanel({ node, allNodes = [], onChange, onDelete }: Pro
     )
   }
 
-  const nodeType = node.type as NodeType
+  const nodeType = node.type as CanvasNodeType
   const Icon = NODE_ICONS[nodeType] ?? Type
   const nodeData = node.data as unknown as FlowNodeData
   const config = nodeData.config || {}
@@ -686,6 +688,122 @@ export function NodeConfigPanel({ node, allNodes = [], onChange, onDelete }: Pro
                 placeholder="留空 = 全局记忆"
               />
             </div>
+          </>
+        )}
+
+        {nodeType === "http" && (
+          <>
+            <div className="space-y-2">
+              <Label htmlFor="http-method">请求方法</Label>
+              <select
+                id="http-method"
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
+                value={(config.method as string) || "GET"}
+                onChange={(e) => updateConfig("method", e.target.value)}
+              >
+                <option value="GET">GET</option>
+                <option value="POST">POST</option>
+                <option value="PUT">PUT</option>
+                <option value="PATCH">PATCH</option>
+                <option value="DELETE">DELETE</option>
+              </select>
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="http-url">URL</Label>
+                <VarPicker vars={availableVars} onInsert={(t) => insertVar("url", t)} />
+              </div>
+              <Input
+                id="http-url"
+                value={(config.url as string) || ""}
+                onChange={(e) => updateConfig("url", e.target.value)}
+                placeholder="https://api.example.com/path 支持 {input}"
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label>请求头 (Headers)</Label>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => {
+                    const headers = { ...((config.headers as Record<string, string>) || {}) }
+                    if (!("" in headers)) headers[""] = ""
+                    updateConfig("headers", headers)
+                  }}
+                >
+                  <Plus className="h-3 w-3" /> 添加请求头
+                </Button>
+              </div>
+              {Object.entries((config.headers as Record<string, string>) || {}).map(([k, v], i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <Input
+                    className="h-8 w-28 text-xs"
+                    placeholder="Header 名"
+                    value={k}
+                    onChange={(e) => {
+                      const entries = Object.entries((config.headers as Record<string, string>) || {})
+                      entries[i] = [e.target.value, v]
+                      updateConfig("headers", Object.fromEntries(entries))
+                    }}
+                  />
+                  <Input
+                    className="h-8 flex-1 text-xs"
+                    placeholder="值 (支持 {input})"
+                    value={v}
+                    onChange={(e) => {
+                      const entries = Object.entries((config.headers as Record<string, string>) || {})
+                      entries[i] = [k, e.target.value]
+                      updateConfig("headers", Object.fromEntries(entries))
+                    }}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 px-2"
+                    onClick={() => {
+                      const entries = Object.entries((config.headers as Record<string, string>) || {})
+                      entries.splice(i, 1)
+                      updateConfig("headers", Object.fromEntries(entries))
+                    }}
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="http-body">请求体 (Body)</Label>
+                <VarPicker vars={availableVars} onInsert={(t) => insertVar("body", t)} />
+              </div>
+              <textarea
+                id="http-body"
+                className={cn(
+                  "flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2",
+                  "text-sm ring-offset-background placeholder:text-muted-foreground",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                )}
+                value={(config.body as string) || ""}
+                onChange={(e) => updateConfig("body", e.target.value)}
+                placeholder='JSON 或文本, 支持 {input} 等变量; GET 时留空'
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="http-timeout">超时 (秒)</Label>
+              <Input
+                id="http-timeout"
+                type="number"
+                value={(config.timeout_s as number) ?? 30}
+                onChange={(e) => updateConfig("timeout_s", parseInt(e.target.value) || 30)}
+                min={1}
+                max={300}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              响应文本作为节点输出存入上下文, 下游可用 {`{节点名}`} 引用
+            </p>
           </>
         )}
       </div>

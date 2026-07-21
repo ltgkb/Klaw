@@ -6,7 +6,7 @@
 import enum
 import uuid
 
-from sqlalchemy import Enum, ForeignKey, JSON, String, Text
+from sqlalchemy import Enum, ForeignKey, JSON, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -21,6 +21,10 @@ class MemoryType(str, enum.Enum):
 
 class Memory(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "memories"
+    # 同 user + key + session 唯一: save_memory 走 upsert, 并发冲突转 update
+    __table_args__ = (
+        UniqueConstraint("user_id", "key", "session_id", name="uq_memories_user_key_session"),
+    )
 
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False

@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import logging
 import uuid
 
 from fastapi import APIRouter, HTTPException, status
@@ -19,7 +20,12 @@ from app.models.execution import Execution
 from app.schemas.conversation import ChatRequest, ChatResponse, MessageRead
 from app.services import agent_flow_service, execution_service
 
+logger = logging.getLogger("claw.agent_chat")
+
 router = APIRouter(prefix="/agent-flows", tags=["对话式 Agent"])
+
+# 持有后台任务引用, 防止事件循环在任务完成前将其 GC 掉
+_background_tasks: set[asyncio.Task] = set()
 
 
 def _final_answer(execution: Execution) -> str:
@@ -86,7 +92,7 @@ async def _run_and_save_assistant(exec_id: uuid.UUID, conv_id: uuid.UUID, flow_i
     try:
         await execution_service.run_flow(exec_id, flow_id)
     except Exception:
-        pass
+        logger.exception("对话后台执行异常: execution=%s flow=%s", exec_id, flow_id)
     async with async_session_factory() as db:
         res = await db.execute(select(Execution).where(Execution.id == exec_id))
         ex = res.scalar_one_or_none()
@@ -134,7 +140,9 @@ async def chat(flow_id: uuid.UUID, data: ChatRequest, current_user: CurrentUser,
 
     execution = await agent_flow_service.create_execution(db, flow_id, exec_input)
 
-    # 后台运行 + 存助手消息
-    asyncio.create_task(_run_and_save_assistant(execution.id, conv.id, flow_id))
+    # 后台运行 + 存助手消息 (持引用防 GC, 完成后自动移除)
+    task = asyncio.create_task(_run_and_save_assistant(execution.id, conv.id, flow_id))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
     return ChatResponse(execution_id=execution.id, conversation_id=conv.id, status=execution.status)

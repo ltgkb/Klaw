@@ -5,6 +5,7 @@ ES/MinIO/TEI 外部服务通过 monkeypatch mock, 确保测试不依赖基础设
 """
 
 import io
+import uuid
 
 import pytest
 
@@ -385,3 +386,130 @@ async def test_parse_and_index_pipeline(client, mock_infra):
     chunks_resp = await client.get(f"/api/v1/knowledge-bases/{kb_id}/chunks", headers=_auth_headers(token))
     assert chunks_resp.status_code == 200
     assert chunks_resp.json()["total"] >= 1, "Should have chunks after parsing"
+
+
+# ── WP7: 扩展名校验 / 重解析 / 失败置 failed ──
+
+@pytest.mark.asyncio
+async def test_upload_unsupported_extension_415(client, mock_infra):
+    """不支持的文件扩展名应返回 415。"""
+    token = await _register_and_login(client)
+    create_resp = await client.post("/api/v1/knowledge-bases", json={
+        "name": "ExtTest",
+    }, headers=_auth_headers(token))
+    kb_id = create_resp.json()["id"]
+
+    resp = await client.post(
+        f"/api/v1/knowledge-bases/{kb_id}/documents",
+        headers=_auth_headers(token),
+        files={"file": ("evil.exe", io.BytesIO(b"MZ binary"), "application/octet-stream")},
+    )
+    assert resp.status_code == 415
+
+
+@pytest.mark.asyncio
+async def test_reparse_document(client, mock_infra):
+    """reparse 端点: 重置状态并后台重新解析, 最终回到 parsed。"""
+    token = await _register_and_login(client)
+    create_resp = await client.post("/api/v1/knowledge-bases", json={
+        "name": "ReparseTest",
+    }, headers=_auth_headers(token))
+    kb_id = create_resp.json()["id"]
+
+    upload_resp = await client.post(
+        f"/api/v1/knowledge-bases/{kb_id}/documents",
+        headers=_auth_headers(token),
+        files={"file": ("test.txt", io.BytesIO(b"reparse content"), "text/plain")},
+    )
+    doc_id = upload_resp.json()["id"]
+
+    resp = await client.post(
+        f"/api/v1/knowledge-bases/{kb_id}/documents/{doc_id}/reparse",
+        headers=_auth_headers(token),
+    )
+    assert resp.status_code == 200
+    # 响应在后台任务执行前序列化 → pending; 后台任务同步执行完毕 → parsed
+    assert resp.json()["parse_status"] == "pending"
+
+    docs_resp = await client.get(f"/api/v1/knowledge-bases/{kb_id}/documents", headers=_auth_headers(token))
+    assert docs_resp.json()[0]["parse_status"] == "parsed"
+
+    # chunk 仍然存在 (重新生成, 非重复累积)
+    chunks_resp = await client.get(
+        f"/api/v1/knowledge-bases/{kb_id}/chunks", headers=_auth_headers(token)
+    )
+    assert chunks_resp.json()["total"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_reparse_document_not_found(client, mock_infra):
+    """reparse 不存在的文档应 404。"""
+    token = await _register_and_login(client)
+    create_resp = await client.post("/api/v1/knowledge-bases", json={
+        "name": "Reparse404",
+    }, headers=_auth_headers(token))
+    kb_id = create_resp.json()["id"]
+
+    resp = await client.post(
+        f"/api/v1/knowledge-bases/{kb_id}/documents/00000000-0000-0000-0000-000000000000/reparse",
+        headers=_auth_headers(token),
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_parse_failure_marks_failed_with_error(client, mock_infra, monkeypatch, db_engine):
+    """向量化维度不符 → 管线 raise → 文档置 failed, 失败原因写入 parse_result。"""
+    async def bad_embed_texts(texts, timeout=60.0):
+        raise ValueError("向量维度不符: 期望 1024, 实际 512")
+    monkeypatch.setattr("app.services.document_service.embed_texts", bad_embed_texts)
+
+    token = await _register_and_login(client)
+    create_resp = await client.post("/api/v1/knowledge-bases", json={
+        "name": "FailTest",
+    }, headers=_auth_headers(token))
+    kb_id = create_resp.json()["id"]
+
+    upload_resp = await client.post(
+        f"/api/v1/knowledge-bases/{kb_id}/documents",
+        headers=_auth_headers(token),
+        files={"file": ("test.txt", io.BytesIO(b"will fail"), "text/plain")},
+    )
+    assert upload_resp.status_code == 201
+    doc_id = upload_resp.json()["id"]
+
+    docs_resp = await client.get(f"/api/v1/knowledge-bases/{kb_id}/documents", headers=_auth_headers(token))
+    assert docs_resp.json()[0]["parse_status"] == "failed"
+
+    # parse_result 含失败原因 (DocumentRead 不暴露该字段, 直接查 DB)
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    from app.models.document import Document
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session:
+        result = await session.execute(select(Document).where(Document.id == uuid.UUID(doc_id)))
+        doc = result.scalar_one()
+    assert doc.parse_result is not None
+    assert "维度不符" in doc.parse_result["error"]
+
+
+@pytest.mark.asyncio
+async def test_search_backend_error_returns_503(client, mock_infra, monkeypatch):
+    """ES 检索异常应转为 503, 而非 500 内部错误。"""
+    async def boom_search(**kwargs):
+        raise ConnectionError("ES unreachable")
+    monkeypatch.setattr("app.services.document_service.es_hybrid_search", boom_search)
+
+    token = await _register_and_login(client)
+    create_resp = await client.post("/api/v1/knowledge-bases", json={
+        "name": "Search503",
+    }, headers=_auth_headers(token))
+    kb_id = create_resp.json()["id"]
+
+    resp = await client.post(
+        f"/api/v1/knowledge-bases/{kb_id}/search",
+        headers=_auth_headers(token),
+        json={"query": "测试", "top_k": 5},
+    )
+    assert resp.status_code == 503

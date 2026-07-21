@@ -8,9 +8,12 @@
 
 指标: Hit@5 / MRR / Recall@5, 并按 关键词查询 / 语义查询 拆分。
 用法 (远端): cd backend && PYTHONPATH=$PWD uv run python scripts/eval_retrieval.py
+凭据从环境变量读取: EVAL_EMAIL / EVAL_PWD (默认 admin@example.com / admin123)。
+任一路检索出现异常时, 脚本以 exit 1 结束。
 """
 
 import io
+import os
 import asyncio
 import time
 import sys
@@ -60,7 +63,8 @@ QUERIES = [
 ]
 
 API = "http://localhost:8000/api/v1"
-EMAIL, PWD = "admin@example.com", "admin123"
+EMAIL = os.environ.get("EVAL_EMAIL", "admin@example.com")
+PWD = os.environ.get("EVAL_PWD", "admin123")
 
 
 def login() -> str:
@@ -141,10 +145,6 @@ def es_knn(es, kb_id, q, k=5):
     return out
 
 
-def real_vector_init():
-    return None  # 已用平台真实 bge-m3, 不再需要本地 MiniLM 对照
-
-
 def metrics(results_by_q, qrels_by_q, k=5):
     """results_by_q: {q: [doc_id...]}, qrels_by_q: {q: set(doc_id)}"""
     hit = mrr = rec = 0.0
@@ -183,17 +183,15 @@ def main():
     qrels = {q: {doc_ids[idx]} for q, idx, _ in QUERIES}
 
     es = Elasticsearch(settings.es_url)
-    rv = real_vector_init()
 
     methods = {
         "BM25-only (关键词)": lambda q: es_bm25(es, kb_id, q),
         "Vector-only (真实 bge-m3)": lambda q: es_knn(es, kb_id, q),
         "Hybrid 当前 (/search)": lambda q: platform_search(token, kb_id, q),
     }
-    if rv:
-        methods["Real-Vector (MiniLM)"] = lambda q: real_vector_search(rv, q)
 
-    # 全量 + 按 kw/sem 拆分
+    # 全量 + 按 kw/sem 拆分; 检索异常计数, 非零则 exit 1
+    search_errors = 0
     for subset, label in [("all", "全部"), ("kw", "关键词查询"), ("sem", "语义查询")]:
         print(f"\n--- {label} ({subset}) ---", flush=True)
         print(f"{'方法':<28} {'Hit@5':>8} {'MRR':>8} {'Recall@5':>10}", flush=True)
@@ -206,6 +204,8 @@ def main():
                     res[q] = fn(q)
                 except Exception as e:
                     res[q] = []
+                    search_errors += 1
+                    print(f"  [检索异常] {name} q={q!r}: {e.__class__.__name__}: {e}", flush=True)
                 qrel[q] = qrels[q]
             if not res:
                 continue
@@ -223,6 +223,10 @@ def main():
         print("  (已删除评测 KB)", flush=True)
     except Exception:
         pass
+
+    if search_errors:
+        print(f"\n共 {search_errors} 次检索异常, 退出码 1", flush=True)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

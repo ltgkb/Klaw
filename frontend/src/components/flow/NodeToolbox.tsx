@@ -1,8 +1,8 @@
-import { Brain, Database, GitBranch, Type, Bell, BrainCog, Play, Square } from "lucide-react"
-import type { NodeType } from "@/lib/api"
+import { Brain, Database, GitBranch, Type, Bell, BrainCog, Play, Square, Globe } from "lucide-react"
 import { cn } from "@/lib/utils"
+import type { CanvasNodeType } from "@/components/flow/nodes"
 
-const TOOLBOX_ITEMS: { type: NodeType; label: string; icon: typeof Brain; color: string }[] = [
+const TOOLBOX_ITEMS: { type: CanvasNodeType; label: string; icon: typeof Brain; color: string }[] = [
   { type: "start", label: "开始", icon: Play, color: "border-green-400 bg-green-50 hover:bg-green-100" },
   { type: "end", label: "结束", icon: Square, color: "border-red-300 bg-red-50 hover:bg-red-100" },
   { type: "llm", label: "LLM 对话", icon: Brain, color: "border-blue-300 bg-blue-50 hover:bg-blue-100" },
@@ -11,10 +11,11 @@ const TOOLBOX_ITEMS: { type: NodeType; label: string; icon: typeof Brain; color:
   { type: "text", label: "文本拼接", icon: Type, color: "border-gray-300 bg-gray-50 hover:bg-gray-100" },
   { type: "notify", label: "消息推送", icon: Bell, color: "border-pink-300 bg-pink-50 hover:bg-pink-100" },
   { type: "memory", label: "记忆读写", icon: BrainCog, color: "border-teal-300 bg-teal-50 hover:bg-teal-100" },
+  { type: "http", label: "HTTP 请求", icon: Globe, color: "border-cyan-300 bg-cyan-50 hover:bg-cyan-100" },
 ]
 
 interface Props {
-  onAdd: (type: NodeType) => void
+  onAdd: (type: CanvasNodeType) => void
 }
 
 export function NodeToolbox({ onAdd }: Props) {

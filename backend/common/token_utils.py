@@ -183,3 +183,12 @@ def total_token_count_from_response(resp):
 def truncate(string: str, max_len: int) -> str:
     """Returns truncated text if the length of text exceed max_len."""
     return encoder.decode(encoder.encode(string)[:max_len])
+
+
+def slice_tokens(string: str, start: int, end: int) -> str:
+    """Returns the text slice covering token range [start, end).
+
+    Encodes once and decodes only the requested window, so callers can do
+    precise token-based chunking without repeated encode/decode passes.
+    """
+    return encoder.decode(encoder.encode(string)[start:end])

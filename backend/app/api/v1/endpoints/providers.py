@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, status
 from sse_starlette.sse import EventSourceResponse
 
 from app.core.deps import CurrentUser
-from app.core import llm_client
+from app.core import llm_client, llm_config
 from app.core.config import settings
 from app.schemas.provider import (
     ChatRequest,
@@ -23,7 +23,7 @@ router = APIRouter(prefix="/providers", tags=["模型供应商"])
 
 
 @router.get("", response_model=list[ProviderInfo])
-async def list_providers():
+async def list_providers(_: CurrentUser):
     """列出已配置的模型供应商及其运行时状态。"""
     providers: list[ProviderInfo] = []
 
@@ -31,7 +31,7 @@ async def list_providers():
     kaiweb_ok = await llm_client.kaiweb_health_check()
     providers.append(ProviderInfo(
         name="kaiweb",
-        status="ok" if kaiweb_ok else ("not_configured" if not settings.kaiweb_api_key else "unavailable"),
+        status="ok" if kaiweb_ok else ("not_configured" if not llm_config.get_key("kaiweb") else "unavailable"),
         deploy="cloud",
         priority="P0",
         detail=settings.kaiweb_base_url,
@@ -66,7 +66,7 @@ async def list_providers():
     # OpenAI (云端 fallback)
     providers.append(ProviderInfo(
         name="openai",
-        status="ok" if settings.openai_api_key else "not_configured",
+        status="ok" if llm_config.get_key("openai") else "not_configured",
         deploy="cloud",
         priority="P0",
         detail="需要 API Key",
@@ -75,7 +75,7 @@ async def list_providers():
     # Anthropic (云端 fallback)
     providers.append(ProviderInfo(
         name="anthropic",
-        status="ok" if settings.anthropic_api_key else "not_configured",
+        status="ok" if llm_config.get_key("anthropic") else "not_configured",
         deploy="cloud",
         priority="P1",
         detail="需要 API Key",
@@ -95,7 +95,7 @@ async def list_providers():
 
 
 @router.get("/models", response_model=list[ModelInfo])
-async def list_models():
+async def list_models(_: CurrentUser):
     """可用模型列表。从 OpenClaw 拉取 + 预定义云端模型。"""
     return await llm_client.list_models()
 

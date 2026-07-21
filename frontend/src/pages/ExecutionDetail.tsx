@@ -10,8 +10,10 @@ import {
   Pause,
   Play,
   Ban,
+  SkipForward,
 } from "lucide-react"
 import { flowApi, type ExecutionRead } from "@/lib/api"
+import { formatDurationMs, type NodeStateView } from "@/components/flow/nodes"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
@@ -125,6 +127,20 @@ export function ExecutionDetail() {
     fetch()
   }, [flowId, execId])
 
+  // P2-8: running 态每 3s 轮询刷新, 终态/切页自动停止
+  useEffect(() => {
+    if (!flowId || !execId || execution?.status !== "running") return
+    const timer = setInterval(async () => {
+      try {
+        const resp = await flowApi.getExecution(flowId, execId)
+        setExecution(resp.data)
+      } catch {
+        // 单次失败忽略, 下一轮重试
+      }
+    }, 3000)
+    return () => clearInterval(timer)
+  }, [flowId, execId, execution?.status])
+
   const handleAction = async (action: "pause" | "resume" | "cancel") => {
     if (!flowId || !execId) return
     setActionLoading(true)
@@ -159,7 +175,7 @@ export function ExecutionDetail() {
   }
 
   const status = STATUS_ICON[execution.status] ?? STATUS_ICON.pending
-  const nodeStates = execution.node_states || {}
+  const nodeStates = (execution.node_states || {}) as Record<string, NodeStateView>
 
   return (
     <div className="space-y-6">
@@ -252,7 +268,14 @@ export function ExecutionDetail() {
         <CardContent>
           <div className="space-y-4">
             {Object.entries(nodeStates).map(([nodeId, state]) => {
-              const nodeStatus = STATUS_ICON[state.status === "running" ? "running" : state.status === "success" ? "success" : "failed"]
+              const nodeStatus =
+                state.status === "running"
+                  ? STATUS_ICON.running
+                  : state.status === "success"
+                    ? STATUS_ICON.success
+                    : state.status === "skipped"
+                      ? { icon: SkipForward, color: "text-muted-foreground", label: "已跳过" }
+                      : STATUS_ICON.failed
               const NodeIcon = nodeStatus.icon
               return (
                 <div key={nodeId} className="rounded-md border p-4">
@@ -265,6 +288,16 @@ export function ExecutionDetail() {
                     {state.type && (
                       <span className="rounded bg-secondary px-1.5 py-0.5 text-xs text-muted-foreground">
                         {state.type}
+                      </span>
+                    )}
+                    {state.status === "skipped" && (
+                      <span className="rounded bg-secondary px-1.5 py-0.5 text-xs text-muted-foreground">
+                        已跳过
+                      </span>
+                    )}
+                    {typeof state.duration_ms === "number" && (
+                      <span className="text-xs text-muted-foreground">
+                        耗时 {formatDurationMs(state.duration_ms)}
                       </span>
                     )}
                     {state.started_at && (

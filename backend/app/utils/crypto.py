@@ -30,25 +30,3 @@ def decrypt(token: str) -> str:
     nonce, ciphertext = raw[:12], raw[12:]
     aesgcm = AESGCM(_KEY)
     return aesgcm.decrypt(nonce, ciphertext, None).decode("utf-8")
-
-
-class EncryptedString:
-    """SQLAlchemy 类型装饰器思路（简化版）：
-    存入 DB 前加密，读取时解密。在 model 层手动调用 encrypt/decrypt 即可。
-    """
-
-    @staticmethod
-    def process_bind(value: str | None) -> str | None:
-        if value is None:
-            return None
-        return encrypt(value)
-
-    @staticmethod
-    def process_result(value: str | None) -> str | None:
-        if value is None:
-            return None
-        try:
-            return decrypt(value)
-        except Exception:
-            # 解密失败说明存的是明文或密钥变更，返回原值
-            return value

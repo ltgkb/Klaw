@@ -58,6 +58,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("Embedding 配置载入失败: %s", e)
 
+    # 载入 LLM 供应商 Key (system_settings, 热更新缓存)
+    try:
+        from app.core.database import async_session_factory
+        from app.core import llm_config
+        async with async_session_factory() as db:
+            await llm_config.load_from_db(db)
+        logger.info("LLM 供应商 Key 已载入")
+    except Exception as e:
+        logger.warning("LLM 供应商 Key 载入失败: %s", e)
+
     yield
 
     # 关闭连接

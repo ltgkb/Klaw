@@ -36,14 +36,29 @@ async def create_schedule(data: ScheduleCreate, current_user: CurrentUser, db: D
     await db.commit()
     await db.refresh(job)
 
-    # 注册到 APScheduler
-    next_run = scheduler_module.schedule_flow(
-        job_id=str(job.id),
-        flow_id=data.flow_id,
-        cron=data.cron,
-        input_data=data.input,
-        name=data.name,
-    )
+    # 注册到 APScheduler; 失败时回滚已建行, 避免产生孤儿记录
+    try:
+        next_run = scheduler_module.schedule_flow(
+            job_id=str(job.id),
+            flow_id=data.flow_id,
+            cron=data.cron,
+            input_data=data.input,
+            name=data.name,
+        )
+    except Exception as exc:
+        await db.delete(job)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"注册定时任务失败: {exc}",
+        )
+    if next_run is None:
+        await db.delete(job)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="调度器不可用, 无法计算下次执行时间",
+        )
     job.apscheduler_job_id = str(job.id)
     job.next_run_time = next_run
     await db.commit()
@@ -72,7 +87,18 @@ async def list_schedules(
         query = query.where(ScheduleJob.status == status_filter)
     query = query.order_by(ScheduleJob.created_at.desc())
     result = await db.execute(query)
-    return [ScheduleRead.model_validate(j) for j in result.scalars().all()]
+    return [
+        _to_read_with_live_next_run(j) for j in result.scalars().all()
+    ]
+
+
+def _to_read_with_live_next_run(job: ScheduleJob) -> ScheduleRead:
+    """用 APScheduler 实时 next_run_time 覆盖 DB 缓存值 (查不到时保留 DB 值)。"""
+    read = ScheduleRead.model_validate(job)
+    live = scheduler_module.get_next_run_time(job.apscheduler_job_id or str(job.id))
+    if live is not None:
+        read.next_run_time = live
+    return read
 
 
 @router.get("/{schedule_id}", response_model=ScheduleRead)
@@ -86,7 +112,7 @@ async def get_schedule(schedule_id: uuid.UUID, current_user: CurrentUser, db: DB
     flow = await agent_flow_service.get_flow(db, job.flow_id, current_user.id)
     if flow is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="定时任务不存在")
-    return ScheduleRead.model_validate(job)
+    return _to_read_with_live_next_run(job)
 
 
 @router.put("/{schedule_id}", response_model=ScheduleRead)
@@ -109,16 +135,30 @@ async def update_schedule(schedule_id: uuid.UUID, data: ScheduleUpdate, current_
         changed = True
     if data.input is not None:
         job.input = data.input
+        changed = True
 
     if data.status is not None:
         job.status = data.status
         if data.status == ScheduleStatus.paused:
             scheduler_module.pause_scheduled_job(str(job.id))
         elif data.status == ScheduleStatus.active:
-            next_run = scheduler_module.resume_scheduled_job(str(job.id))
+            # 恢复时用 schedule_flow 重建 job, 保证最新 cron/input 生效
+            next_run = scheduler_module.schedule_flow(
+                job_id=str(job.id),
+                flow_id=job.flow_id,
+                cron=job.cron,
+                input_data=job.input,
+                name=job.name,
+            )
+            if next_run is None:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="调度器不可用, 无法计算下次执行时间",
+                )
             job.next_run_time = next_run
+            changed = False  # 已用最新配置重建, 避免重复注册
 
-    # 如果 cron 或 name 变了, 重新注册 APScheduler job
+    # 如果 cron/name/input 变了, 重新注册 APScheduler job
     if changed and job.status == ScheduleStatus.active:
         next_run = scheduler_module.schedule_flow(
             job_id=str(job.id),
@@ -127,6 +167,11 @@ async def update_schedule(schedule_id: uuid.UUID, data: ScheduleUpdate, current_
             input_data=job.input,
             name=job.name,
         )
+        if next_run is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="调度器不可用, 无法计算下次执行时间",
+            )
         job.next_run_time = next_run
 
     await db.commit()

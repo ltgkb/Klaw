@@ -3,6 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,7 +24,7 @@ class Settings(BaseSettings):
     # ── 安全 ──
     jwt_secret_key: str = "change-me-in-production-please-use-a-long-random-string"
     jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 30
+    access_token_expire_minutes: int = 720  # 12 小时
     refresh_token_expire_days: int = 7
     # AES-256-GCM 主密钥 (32 bytes, hex 编码 64 字符)
     encryption_key: str = "0" * 64  # 生产环境必须替换
@@ -55,6 +56,8 @@ class Settings(BaseSettings):
     minio_access_key: str = "minioadmin"
     minio_secret_key: str = "minioadmin"
     minio_bucket: str = "claw-workspaces"
+    # 对外可访问的 MinIO URL (share 链接用); 留空回落 minio_url
+    minio_public_url: str | None = None
 
     # ── 文件上传限制 ──
     max_upload_size: int = 100 * 1024 * 1024  # 100 MB
@@ -69,6 +72,9 @@ class Settings(BaseSettings):
     # ── Cross-Encoder 重排序 (TEI reranker sidecar) ──
     reranker_url: str = "http://localhost:8083"
 
+    # ── 定时任务 ──
+    scheduler_timezone: str = "Asia/Shanghai"
+
     # ── Fallback 模型供应商 ──
     openai_api_key: str = ""
     anthropic_api_key: str = ""
@@ -81,6 +87,21 @@ class Settings(BaseSettings):
 
     # ── CORS ──
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
+
+    @model_validator(mode="after")
+    def _reject_default_secrets_in_prod(self) -> "Settings":
+        """prod 环境启动校验：拒绝默认 JWT/加密密钥，防止弱密钥上线。"""
+        if self.environment == "prod":
+            if self.jwt_secret_key == "change-me-in-production-please-use-a-long-random-string":
+                raise ValueError(
+                    "prod 环境必须通过 JWT_SECRET_KEY 设置强随机密钥"
+                )
+            if self.encryption_key == "0" * 64:
+                raise ValueError(
+                    "prod 环境必须通过 ENCRYPTION_KEY 设置真实加密密钥 "
+                    "(python -c \"import secrets; print(secrets.token_hex(32))\")"
+                )
+        return self
 
     @property
     def sync_postgres_url(self) -> str:

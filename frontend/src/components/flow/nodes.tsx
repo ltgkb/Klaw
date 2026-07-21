@@ -9,12 +9,21 @@ import {
   type NodeProps,
   type EdgeProps,
 } from "@xyflow/react"
-import { Brain, Database, GitBranch, Type, Bell, BrainCog, Play, Square } from "lucide-react"
+import { Brain, Database, GitBranch, Type, Bell, BrainCog, Play, Square, Globe } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { NodeType, NodeState } from "@/lib/api"
 
+/** 画布节点类型 (api.ts 的 NodeType + 契约2 的 http 节点; api.ts 归 WP9, 此处本地扩展) */
+export type CanvasNodeType = NodeType | "http"
+
+/** 节点状态视图类型 (契约2: 新增 skipped 状态与 duration_ms 字段) */
+export interface NodeStateView extends Omit<NodeState, "status"> {
+  status: string
+  duration_ms?: number
+}
+
 /** 节点类型 → 图标 + 颜色 */
-const NODE_META: Record<NodeType, { icon: typeof Brain; color: string; label: string }> = {
+const NODE_META: Record<CanvasNodeType, { icon: typeof Brain; color: string; label: string }> = {
   start: { icon: Play, color: "border-green-500 bg-green-50", label: "开始" },
   end: { icon: Square, color: "border-red-400 bg-red-50", label: "结束" },
   llm: { icon: Brain, color: "border-blue-400 bg-blue-50", label: "LLM 对话" },
@@ -23,6 +32,7 @@ const NODE_META: Record<NodeType, { icon: typeof Brain; color: string; label: st
   text: { icon: Type, color: "border-gray-400 bg-gray-50", label: "文本拼接" },
   notify: { icon: Bell, color: "border-pink-400 bg-pink-50", label: "消息推送" },
   memory: { icon: BrainCog, color: "border-teal-400 bg-teal-50", label: "记忆读写" },
+  http: { icon: Globe, color: "border-cyan-400 bg-cyan-50", label: "HTTP 请求" },
 }
 
 /** 执行状态 → 边框颜色 */
@@ -30,17 +40,23 @@ const STATE_BORDER: Record<string, string> = {
   running: "ring-2 ring-blue-500",
   success: "ring-2 ring-green-500",
   failed: "ring-2 ring-red-500",
+  skipped: "ring-2 ring-gray-300",
 }
 
 export interface FlowNodeData {
   label: string
   config: Record<string, unknown>
-  nodeState?: NodeState
+  nodeState?: NodeStateView
+}
+
+/** 执行耗时格式化 (duration_ms → 可读文本) */
+export function formatDurationMs(ms: number): string {
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`
 }
 
 function BaseNode({ id, type, data, selected }: NodeProps) {
   const nodeData = data as unknown as FlowNodeData
-  const t = (type as NodeType) ?? "text"
+  const t = (type as CanvasNodeType) ?? "text"
   const meta = NODE_META[t] ?? NODE_META.text
   const Icon = meta.icon
   const nodeState = nodeData.nodeState
@@ -80,6 +96,9 @@ function BaseNode({ id, type, data, selected }: NodeProps) {
         {nodeState?.status === "failed" && (
           <span className="ml-auto h-2 w-2 rounded-full bg-red-500" />
         )}
+        {nodeState?.status === "skipped" && (
+          <span className="ml-auto h-2 w-2 rounded-full bg-gray-400" title="已跳过" />
+        )}
       </div>
 
       {/* 节点名称 */}
@@ -88,7 +107,16 @@ function BaseNode({ id, type, data, selected }: NodeProps) {
       </p>
 
       {/* 配置摘要 */}
-      <NodeSummary type={type as NodeType} config={nodeData.config} />
+      <NodeSummary type={type as CanvasNodeType} config={nodeData.config} />
+
+      {/* 执行耗时 (契约2: duration_ms) */}
+      {typeof nodeState?.duration_ms === "number" && (
+        <p className="mt-0.5 text-[10px] text-gray-400">耗时 {formatDurationMs(nodeState.duration_ms)}</p>
+      )}
+      {/* 被裁剪分支标记 (契约2: skipped) */}
+      {nodeState?.status === "skipped" && (
+        <p className="mt-0.5 text-[10px] text-gray-400">分支未命中, 已跳过</p>
+      )}
 
       {/* 执行输出预览 */}
       {nodeState?.output && (
@@ -139,7 +167,7 @@ function BaseNode({ id, type, data, selected }: NodeProps) {
 }
 
 /** 不同节点类型的配置摘要 */
-function NodeSummary({ type, config }: { type: NodeType; config: Record<string, unknown> }) {
+function NodeSummary({ type, config }: { type: CanvasNodeType; config: Record<string, unknown> }) {
   if (type === "start") {
     const inputs = (config.inputs as { name?: string }[]) || []
     if (inputs.length === 0) return <p className="mt-0.5 text-xs text-gray-400">输入: {`{input}`}</p>
@@ -188,6 +216,15 @@ function NodeSummary({ type, config }: { type: NodeType; config: Record<string, 
       </p>
     )
   }
+  if (type === "http") {
+    const method = ((config.method as string) || "GET").toUpperCase()
+    const url = (config.url as string) || ""
+    return (
+      <p className="mt-0.5 text-xs text-gray-400 truncate" title={url}>
+        {method} {url || "未配置 URL"}
+      </p>
+    )
+  }
   // text
   const template = (config.template as string) || ""
   return (
@@ -205,6 +242,7 @@ export const ConditionNode = memo(BaseNode)
 export const TextNode = memo(BaseNode)
 export const NotifyNode = memo(BaseNode)
 export const MemoryNode = memo(BaseNode)
+export const HttpNode = memo(BaseNode)
 
 export const nodeTypes = {
   start: StartNode,
@@ -215,6 +253,7 @@ export const nodeTypes = {
   text: TextNode,
   notify: NotifyNode,
   memory: MemoryNode,
+  http: HttpNode,
 }
 
 /** 可删除的连线: 中点显示 × 按钮, 点击删除; 选中后高亮 */
