@@ -8,7 +8,7 @@
 
 - 后端：`uv run pytest -q` → **77 passed**；另行运行 `uv run python -m compileall -q app deepdoc common` 通过。
 - 前端：`npm run lint` 通过（3 个既有 Fast Refresh warning）；`npm run build` 通过（Vite 产生约 607 kB 主 JS，存在 code-splitting warning）。
-- 浏览器：Playwright 在 1440×1000 与 390×844 视口完成真实登录→设置→用户停用→恢复；用户管理可见，页面/滚动容器无横向溢出，控制台无 error。
+- 浏览器：Playwright 在 1440×1000 与 390×844 视口完成真实管理员登录→设置→用户停用→恢复；普通用户设置页不显示用户管理且不请求 admin-only API；页面/滚动容器无横向溢出，控制台无 error。
 - Compose：基础 `docker compose config --quiet` 通过；隔离覆盖配置也通过；后端/前端镜像均构建成功，`.dockerignore` 将最终 build context 限制在约 194 kB / 39 kB（未忽略时曾达 1.12 GB / 132 MB）；后端不再硬等待 TEI 健康，模型加载期间 API 可启动并如实降级。
 - 真实依赖：隔离 PostgreSQL 16、Redis 7、MinIO、Elasticsearch 8.11 全部 healthy；Alembic 从空库升级到 `4b2e9a1c7d33 (head)`，`alembic check` 无漂移。
 - 真实 API：注册/登录/刷新、PG 元数据、管理员用户列表与停用/恢复、MinIO 上传下载分享删除、TXT/HTML DeepDoc 解析、哈希向量 fallback、ES 索引与检索、条件分支、SSE complete、APScheduler 实际触发和重启恢复均已通过；内存生成的 MD/HTML/JSON/DOCX/XLSX/PPTX/PDF parser fixture 也已通过。
