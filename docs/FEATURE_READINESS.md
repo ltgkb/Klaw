@@ -10,7 +10,7 @@
 - 前端：`npm run lint` 通过（3 个既有 Fast Refresh warning）；`npm run build` 通过（Vite 产生约 602 kB 主 JS，存在 code-splitting warning）。
 - Compose：基础 `docker compose config --quiet` 通过；隔离覆盖配置也通过；后端/前端镜像均构建成功，`.dockerignore` 将最终 build context 限制在约 194 kB / 39 kB（未忽略时曾达 1.12 GB / 132 MB）。
 - 真实依赖：隔离 PostgreSQL 16、Redis 7、MinIO、Elasticsearch 8.11 全部 healthy；Alembic 从空库升级到 `4b2e9a1c7d33 (head)`，`alembic check` 无漂移。
-- 真实 API：注册/登录/刷新、PG 元数据、MinIO 上传下载分享删除、TXT DeepDoc 解析、哈希向量 fallback、ES 索引与检索、条件分支、SSE complete、APScheduler 实际触发和重启恢复均已通过。
+- 真实 API：注册/登录/刷新、PG 元数据、MinIO 上传下载分享删除、TXT DeepDoc 解析、哈希向量 fallback、ES 索引与检索、条件分支、SSE complete、APScheduler 实际触发和重启恢复均已通过；内存生成的 MD/HTML/JSON/DOCX/XLSX/PPTX/PDF parser fixture 也已通过。
 - 环境阻塞：本次未启动 TEI BGE-M3、reranker、OpenClaw、Hermes；健康检查如实为 degraded。知识库使用明确标记的 dev 哈希向量 fallback，LLM/工具使用明确标记的 dev Mock，未宣称真实模型或真实本地工具可用。
 
 ## 功能矩阵
@@ -22,7 +22,7 @@
 | RBAC 与禁用用户 | 设置/用户 API | 部分可用（无禁用 UI） | `require_roles`；当前用户每次请求检查 `is_active` | RBAC 测试；新增 disabled token 401 | 部分可用 | admin 缺少禁用/解禁入口（P1） |
 | owner 隔离与密钥保护 | 各资源页面 | 可用 | 查询按 owner；AES-256-GCM API key/channel secret | KB/flow/schedule/file 隔离测试；真实 push 配置返回 `******` | 可用 | 单租户 owner 模式，不是团队/组织租户（P2） |
 | 知识库 CRUD | `/kb` | 可用 | `/knowledge-bases` + PG | `test_kb.py`、真实创建/列表 | 可用 | 分页参数缺少上限校验（P2） |
-| TXT/MD/HTML/JSON/DOCX/XLSX/PPTX/EPUB 上传解析 | KB 详情上传 | 可用 | MinIO + DeepDoc 格式路由 | mock 管线覆盖；真实 TXT 解析成功 | 部分可用 | 只对 TXT 做了真实依赖验证；需逐格式 fixture/E2E（P1） |
+| TXT/MD/HTML/JSON/DOCX/XLSX/PPTX/EPUB 上传解析 | KB 详情上传 | 可用 | MinIO + DeepDoc 格式路由 | parser fixture 覆盖 MD/HTML/JSON/DOCX/XLSX/PPTX/EPUB/PDF；真实 MinIO 管线验证 TXT | 部分可用 | 仍需逐格式 MinIO→ES E2E 和大文件/损坏文件验证（P1） |
 | PDF 纯文本解析 | KB 详情上传 | 可用 | pypdf 轻量路径；视觉 OCR 未启用 | 代码路径和 parser 回归 | 部分可用 | OCR/版面/表格图片仍缺模型（P2） |
 | 分块与引用元数据 | KB chunks | 可用 | fixed/recursive/markdown/semantic 降级；page/doc/chunk metadata | `test_kb.py`；真实 1 chunk、page/source metadata | 可用 | semantic 仍是 recursive fallback（P2） |
 | 向量化 | 上传后台任务 | 无独立配置入口可感知 fallback | TEI → dev 哈希向量 | 真实 TEI 不可达时明确日志并完成 ES indexing | 部分可用 | TEI 模型 sidecar 未启动；哈希向量不可用于生产（P0/P1 环境） |
