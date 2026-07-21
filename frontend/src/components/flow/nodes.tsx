@@ -1,11 +1,13 @@
-import { memo } from "react"
+import { memo, useLayoutEffect } from "react"
 import {
   Handle,
+  NodeResizer,
   Position,
   BaseEdge,
   EdgeLabelRenderer,
   getBezierPath,
   useReactFlow,
+  useUpdateNodeInternals,
   type NodeProps,
   type EdgeProps,
 } from "@xyflow/react"
@@ -49,16 +51,33 @@ function BaseNode({ id, type, data, selected }: NodeProps) {
   const isStart = t === "start"
   const isEnd = t === "end"
   const isCondition = t === "condition"
+  const conditionCases = (nodeData.config?.cases as { id?: string; name?: string }[] | undefined) || []
+  const updateNodeInternals = useUpdateNodeInternals()
+  const handleSignature = conditionCases.map((item) => item.id).join("|")
+
+  useLayoutEffect(() => {
+    const frame = requestAnimationFrame(() => updateNodeInternals(id))
+    return () => cancelAnimationFrame(frame)
+  }, [handleSignature, id, updateNodeInternals])
 
   return (
     <div
       className={cn(
-        "min-w-[180px] max-w-[240px] rounded-lg border-2 px-3 py-2 shadow-sm transition-shadow",
+        "relative h-full min-h-[84px] w-full min-w-[180px] rounded-lg border-2 px-3 py-2 shadow-sm transition-shadow",
         meta.color,
         stateClass,
         selected && "ring-2 ring-primary",
       )}
     >
+      <NodeResizer
+        isVisible={selected}
+        minWidth={180}
+        minHeight={isCondition ? Math.max(116, 92 + conditionCases.length * 24) : 84}
+        maxWidth={480}
+        maxHeight={420}
+        color="#2563eb"
+      />
+
       {/* 输入 Handle (开始节点无) */}
       {!isStart && (
         <Handle
@@ -99,9 +118,9 @@ function BaseNode({ id, type, data, selected }: NodeProps) {
       )}
 
       {/* 条件分支: 多个 source handle (每个 case 一个) + 默认 */}
-      {isCondition && (nodeData.config?.cases as { id?: string; name?: string }[] | undefined)?.length ? (
+      {isCondition && conditionCases.length ? (
         <div className="mt-2 space-y-1">
-          {((nodeData.config?.cases as { id: string; name: string }[]) || []).map((c, i) => (
+          {conditionCases.map((c, i) => (
             <div
               key={c.id || i}
               className="relative flex items-center justify-end gap-1 rounded bg-white/70 px-2 py-0.5 text-[11px] text-gray-600"

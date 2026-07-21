@@ -16,13 +16,14 @@ const TOOLBOX_ITEMS: { type: NodeType; label: string; icon: typeof Brain; color:
 
 interface Props {
   onAdd: (type: NodeType) => void
+  width?: number
 }
 
-export function NodeToolbox({ onAdd }: Props) {
+export function NodeToolbox({ onAdd, width = 176 }: Props) {
   return (
-    <div className="flex w-44 flex-col border-r bg-secondary/20">
+    <div className="flex shrink-0 flex-col overflow-hidden border-r bg-secondary/20" style={{ width }}>
       <div className="border-b p-3">
-        <p className="text-xs font-semibold text-muted-foreground">节点工具箱</p>
+        <p className="text-xs font-semibold text-muted-foreground">元素栏</p>
         <p className="mt-0.5 text-[10px] text-muted-foreground">点击添加到画布</p>
       </div>
       <div className="flex flex-col gap-2 p-3">

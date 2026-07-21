@@ -149,7 +149,7 @@ export function NodeConfigPanel({ node, allNodes = [], onChange, onDelete }: Pro
           选中一个节点以编辑配置
         </p>
         <p className="mt-2 text-xs text-muted-foreground">
-          左侧拖拽节点到画布添加新节点
+          从左侧元素栏添加新节点
         </p>
       </div>
     )

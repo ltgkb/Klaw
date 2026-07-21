@@ -174,6 +174,7 @@ export interface FlowNode {
   id: string
   type: NodeType
   position: { x: number; y: number }
+  style?: { width?: number | string; height?: number | string }
   data: {
     label: string
     config: Record<string, unknown>

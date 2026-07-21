@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type MouseEvent } from "react"
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type KeyboardEvent,
+  type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import {
   ReactFlow,
@@ -35,6 +44,7 @@ import {
   BrainCog,
   Repeat2,
   Square,
+  GripVertical,
 } from "lucide-react"
 import { flowApi, systemApi, type FlowRead, type NodeType, type ExecutionRead, type NodeState } from "@/lib/api"
 import { Button } from "@/components/ui/button"
@@ -45,9 +55,90 @@ import { nodeTypes, edgeTypes } from "@/components/flow/nodes"
 import { cn } from "@/lib/utils"
 
 let nodeIdCounter = 0
+const DEFAULT_NODE_WIDTH = 220
+const DEFAULT_NODE_HEIGHT = 96
+const TOOLBOX_WIDTH_KEY = "claw-flow-toolbox-width"
+const CONFIG_WIDTH_KEY = "claw-flow-config-width"
+
 function genNodeId() {
   nodeIdCounter += 1
   return `node-${Date.now().toString(36)}-${nodeIdCounter}`
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value))
+}
+
+function readStoredWidth(key: string, fallback: number) {
+  const value = Number(localStorage.getItem(key))
+  return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+function edgeId(connection: Pick<Connection, "source" | "target" | "sourceHandle" | "targetHandle">) {
+  return ["e", connection.source, connection.sourceHandle || "out", connection.target, connection.targetHandle || "in"].join("-")
+}
+
+function serializeNode(node: Node) {
+  const styleWidth = typeof node.style?.width === "number" ? node.style.width : undefined
+  const styleHeight = typeof node.style?.height === "number" ? node.style.height : undefined
+  const width = node.width ?? styleWidth ?? DEFAULT_NODE_WIDTH
+  const height = node.height ?? styleHeight
+  return {
+    id: node.id,
+    type: node.type as NodeType,
+    position: node.position,
+    style: { width, ...(height ? { height } : {}) },
+    data: {
+      label: (node.data as { label: string }).label,
+      config: (node.data as { config: Record<string, unknown> }).config,
+    },
+  }
+}
+
+function serializeEdge(edge: Edge) {
+  return {
+    id: edge.id,
+    source: edge.source,
+    target: edge.target,
+    sourceHandle: edge.sourceHandle ?? null,
+    targetHandle: edge.targetHandle ?? null,
+  }
+}
+
+interface PanelResizeHandleProps {
+  label: string
+  value: number
+  min: number
+  max: number
+  direction: 1 | -1
+  onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void
+  onNudge: (delta: number) => void
+}
+
+function PanelResizeHandle({ label, value, min, max, direction, onPointerDown, onNudge }: PanelResizeHandleProps) {
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return
+    event.preventDefault()
+    const screenDelta = event.key === "ArrowRight" ? 16 : -16
+    onNudge(screenDelta * direction)
+  }
+
+  return (
+    <div
+      role="separator"
+      aria-label={label}
+      aria-orientation="vertical"
+      aria-valuemin={min}
+      aria-valuemax={max}
+      aria-valuenow={Math.round(value)}
+      tabIndex={0}
+      className="group relative z-20 flex w-2 shrink-0 cursor-col-resize touch-none items-center justify-center border-x bg-muted/30 outline-none hover:bg-accent focus-visible:bg-accent"
+      onPointerDown={onPointerDown}
+      onKeyDown={handleKeyDown}
+    >
+      <GripVertical className="h-4 w-4 text-muted-foreground opacity-70 group-hover:opacity-100 group-focus:opacity-100" />
+    </div>
+  )
 }
 
 const DEFAULT_CONFIGS: Record<NodeType, Record<string, unknown>> = {
@@ -102,6 +193,8 @@ function FlowCanvasInner() {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [toolboxWidth, setToolboxWidth] = useState(() => clamp(readStoredWidth(TOOLBOX_WIDTH_KEY, 176), 140, 320))
+  const [configWidth, setConfigWidth] = useState(() => clamp(readStoredWidth(CONFIG_WIDTH_KEY, 288), 260, 520))
 
   // 执行状态
   const [execution, setExecution] = useState<ExecutionRead | null>(null)
@@ -116,6 +209,8 @@ function FlowCanvasInner() {
   // 拖线弹出节点菜单
   const { screenToFlowPosition } = useReactFlow()
   const connectingNodeId = useRef<string | null>(null)
+  const connectingHandleId = useRef<string | null>(null)
+  const canvasRef = useRef<HTMLDivElement | null>(null)
   const [addMenu, setAddMenu] = useState<{ open: boolean; x: number; y: number }>({ open: false, x: 0, y: 0 })
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -128,7 +223,7 @@ function FlowCanvasInner() {
       setFlow(resp.data)
       const dag = resp.data.dag || { nodes: [], edges: [] }
       // 转换为 XYFlow 格式 (后端节点 data 里没有 nodeState)
-      setNodes(dag.nodes.map((n) => ({ ...n })) as Node[])
+      setNodes(dag.nodes.map((n) => ({ ...n, style: { width: DEFAULT_NODE_WIDTH, ...n.style } })) as Node[])
       setEdges(dag.edges.map((e) => ({ ...e, type: "deletable" })) as Edge[])
     } catch {
       // 错误由拦截器处理
@@ -148,6 +243,66 @@ function FlowCanvasInner() {
     }
   }, [])
 
+  const startPanelResize = useCallback((panel: "toolbox" | "config", event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = panel === "toolbox" ? toolboxWidth : configWidth
+    const min = panel === "toolbox" ? 140 : 260
+    const max = panel === "toolbox" ? 320 : 520
+    const direction = panel === "toolbox" ? 1 : -1
+    const previousCursor = document.body.style.cursor
+    const previousUserSelect = document.body.style.userSelect
+    document.body.style.cursor = "col-resize"
+    document.body.style.userSelect = "none"
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const width = clamp(startWidth + (moveEvent.clientX - startX) * direction, min, max)
+      if (panel === "toolbox") setToolboxWidth(width)
+      else setConfigWidth(width)
+    }
+    const handlePointerUp = (upEvent: PointerEvent) => {
+      handlePointerMove(upEvent)
+      window.removeEventListener("pointermove", handlePointerMove)
+      window.removeEventListener("pointerup", handlePointerUp)
+      document.body.style.cursor = previousCursor
+      document.body.style.userSelect = previousUserSelect
+      const width = clamp(startWidth + (upEvent.clientX - startX) * direction, min, max)
+      localStorage.setItem(panel === "toolbox" ? TOOLBOX_WIDTH_KEY : CONFIG_WIDTH_KEY, String(Math.round(width)))
+    }
+    window.addEventListener("pointermove", handlePointerMove)
+    window.addEventListener("pointerup", handlePointerUp, { once: true })
+  }, [configWidth, toolboxWidth])
+
+  const nudgePanel = useCallback((panel: "toolbox" | "config", delta: number) => {
+    if (panel === "toolbox") {
+      setToolboxWidth((current) => {
+        const next = clamp(current + delta, 140, 320)
+        localStorage.setItem(TOOLBOX_WIDTH_KEY, String(Math.round(next)))
+        return next
+      })
+    } else {
+      setConfigWidth((current) => {
+        const next = clamp(current + delta, 260, 520)
+        localStorage.setItem(CONFIG_WIDTH_KEY, String(Math.round(next)))
+        return next
+      })
+    }
+  }, [])
+
+  const nodePositionAt = useCallback((point?: { x: number; y: number }) => {
+    const rect = canvasRef.current?.getBoundingClientRect()
+    const screenPoint = point || (rect ? {
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+    } : { x: window.innerWidth / 2, y: window.innerHeight / 2 })
+    const flowPoint = screenToFlowPosition(screenPoint)
+    return {
+      x: flowPoint.x - DEFAULT_NODE_WIDTH / 2,
+      y: flowPoint.y - DEFAULT_NODE_HEIGHT / 2,
+    }
+  }, [screenToFlowPosition])
+
   // ── 添加节点 ──
   const handleAddNode = useCallback((type: NodeType) => {
     const id = genNodeId()
@@ -156,42 +311,45 @@ function FlowCanvasInner() {
     const newNode: Node = {
       id,
       type,
-      position: {
-        x: 200 + Math.random() * 100,
-        y: 150 + Math.random() * 80,
-      },
+      position: nodePositionAt(),
+      style: { width: DEFAULT_NODE_WIDTH },
       data: {
         label: NODE_LABELS[type],
         config,
       },
     }
-    setNodes((nds) => [...nds, newNode])
+    setNodes((nds) => [...nds.map((node) => ({ ...node, selected: false })), { ...newNode, selected: true }])
     setSelectedNodeId(id)
-  }, [setNodes, defaultLlmModel])
+  }, [setNodes, defaultLlmModel, nodePositionAt])
 
   // ── 连线 ──
   const onConnect = useCallback(
     (connection: Connection) => {
       setEdges((eds) =>
-        addEdge({ ...connection, id: `e-${connection.source}-${connection.target}`, type: "deletable" }, eds),
+        addEdge({ ...connection, id: edgeId(connection), type: "deletable" }, eds),
       )
     },
     [setEdges],
   )
 
   // ── 拖线开始: 记录源节点 ──
-  const onConnectStart = useCallback<OnConnectStart>((_, { nodeId }) => {
+  const onConnectStart = useCallback<OnConnectStart>((_, { nodeId, handleId }) => {
     connectingNodeId.current = nodeId
+    connectingHandleId.current = handleId
   }, [])
 
   // ── 拖线结束: 若松开在空白处, 弹出节点菜单 ──
   const onConnectEnd = useCallback<OnConnectEnd>((event) => {
     const sourceId = connectingNodeId.current
-    if (!sourceId) return
+    if (!sourceId) {
+      connectingHandleId.current = null
+      return
+    }
     const target = event.target as HTMLElement | null
     const isPane = !!target?.classList?.contains("react-flow__pane")
     if (!isPane) {
       connectingNodeId.current = null
+      connectingHandleId.current = null
       return
     }
     const e = event as unknown as {
@@ -209,7 +367,8 @@ function FlowCanvasInner() {
   // ── 从菜单添加节点并自动连线 ──
   const handleAddNodeFromMenu = useCallback((type: NodeType) => {
     const sourceId = connectingNodeId.current
-    const position = screenToFlowPosition({ x: addMenu.x, y: addMenu.y })
+    const sourceHandle = connectingHandleId.current
+    const position = nodePositionAt({ x: addMenu.x, y: addMenu.y })
     const id = genNodeId()
     const config = { ...DEFAULT_CONFIGS[type] }
     if (type === "llm" && defaultLlmModel) config.model = defaultLlmModel
@@ -217,16 +376,19 @@ function FlowCanvasInner() {
       id,
       type,
       position,
+      style: { width: DEFAULT_NODE_WIDTH },
       data: { label: NODE_LABELS[type], config },
     }
-    setNodes((nds) => [...nds, newNode])
+    setNodes((nds) => [...nds.map((node) => ({ ...node, selected: false })), { ...newNode, selected: true }])
     if (sourceId) {
-      setEdges((eds) => addEdge({ source: sourceId, target: id, id: `e-${sourceId}-${id}`, type: "deletable" }, eds))
+      const connection = { source: sourceId, sourceHandle, target: id, targetHandle: null }
+      setEdges((eds) => addEdge({ ...connection, id: edgeId(connection), type: "deletable" }, eds))
     }
     setSelectedNodeId(id)
     setAddMenu({ open: false, x: 0, y: 0 })
     connectingNodeId.current = null
-  }, [addMenu.x, addMenu.y, screenToFlowPosition, setEdges, setNodes, defaultLlmModel])
+    connectingHandleId.current = null
+  }, [addMenu.x, addMenu.y, nodePositionAt, setEdges, setNodes, defaultLlmModel])
 
   // ── 选中节点 ──
   const onNodeClick = useCallback((_: MouseEvent, node: Node) => {
@@ -239,16 +401,34 @@ function FlowCanvasInner() {
     setSelectedNodeId(null)
     setAddMenu({ open: false, x: 0, y: 0 })
     connectingNodeId.current = null
+    connectingHandleId.current = null
   }, [])
 
   // ── 节点数据变更 ──
   const handleNodeDataChange = useCallback((id: string, newData: Partial<Node["data"]>) => {
+    const nextConfig = (newData as { config?: Record<string, unknown> }).config
+    if (nextConfig && Array.isArray(nextConfig.cases)) {
+      const validHandles = new Set([
+        "default",
+        ...nextConfig.cases.map((item) => String((item as { id?: string }).id || "")).filter(Boolean),
+      ])
+      setEdges((current) => current.filter((edge) => (
+        edge.source !== id || !edge.sourceHandle || validHandles.has(edge.sourceHandle)
+      )))
+    }
     setNodes((nds) =>
-      nds.map((n) =>
-        n.id === id ? { ...n, data: { ...n.data, ...newData } } : n,
-      ),
+      nds.map((node) => {
+        if (node.id !== id) return node
+        const updated = { ...node, data: { ...node.data, ...newData } }
+        if (nextConfig && Array.isArray(nextConfig.cases)) {
+          const minHeight = Math.max(116, 92 + nextConfig.cases.length * 24)
+          const currentHeight = node.height ?? (typeof node.style?.height === "number" ? node.style.height : 0)
+          if (currentHeight < minHeight) updated.style = { ...node.style, height: minHeight }
+        }
+        return updated
+      }),
     )
-  }, [setNodes])
+  }, [setEdges, setNodes])
 
   // ── 删除节点 ──
   const handleDeleteNode = useCallback((id: string) => {
@@ -272,17 +452,8 @@ function FlowCanvasInner() {
     setSaving(true)
     try {
       const dag = {
-        nodes: nodes.map((n) => ({
-          id: n.id,
-          type: n.type as NodeType,
-          position: n.position,
-          data: { label: (n.data as { label: string }).label, config: (n.data as { config: Record<string, unknown> }).config },
-        })),
-        edges: edges.map((e) => ({
-          id: e.id,
-          source: e.source,
-          target: e.target,
-        })),
+        nodes: nodes.map(serializeNode),
+        edges: edges.map(serializeEdge),
       }
       await flowApi.update(flowId, { dag })
       await fetchFlow()
@@ -300,16 +471,8 @@ function FlowCanvasInner() {
       version: 1,
       name: flow?.name || "agent",
       exported_at: new Date().toISOString(),
-      nodes: nodes.map((n) => ({
-        id: n.id,
-        type: n.type as NodeType,
-        position: n.position,
-        data: {
-          label: (n.data as { label: string }).label,
-          config: (n.data as { config: Record<string, unknown> }).config,
-        },
-      })),
-      edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle ?? null })),
+      nodes: nodes.map(serializeNode),
+      edges: edges.map(serializeEdge),
     }
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" })
     const url = URL.createObjectURL(blob)
@@ -348,12 +511,23 @@ function FlowCanvasInner() {
       if (n.type === "loop" && typeof config.body_node_id === "string") {
         config.body_node_id = idMap[config.body_node_id] || ""
       }
-      return { ...n, id: idMap[n.id], data: { ...data, config } }
+      return {
+        ...n,
+        id: idMap[n.id],
+        style: { width: DEFAULT_NODE_WIDTH, ...n.style },
+        data: { ...data, config },
+      }
     })
     const newEdges: Edge[] = impEdges.map((edge) => {
       const s = idMap[edge.source] || edge.source
       const t = idMap[edge.target] || edge.target
-      return { ...edge, id: `e-${s}-${t}`, source: s, target: t }
+      const connection = {
+        source: s,
+        target: t,
+        sourceHandle: edge.sourceHandle ?? null,
+        targetHandle: edge.targetHandle ?? null,
+      }
+      return { ...edge, ...connection, id: edgeId(connection) }
     })
     setNodes(newNodes)
     setEdges(newEdges)
@@ -361,16 +535,8 @@ function FlowCanvasInner() {
     setSaving(true)
     try {
       const dag = {
-        nodes: newNodes.map((n) => ({
-          id: n.id,
-          type: n.type as NodeType,
-          position: n.position,
-          data: {
-            label: (n.data as { label: string }).label,
-            config: (n.data as { config: Record<string, unknown> }).config,
-          },
-        })),
-        edges: newEdges.map((edge) => ({ id: edge.id, source: edge.source, target: edge.target, sourceHandle: edge.sourceHandle ?? null })),
+        nodes: newNodes.map(serializeNode),
+        edges: newEdges.map(serializeEdge),
       }
       await flowApi.update(flowId, { dag })
       await fetchFlow()
@@ -388,13 +554,8 @@ function FlowCanvasInner() {
     setSaving(true)
     try {
       const dag = {
-        nodes: nodes.map((n) => ({
-          id: n.id,
-          type: n.type as NodeType,
-          position: n.position,
-          data: { label: (n.data as { label: string }).label, config: (n.data as { config: Record<string, unknown> }).config },
-        })),
-        edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle ?? null })),
+        nodes: nodes.map(serializeNode),
+        edges: edges.map(serializeEdge),
       }
       await flowApi.update(flowId, { dag })
     } catch {
@@ -618,11 +779,23 @@ function FlowCanvasInner() {
       )}
 
       {/* 画布区域 */}
-      <div className="flex flex-1 overflow-hidden">
-        <NodeToolbox onAdd={handleAddNode} />
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <NodeToolbox onAdd={handleAddNode} width={toolboxWidth} />
+        <PanelResizeHandle
+          label="调整元素栏宽度"
+          value={toolboxWidth}
+          min={140}
+          max={320}
+          direction={1}
+          onPointerDown={(event) => startPanelResize("toolbox", event)}
+          onNudge={(delta) => nudgePanel("toolbox", delta)}
+        />
 
         {/* XYFlow 画布 */}
-        <div className="flex-1">
+        <div
+          ref={canvasRef}
+          className="relative min-w-0 flex-1"
+        >
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -657,10 +830,20 @@ function FlowCanvasInner() {
           {/* 拖线松开弹出的节点选择菜单 */}
           {addMenu.open && (
             <>
-              <div className="fixed inset-0 z-40" onClick={() => setAddMenu({ open: false, x: 0, y: 0 })} />
+              <div
+                className="fixed inset-0 z-40"
+                onClick={() => {
+                  setAddMenu({ open: false, x: 0, y: 0 })
+                  connectingNodeId.current = null
+                  connectingHandleId.current = null
+                }}
+              />
               <div
                 className="fixed z-50 w-44 rounded-lg border bg-popover p-1 shadow-lg"
-                style={{ left: addMenu.x, top: addMenu.y }}
+                style={{
+                  left: Math.max(8, Math.min(addMenu.x, window.innerWidth - 184)),
+                  top: Math.max(8, Math.min(addMenu.y, window.innerHeight - 332)),
+                }}
               >
                 <p className="px-2 py-1 text-[11px] text-muted-foreground">添加并连接节点</p>
                 {ADDABLE_TYPES.map((item) => (
@@ -679,7 +862,16 @@ function FlowCanvasInner() {
         </div>
 
         {/* 右侧配置面板 */}
-        <div className="w-72 border-l bg-background">
+        <PanelResizeHandle
+          label="调整属性栏宽度"
+          value={configWidth}
+          min={260}
+          max={520}
+          direction={-1}
+          onPointerDown={(event) => startPanelResize("config", event)}
+          onNudge={(delta) => nudgePanel("config", delta)}
+        />
+        <div className="shrink-0 overflow-hidden border-l bg-background" style={{ width: configWidth }}>
           <NodeConfigPanel
             node={selectedNode}
             allNodes={nodes}
