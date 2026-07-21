@@ -3,6 +3,7 @@
 对齐 PRD 第 3.1 节完整管线。异步解析通过 FastAPI BackgroundTasks 触发。
 """
 
+import asyncio
 import logging
 import uuid
 
@@ -83,11 +84,14 @@ async def parse_and_index(doc_id: uuid.UUID, kb_id: uuid.UUID) -> None:
             await db.commit()
 
             # ── 2. 从 MinIO 下载 ──
-            file_data = download_file(doc.file_path)
+            file_data = await asyncio.to_thread(download_file, doc.file_path)
 
             # ── 3. DeepDoc 解析 ──
-            blocks = deepdoc_service.parse_document(
-                doc.filename, file_data, chunk_token_num=kb.chunk_size
+            blocks = await asyncio.to_thread(
+                deepdoc_service.parse_document,
+                doc.filename,
+                file_data,
+                kb.chunk_size,
             )
             doc.page_count = len({b["page"] for b in blocks}) if blocks else 0
             doc.parse_result = {

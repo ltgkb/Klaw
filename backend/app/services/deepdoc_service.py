@@ -17,6 +17,7 @@ DeepDoc 各 parser 返回结构不一致:
 import logging
 import os
 import tempfile
+from io import BytesIO
 from pathlib import Path
 
 logger = logging.getLogger("claw.deepdoc")
@@ -103,26 +104,26 @@ def _dispatch_parse(parser_type: str, fnm: str, binary: bytes, chunk_token_num: 
 
 def _parse_txt(fnm: str, binary: bytes, chunk_token_num: int) -> list[dict]:
     """TxtParser 返回 [[text, ""], ...]。"""
-    from deepdoc.parser import TxtParser
+    from deepdoc.parser.txt_parser import RAGFlowTxtParser
 
-    result = TxtParser()(fnm, binary=binary, chunk_token_num=chunk_token_num)
+    result = RAGFlowTxtParser()(fnm, binary=binary, chunk_token_num=chunk_token_num)
     return [{"content": c[0], "content_type": "text", "page": 0} for c in result if c[0].strip()]
 
 
 def _parse_pdf(fnm: str, binary: bytes) -> list[dict]:
-    """PlainParser 返回 ([(line, "")], [])。按页分块。
+    """使用 pypdf 做纯文本提取并保留页码。
 
-    使用 PlainParser (纯文本提取) 避免 ONNX 模型依赖，
-    视觉解析 (VisionParser) 需要模型文件，留 M2.5 启用。
+    避免导入 DeepDoc 的视觉 PDF parser；后者会在普通 PDF 路径加载
+    xgboost/ONNX/OCR 模型。视觉解析留待显式 OCR 模式启用。
     """
-    from deepdoc.parser import PlainParser
+    from pypdf import PdfReader
 
-    # PlainParser 需要文件路径或 BytesIO
-    sections, tables = PlainParser()(binary if binary else fnm)
     blocks = []
-    for line, _ in sections:
-        if line.strip():
-            blocks.append({"content": line, "content_type": "text", "page": 0})
+    reader = PdfReader(BytesIO(binary))
+    for page_number, page in enumerate(reader.pages, start=1):
+        text = page.extract_text() or ""
+        if text.strip():
+            blocks.append({"content": text, "content_type": "text", "page": page_number})
     return blocks
 
 
@@ -131,9 +132,9 @@ def _parse_docx(fnm: str, binary: bytes) -> list[dict]:
 
     sections=[(paragraph_text, style)], tables=[html_str]
     """
-    from deepdoc.parser import DocxParser
+    from deepdoc.parser.docx_parser import RAGFlowDocxParser
 
-    sections, tables = DocxParser()(fnm)
+    sections, tables = RAGFlowDocxParser()(fnm)
     blocks = []
     for text, _style in sections:
         if text.strip():
@@ -146,9 +147,9 @@ def _parse_docx(fnm: str, binary: bytes) -> list[dict]:
 
 def _parse_excel(fnm: str, binary: bytes) -> list[dict]:
     """ExcelParser 返回 [text_line, ...]。"""
-    from deepdoc.parser import ExcelParser
+    from deepdoc.parser.excel_parser import RAGFlowExcelParser
 
-    result = ExcelParser()(fnm if not binary else binary)
+    result = RAGFlowExcelParser()(fnm if not binary else binary)
     blocks = []
     for line in result:
         if line and str(line).strip():
@@ -158,9 +159,9 @@ def _parse_excel(fnm: str, binary: bytes) -> list[dict]:
 
 def _parse_ppt(fnm: str, binary: bytes) -> list[dict]:
     """PptParser 返回 (sections, tables)。"""
-    from deepdoc.parser import PptParser
+    from deepdoc.parser.ppt_parser import RAGFlowPptParser
 
-    sections, tables = PptParser()(fnm, from_page=0, to_page=10000)
+    sections, tables = RAGFlowPptParser()(fnm, from_page=0, to_page=10000)
     blocks = []
     if sections:
         for item in sections:
@@ -176,10 +177,10 @@ def _parse_ppt(fnm: str, binary: bytes) -> list[dict]:
 
 def _parse_markdown(binary: bytes, chunk_token_num: int) -> list[dict]:
     """MarkdownParser 使用 extract_tables_and_remainder。"""
-    from deepdoc.parser import MarkdownParser
+    from deepdoc.parser.markdown_parser import RAGFlowMarkdownParser
 
     md_text = binary.decode("utf-8", errors="ignore")
-    parser = MarkdownParser(chunk_token_num=chunk_token_num)
+    parser = RAGFlowMarkdownParser(chunk_token_num=chunk_token_num)
     tables, remainder = parser.extract_tables_and_remainder(md_text)
 
     blocks = []
@@ -193,9 +194,9 @@ def _parse_markdown(binary: bytes, chunk_token_num: int) -> list[dict]:
 
 def _parse_html(fnm: str, binary: bytes, chunk_token_num: int) -> list[dict]:
     """HtmlParser 返回 sections。"""
-    from deepdoc.parser import HtmlParser
+    from deepdoc.parser.html_parser import RAGFlowHtmlParser
 
-    result = HtmlParser()(fnm, binary=binary, chunk_token_num=chunk_token_num)
+    result = RAGFlowHtmlParser()(fnm, binary=binary, chunk_token_num=chunk_token_num)
     blocks = []
     if isinstance(result, list):
         for item in result:
@@ -207,9 +208,9 @@ def _parse_html(fnm: str, binary: bytes, chunk_token_num: int) -> list[dict]:
 
 def _parse_json(binary: bytes) -> list[dict]:
     """JsonParser 返回 list[str]。"""
-    from deepdoc.parser import JsonParser
+    from deepdoc.parser.json_parser import RAGFlowJsonParser
 
-    result = JsonParser()(binary)
+    result = RAGFlowJsonParser()(binary)
     blocks = []
     if isinstance(result, list):
         for item in result:
@@ -220,9 +221,9 @@ def _parse_json(binary: bytes) -> list[dict]:
 
 def _parse_epub(fnm: str, binary: bytes, chunk_token_num: int) -> list[dict]:
     """EpubParser 返回 [[text, ""], ...]。"""
-    from deepdoc.parser import EpubParser
+    from deepdoc.parser.epub_parser import RAGFlowEpubParser
 
-    result = EpubParser()(fnm, binary=binary, chunk_token_num=chunk_token_num)
+    result = RAGFlowEpubParser()(fnm, binary=binary, chunk_token_num=chunk_token_num)
     blocks = []
     for item in result:
         text = item[0] if isinstance(item, (list, tuple)) else str(item)

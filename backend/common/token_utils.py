@@ -19,6 +19,7 @@ import hashlib
 import logging
 import os
 import shutil
+from pathlib import Path
 import threading
 import tiktoken
 
@@ -26,7 +27,16 @@ from common.file_utils import get_project_base_directory
 
 
 def _ensure_tiktoken_cache() -> str:
-    cache_dir = get_project_base_directory()
+    # Keep downloaded encodings outside the repository.  The previous default
+    # wrote a 1.6 MB hash-named file into ``backend/`` on first import, which
+    # was easy to accidentally include in commits and made read-only deploys
+    # fail unexpectedly.
+    cache_dir = os.environ.get("TIKTOKEN_CACHE_DIR") or os.path.join(
+        os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache")),
+        "klaw",
+        "tiktoken",
+    )
+    Path(cache_dir).mkdir(parents=True, exist_ok=True)
     os.environ["TIKTOKEN_CACHE_DIR"] = cache_dir
 
     bundled_encoding_path = get_project_base_directory("ragflow_deps", "cl100k_base.tiktoken")
