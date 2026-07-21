@@ -279,7 +279,7 @@ async def test_execute_flow_condition_skips_unmatched_branch(client, db_engine, 
     assert detail["status"] == "success"
     assert detail["node_states"]["check"]["matched_case"] == "yes"
     assert detail["node_states"]["yes-node"]["output"] == "accepted"
-    assert "no-node" not in detail["node_states"]
+    assert detail["node_states"]["no-node"]["status"] == "skipped"
 
 
 @pytest.mark.asyncio

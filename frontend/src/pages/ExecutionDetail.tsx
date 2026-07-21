@@ -22,6 +22,7 @@ const STATUS_ICON = {
   paused: { icon: Pause, color: "text-amber-500", label: "已暂停" },
   success: { icon: CheckCircle2, color: "text-green-500", label: "成功" },
   failed: { icon: XCircle, color: "text-red-500", label: "失败" },
+  skipped: { icon: Clock, color: "text-muted-foreground", label: "已跳过" },
   cancelled: { icon: XCircle, color: "text-muted-foreground", label: "已取消" },
 }
 
@@ -273,7 +274,7 @@ export function ExecutionDetail() {
         <CardContent>
           <div className="space-y-4">
             {Object.entries(nodeStates).map(([nodeId, state]) => {
-              const nodeStatus = STATUS_ICON[state.status === "running" ? "running" : state.status === "success" ? "success" : "failed"]
+              const nodeStatus = STATUS_ICON[state.status === "running" ? "running" : state.status === "success" ? "success" : state.status === "skipped" ? "skipped" : "failed"]
               const NodeIcon = nodeStatus.icon
               return (
                 <div key={nodeId} className="rounded-md border p-4">

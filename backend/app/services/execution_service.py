@@ -113,6 +113,17 @@ async def run_flow(execution_id: uuid.UUID, flow_id: uuid.UUID) -> None:
 
                 # 条件分支: 不在匹配路径上的节点跳过
                 if node_id not in reachable:
+                    node_states = dict(execution.node_states or {})
+                    node_states[node_id] = {
+                        "status": "skipped",
+                        "label": label,
+                        "type": node_type,
+                        "reason": "条件分支未命中",
+                        "ended_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    execution.node_states = node_states
+                    flag_modified(execution, "node_states")
+                    await db.commit()
                     continue
 
                 # ── 暂停检查 (人机交互) ──

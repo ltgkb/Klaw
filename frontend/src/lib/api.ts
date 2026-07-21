@@ -233,7 +233,7 @@ export interface FlowRead {
 }
 
 export interface NodeState {
-  status: "running" | "success" | "failed"
+  status: "running" | "success" | "failed" | "skipped"
   output?: string
   error?: string
   started_at?: string
