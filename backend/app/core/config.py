@@ -65,9 +65,13 @@ class Settings(BaseSettings):
     # ── 本地 Agent: OpenClaw ──
     openclaw_url: str = "http://localhost:8080"
     openclaw_token: str = ""  # Gateway auth token (--auth token --token xxx)
+    # Gateway tools can remain available while model routing is intentionally disabled.
+    openclaw_chat_enabled: bool = True
 
     # ── 本地 Agent: Hermes ──
     hermes_url: str = "http://localhost:8081"
+    hermes_api_server_key: str = ""
+    hermes_chat_enabled: bool = False
 
     # ── Cross-Encoder 重排序 (TEI reranker sidecar) ──
     reranker_url: str = "http://localhost:8083"
