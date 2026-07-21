@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import {
   providerApi,
   userApi,
@@ -12,6 +12,7 @@ import {
   type PushChannelRead,
   type PushChannelType,
   type EmbeddingConfig,
+  type UserRead,
 } from "@/lib/api"
 import { useAuthStore } from "@/store/auth"
 import { cn } from "@/lib/utils"
@@ -19,7 +20,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Loader2, Send, Cpu, Cloud, Server, KeyRound, Trash2, Wrench, Plus } from "lucide-react"
+import { Loader2, Send, Cpu, Cloud, Server, KeyRound, Trash2, Wrench, Plus, UserCog, ShieldCheck, ShieldOff } from "lucide-react"
 
 type StatusMeta = { label: string; dotClass: string }
 
@@ -93,36 +94,78 @@ export function Settings() {
   const [llmDefault, setLlmDefault] = useState("")
   const [llmDefaultSaving, setLlmDefaultSaving] = useState(false)
   const [llmDefaultMsg, setLlmDefaultMsg] = useState<string | null>(null)
+  const [users, setUsers] = useState<UserRead[]>([])
+  const [userBusyId, setUserBusyId] = useState<string | null>(null)
+  const [adminError, setAdminError] = useState<string | null>(null)
 
-  const loadAll = async () => {
+  const isAdmin = user?.role === "admin"
+
+  const loadAll = useCallback(async () => {
     setLoading(true)
+    setAdminError(null)
     try {
-      const [providersResp, modelsResp, toolsResp, channelsResp, embResp, llmResp] = await Promise.all([
+      const [providersResp, modelsResp, toolsResp, channelsResp] = await Promise.all([
         providerApi.list(),
         providerApi.listModels(),
         localAgentApi.listTools(),
         pushChannelApi.list(),
-        systemApi.getEmbedding(),
-        systemApi.getLlmDefault(),
       ])
       setProviders(providersResp.data)
       setModels(modelsResp.data)
       setTools(toolsResp.data)
       setChannels(channelsResp.data)
-      setEmb(embResp.data)
-      setEmbBase(embResp.data.base_url)
-      setEmbModel(embResp.data.model)
-      setLlmDefault(llmResp.data.default_model || "")
+      if (isAdmin) {
+        try {
+          const [embResp, llmResp, usersResp] = await Promise.all([
+            systemApi.getEmbedding(),
+            systemApi.getLlmDefault(),
+            userApi.list(),
+          ])
+          setEmb(embResp.data)
+          setEmbBase(embResp.data.base_url)
+          setEmbModel(embResp.data.model)
+          setLlmDefault(llmResp.data.default_model || "")
+          setUsers(usersResp.data)
+        } catch {
+          setAdminError("管理员配置加载失败，请确认权限后重试")
+        }
+      }
     } catch {
-      // 错误由拦截器处理
+      setAdminError("设置加载失败，请检查网络后重试")
     } finally {
       setLoading(false)
     }
-  }
+  }, [isAdmin])
 
   useEffect(() => {
     loadAll()
-  }, [])
+  }, [loadAll])
+
+  const handleUserStatus = async (target: UserRead) => {
+    if (target.id === user?.id) return
+    setUserBusyId(target.id)
+    try {
+      const { data } = await userApi.updateStatus(target.id, !target.is_active)
+      setUsers((current) => current.map((item) => (item.id === data.id ? data : item)))
+    } catch {
+      setAdminError("更新用户状态失败，请重试")
+    } finally {
+      setUserBusyId(null)
+    }
+  }
+
+  const handleUserRole = async (target: UserRead, role: UserRead["role"]) => {
+    if (target.role === role) return
+    setUserBusyId(target.id)
+    try {
+      const { data } = await userApi.updateRole(target.id, role)
+      setUsers((current) => current.map((item) => (item.id === data.id ? data : item)))
+    } catch {
+      setAdminError("更新用户角色失败，请重试")
+    } finally {
+      setUserBusyId(null)
+    }
+  }
 
   const handleSend = async () => {
     const message = chatInput.trim()
@@ -253,6 +296,12 @@ export function Settings() {
         </div>
       ) : (
         <>
+          {adminError && (
+            <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+              {adminError}
+            </div>
+          )}
+
           {/* 模型供应商 */}
           <Card>
             <CardHeader>
@@ -340,6 +389,65 @@ export function Settings() {
             </CardContent>
           </Card>
 
+          {isAdmin && (
+            <Card>
+              <CardHeader>
+                <div className="flex items-center gap-2">
+                  <UserCog className="h-5 w-5 text-muted-foreground" />
+                  <div>
+                    <CardTitle className="text-base">用户管理</CardTitle>
+                    <CardDescription>管理员可调整角色和启用状态；当前账号不能被停用或移除管理员角色</CardDescription>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {users.length === 0 ? (
+                  <p className="py-4 text-center text-sm text-muted-foreground">暂无用户</p>
+                ) : (
+                  users.map((target) => {
+                    const isSelf = target.id === user?.id
+                    const busy = userBusyId === target.id
+                    return (
+                      <div key={target.id} className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-medium">{target.name} · {target.email}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {target.is_active ? "已启用" : "已停用"} · 创建于 {new Date(target.created_at).toLocaleDateString()}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <select
+                            className="h-9 rounded-md border bg-background px-2 text-sm"
+                            value={target.role}
+                            disabled={busy || isSelf}
+                            aria-label={`${target.email} 角色`}
+                            onChange={(event) => handleUserRole(target, event.target.value as UserRead["role"])}
+                          >
+                            <option value="admin">管理员</option>
+                            <option value="user">用户</option>
+                            <option value="viewer">只读</option>
+                          </select>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={busy || isSelf}
+                            onClick={() => handleUserStatus(target)}
+                            title={target.is_active ? "停用用户" : "启用用户"}
+                            aria-label={`${target.is_active ? "停用" : "启用"} ${target.email}`}
+                          >
+                            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : target.is_active ? <ShieldOff className="h-4 w-4" /> : <ShieldCheck className="h-4 w-4" />}
+                            <span className="sr-only">{target.is_active ? "停用" : "启用"}</span>
+                          </Button>
+                        </div>
+                      </div>
+                    )
+                  })
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {isAdmin && <>
           {/* 默认模型 (画布新建 LLM 节点默认使用) */}
           <Card>
             <CardHeader>
@@ -440,6 +548,8 @@ export function Settings() {
               )}
             </CardContent>
           </Card>
+
+          </>}
 
           {/* 推送渠道配置 */}
           <Card>

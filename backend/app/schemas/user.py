@@ -28,3 +28,9 @@ class UserUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=100)
     openai_api_key: str | None = None
     openclaw_config: dict | None = None
+
+
+class UserStatusUpdate(BaseModel):
+    """管理员启用或停用用户。"""
+
+    is_active: bool

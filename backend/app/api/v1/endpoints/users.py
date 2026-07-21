@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import CurrentUser, DBSession, require_roles
 from app.models.user import User, UserRole
-from app.schemas.user import UserRead, UserUpdate
+from app.schemas.user import UserRead, UserStatusUpdate, UserUpdate
 from app.services.user_service import list_users, update_user
 
 router = APIRouter(prefix="/users", tags=["用户管理"])
@@ -59,14 +59,36 @@ async def update_user_role(
     user_id: uuid.UUID,
     role: UserRole,
     db: DBSession,
-    _: User = Depends(require_roles("admin")),
+    current_admin: User = Depends(require_roles("admin")),
 ):
     """修改用户角色 (仅 admin)。"""
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+    if user_id == current_admin.id and role != UserRole.admin:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="不能移除当前管理员角色")
     user.role = role
+    await db.commit()
+    await db.refresh(user)
+    return UserRead.model_validate(user).model_copy(update={"has_openai_key": user.openai_api_key is not None})
+
+
+@router.put("/{user_id}/status", response_model=UserRead)
+async def update_user_status(
+    user_id: uuid.UUID,
+    data: UserStatusUpdate,
+    db: DBSession,
+    current_admin: User = Depends(require_roles("admin")),
+):
+    """启用或停用用户，管理员不能停用自己以避免锁死管理入口。"""
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+    if user_id == current_admin.id and not data.is_active:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="不能停用当前管理员账号")
+    user.is_active = data.is_active
     await db.commit()
     await db.refresh(user)
     return UserRead.model_validate(user).model_copy(update={"has_openai_key": user.openai_api_key is not None})

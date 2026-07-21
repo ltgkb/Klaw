@@ -419,8 +419,11 @@ export const notifyApi = {
 // ── 用户 API (API Key 管理) ──
 
 export const userApi = {
+  list: () => api.get<UserRead[]>("/users"),
   updateMe: (data: { name?: string; openai_api_key?: string; openclaw_config?: Record<string, unknown> }) =>
     api.put<UserRead>("/users/me", data),
+  updateRole: (id: string, role: UserRead["role"]) => api.put<UserRead>(`/users/${id}/role`, null, { params: { role } }),
+  updateStatus: (id: string, is_active: boolean) => api.put<UserRead>(`/users/${id}/status`, { is_active }),
 }
 
 // ── 系统配置 (embedding 模型 API 等, admin) ──

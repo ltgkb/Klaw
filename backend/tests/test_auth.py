@@ -164,6 +164,56 @@ async def test_rbac_regular_user_cannot_list_users(client):
 
 
 @pytest.mark.asyncio
+async def test_admin_can_toggle_user_active_state_but_not_self(client):
+    await client.post("/api/v1/auth/register", json={
+        "email": "admin-status@test.com", "name": "Admin", "password": "secret123",
+    })
+    user_resp = await client.post("/api/v1/auth/register", json={
+        "email": "target-status@test.com", "name": "Target", "password": "secret123",
+    })
+    target_id = user_resp.json()["id"]
+    login_resp = await client.post("/api/v1/auth/login", json={
+        "email": "admin-status@test.com", "password": "secret123",
+    })
+    token = login_resp.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    disabled = await client.put(f"/api/v1/users/{target_id}/status", json={"is_active": False}, headers=headers)
+    assert disabled.status_code == 200
+    assert disabled.json()["is_active"] is False
+
+    self_id = (await client.get("/api/v1/auth/me", headers=headers)).json()["id"]
+    self_disabled = await client.put(f"/api/v1/users/{self_id}/status", json={"is_active": False}, headers=headers)
+    assert self_disabled.status_code == 400
+    self_demoted = await client.put(
+        f"/api/v1/users/{self_id}/role",
+        params={"role": "user"},
+        headers=headers,
+    )
+    assert self_demoted.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_regular_user_cannot_toggle_user_active_state(client):
+    await client.post("/api/v1/auth/register", json={
+        "email": "admin-status2@test.com", "name": "Admin", "password": "secret123",
+    })
+    target = await client.post("/api/v1/auth/register", json={
+        "email": "target-status2@test.com", "name": "Target", "password": "secret123",
+    })
+    login_resp = await client.post("/api/v1/auth/login", json={
+        "email": "target-status2@test.com", "password": "secret123",
+    })
+    token = login_resp.json()["access_token"]
+    resp = await client.put(
+        f"/api/v1/users/{target.json()['id']}/status",
+        json={"is_active": False},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_update_me_encrypts_api_key(client):
     await client.post("/api/v1/auth/register", json={
         "email": "update@test.com", "name": "Update", "password": "secret123",

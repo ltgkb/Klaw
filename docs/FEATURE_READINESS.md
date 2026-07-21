@@ -6,11 +6,11 @@
 
 ## 证据摘要
 
-- 后端：`uv run pytest -q` → **70 passed**；另行运行 `uv run python -m compileall -q app deepdoc common` 通过。
+- 后端：`uv run pytest -q` → **75 passed**；另行运行 `uv run python -m compileall -q app deepdoc common` 通过。
 - 前端：`npm run lint` 通过（3 个既有 Fast Refresh warning）；`npm run build` 通过（Vite 产生约 602 kB 主 JS，存在 code-splitting warning）。
 - Compose：基础 `docker compose config --quiet` 通过；隔离覆盖配置也通过；后端/前端镜像均构建成功，`.dockerignore` 将最终 build context 限制在约 194 kB / 39 kB（未忽略时曾达 1.12 GB / 132 MB）。
 - 真实依赖：隔离 PostgreSQL 16、Redis 7、MinIO、Elasticsearch 8.11 全部 healthy；Alembic 从空库升级到 `4b2e9a1c7d33 (head)`，`alembic check` 无漂移。
-- 真实 API：注册/登录/刷新、PG 元数据、MinIO 上传下载分享删除、TXT DeepDoc 解析、哈希向量 fallback、ES 索引与检索、条件分支、SSE complete、APScheduler 实际触发和重启恢复均已通过；内存生成的 MD/HTML/JSON/DOCX/XLSX/PPTX/PDF parser fixture 也已通过。
+- 真实 API：注册/登录/刷新、PG 元数据、管理员用户列表与停用/恢复、MinIO 上传下载分享删除、TXT/HTML DeepDoc 解析、哈希向量 fallback、ES 索引与检索、条件分支、SSE complete、APScheduler 实际触发和重启恢复均已通过；内存生成的 MD/HTML/JSON/DOCX/XLSX/PPTX/PDF parser fixture 也已通过。
 - 环境阻塞：本次未启动 TEI BGE-M3、reranker、OpenClaw、Hermes；健康检查如实为 degraded。知识库使用明确标记的 dev 哈希向量 fallback，LLM/工具使用明确标记的 dev Mock，未宣称真实模型或真实本地工具可用。
 
 ## 功能矩阵
@@ -19,10 +19,10 @@
 |---|---|---|---|---|---|---|
 | 注册、登录、access JWT | `/register`、`/login` | 可用 | `/auth/register`、`/auth/login` + PG | `test_auth.py`；真实 HTTP 注册/登录 | 可用 | 无；密码 bcrypt |
 | 刷新令牌 | 前端拦截器自动刷新 | 本批补全 | `/auth/refresh`，校验 refresh 类型、用户 active | `test_refresh_token`；真实 HTTP 200 | 可用 | 需后续增加 token rotation/revocation（P2） |
-| RBAC 与禁用用户 | 设置/用户 API | 部分可用（无禁用 UI） | `require_roles`；当前用户每次请求检查 `is_active` | RBAC 测试；新增 disabled token 401 | 部分可用 | admin 缺少禁用/解禁入口（P1） |
+| RBAC 与禁用用户 | 设置/用户管理 | 可用 | `require_roles`；当前用户每次请求检查 `is_active`；管理员状态 API 禁止自锁 | RBAC、普通用户 403、自锁 400 测试；真实管理员停用/恢复 | 可用 | 组织/团队级管理员策略仍缺失（P2） |
 | owner 隔离与密钥保护 | 各资源页面 | 可用 | 查询按 owner；AES-256-GCM API key/channel secret | KB/flow/schedule/file 隔离测试；真实 push 配置返回 `******` | 可用 | 单租户 owner 模式，不是团队/组织租户（P2） |
 | 知识库 CRUD | `/kb` | 可用 | `/knowledge-bases` + PG | `test_kb.py`、真实创建/列表 | 可用 | 分页参数缺少上限校验（P2） |
-| TXT/MD/HTML/JSON/DOCX/XLSX/PPTX/EPUB 上传解析 | KB 详情上传 | 可用 | MinIO + DeepDoc 格式路由 | parser fixture 覆盖 MD/HTML/JSON/DOCX/XLSX/PPTX/EPUB/PDF；真实 MinIO 管线验证 TXT | 部分可用 | 仍需逐格式 MinIO→ES E2E 和大文件/损坏文件验证（P1） |
+| TXT/MD/HTML/JSON/DOCX/XLSX/PPTX/EPUB 上传解析 | KB 详情上传 | 可用 | MinIO + DeepDoc 格式路由 | parser fixture 覆盖 MD/HTML/JSON/DOCX/XLSX/PPTX/EPUB/PDF；真实 MinIO→解析→ES 管线验证 TXT、HTML | 部分可用 | 仍需逐格式 MinIO→ES E2E 和大文件/损坏文件验证（P1） |
 | PDF 纯文本解析 | KB 详情上传 | 可用 | pypdf 轻量路径；视觉 OCR 未启用 | 代码路径和 parser 回归 | 部分可用 | OCR/版面/表格图片仍缺模型（P2） |
 | 分块与引用元数据 | KB chunks | 可用 | fixed/recursive/markdown/semantic 降级；page/doc/chunk metadata | `test_kb.py`；真实 1 chunk、page/source metadata | 可用 | semantic 仍是 recursive fallback（P2） |
 | 向量化 | 上传后台任务 | 无独立配置入口可感知 fallback | TEI → dev 哈希向量 | 真实 TEI 不可达时明确日志并完成 ES indexing | 部分可用 | TEI 模型 sidecar 未启动；哈希向量不可用于生产（P0/P1 环境） |
@@ -44,12 +44,12 @@
 | 文件工作区 | `/files`（本批新增） | 可用 | MinIO + owner-scoped DB；鉴权 blob 下载 | 真实上传/下载 hash/分享/隔离/删除 | 可用 | 无版本、批量、断点续传（P2） |
 | 分享链接 | 文件行分享按钮 | 可用 | MinIO presigned URL 1h | 真实返回 1h URL | 部分可用 | 外部客户端访问需可达 MinIO endpoint；无撤销记录（P2） |
 | 推送渠道配置 | 设置 | 可用 | channel CRUD + encrypted config | 真实配置脱敏；失败 webhook 返回 success=false/error | 部分可用 | 未验证真实飞书/企微/Telegram 成功；无重试/告警（P1/P2） |
-| 系统设置 | 设置 | 可用 | embedding/LLM config admin endpoints | 现有 API 测试；真实 startup 读取 PG | 部分可用 | 前端错误态仍有静默 catch；admin UI 缺少权限提示（P1） |
+| 系统设置 | 设置 | 可用 | embedding/LLM config admin endpoints；普通用户跳过 admin-only 请求 | 现有 API 测试；真实 startup 读取 PG；管理员用户管理 E2E | 部分可用 | 前端部分错误态仍有静默 catch（P1） |
 | 健康检查 | `/health`、设置 | 可用 | PG/Redis/ES/MinIO/TEI/reranker/OpenClaw/Hermes | 真实返回 degraded，四个基础依赖 ok，重型 sidecar error | 可用（诚实） | `/health` 未提供依赖延迟/版本（P2） |
 | 前后端导航与空/加载/错误态 | 全局布局 | 部分可用 | React Router + API interceptor | build；文件页/执行页新增错误态 | 部分可用 | 多页面仍静默 catch；移动端已补横向导航但未做浏览器截图验收（P1） |
 | Docker Compose 启动 | 根目录 Compose | 部分可用 | 10 服务；后端镜像启动先迁移 | config 校验；本轮隔离只启动 4 基础依赖 | 部分可用 | TEI/OCR/OpenClaw/Hermes 镜像/模型未在本机验证；固定 container_name 影响并行部署（P1） |
 | 迁移 | `make db-migrate` | 可用 | Alembic | 空 PG upgrade + current head + check | 可用 | 首次多实例迁移锁策略未加固（P2） |
-| 测试/lint/build | Makefile、CI 入口 | 可用 | pytest/oxlint/tsc/Vite | 66 passed；lint/build 通过 | 可用 | 未配置 CI workflow、E2E 浏览器测试（P1） |
+| 测试/lint/build | Makefile、CI 入口 | 可用 | pytest/oxlint/tsc/Vite | 75 passed；lint/build 通过 | 可用 | 未配置 CI workflow、E2E 浏览器测试（P1） |
 
 ## 本轮修复与新增能力
 
@@ -59,6 +59,7 @@
 4. Cron 用 APScheduler 原生校验；暂停清空 next_run；暂停期间编辑 cron/input 会替换并再次暂停真实 job；恢复可重建缺失 job。
 5. 健康检查只把 2xx 视为依赖可用；生产环境禁止本地工具 mock 伪造成功。
 6. 新增鉴权文件工作区 UI、blob 下载、分享/删除/上传状态；前端 access token 自动 refresh；移动端提供可滚动导航。
+7. 新增管理员用户管理纵向切片：用户列表、角色调整、启用/停用入口；后端禁止普通用户操作及管理员自锁；普通用户设置页不再请求 admin-only 配置。
 
 ## 对标参考（官方资料，检索日期 2026-07-21）
 
