@@ -24,6 +24,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
+from common.ssrf_guard import assert_url_is_safe, pin_dns_global
 from app.core.llm_client import chat as llm_chat
 from app.models.agent_flow import AgentFlow
 from app.models.execution import Execution, ExecutionStatus
@@ -825,6 +826,11 @@ async def _execute_http_node(config: dict, context: dict) -> str:
     }
     timeout_s = float(config.get("timeout_s") or 30)
 
+    # User-authored flows must not turn the backend into an internal-network
+    # proxy. Resolve once, reject non-public addresses, and pin the validated
+    # address during the request to prevent DNS rebinding.
+    hostname, resolved_ip = assert_url_is_safe(url)
+
     request_kwargs: dict = {}
     body = config.get("body")
     if body is not None and method not in ("GET", "HEAD"):
@@ -835,9 +841,11 @@ async def _execute_http_node(config: dict, context: dict) -> str:
         else:
             request_kwargs["content"] = _render_template(str(body), context)
 
-    async with httpx.AsyncClient(timeout=timeout_s) as client:
-        resp = await client.request(method, url, headers=headers, **request_kwargs)
-    resp.raise_for_status()
+    with pin_dns_global(hostname, resolved_ip):
+        async with httpx.AsyncClient(timeout=timeout_s, follow_redirects=False) as client:
+            resp = await client.request(method, url, headers=headers, **request_kwargs)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"HTTP request returned {resp.status_code}")
     return resp.text
 
 
@@ -1036,6 +1044,21 @@ async def cancel_execution(db, execution_id) -> bool:
     ):
         return False
     execution.status = ExecutionStatus.cancelled
+    execution.error_message = execution.error_message or "执行已取消"
+    ended_at = datetime.now(timezone.utc).isoformat()
+    node_states = dict(execution.node_states or {})
+    changed = False
+    for node_id, state in node_states.items():
+        if state.get("status") == "running":
+            node_states[node_id] = {
+                **state,
+                "status": "cancelled",
+                "ended_at": ended_at,
+            }
+            changed = True
+    if changed:
+        execution.node_states = node_states
+        flag_modified(execution, "node_states")
     await db.commit()
     logger.info("执行已取消: %s", execution_id)
     return True

@@ -467,7 +467,7 @@ async def test_execution_controls_reject_mismatched_flow(client, db_session):
 
     stream_response = await client.get(
         f"/api/v1/agent-flows/{flow_b['id']}/executions/{execution.id}/stream",
-        params={"token": token_b},
+        headers=_auth_headers(token_b),
     )
     assert stream_response.status_code == 404
 
