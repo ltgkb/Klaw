@@ -18,6 +18,11 @@ logging.basicConfig(
     format='{"time":"%(asctime)s","level":"%(levelname)s","logger":"%(name)s","message":"%(message)s"}',
     stream=sys.stdout,
 )
+# httpx logs the full request URL at INFO and httpcore does so at DEBUG.
+# Webhook paths and Telegram Bot API paths contain credentials, so retain only
+# warnings/errors from generic HTTP transports and log safe context ourselves.
+for noisy_logger in ("httpx", "httpcore"):
+    logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 logger = logging.getLogger("claw")
 
 
