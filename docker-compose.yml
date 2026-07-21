@@ -148,10 +148,14 @@ services:
       - sh
       - -c
       - |
+        seed=/opt/klaw/openclaw.json
+        if [ -z "$${KAIWEB_API_KEY}" ]; then
+          seed=/opt/klaw/openclaw.dev.json
+        fi
         if [ ! -f "$${OPENCLAW_CONFIG_PATH}" ]; then
-          cp /opt/klaw/openclaw.json "$${OPENCLAW_CONFIG_PATH}"
+          cp "$${seed}" "$${OPENCLAW_CONFIG_PATH}"
         else
-          node dist/index.js config patch --file /opt/klaw/openclaw.json >/dev/null
+          node dist/index.js config patch --file "$${seed}" >/dev/null
         fi
         node dist/index.js config set gateway.http.endpoints.chatCompletions.enabled true --strict-json >/dev/null
         exec node dist/index.js gateway --bind lan --port 8080
@@ -160,6 +164,7 @@ services:
     volumes:
       - openclaw_data:/home/node/.openclaw
       - ./deploy/openclaw/openclaw.json:/opt/klaw/openclaw.json:ro
+      - ./deploy/openclaw/openclaw.dev.json:/opt/klaw/openclaw.dev.json:ro
       - ./deploy/openclaw/skills:/home/node/.openclaw/workspace/skills:ro
     environment:
       - HOME=/home/node
@@ -231,7 +236,10 @@ services:
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
       - OPENCLAW_URL=http://openclaw:8080
       - OPENCLAW_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-dev-token-claw}
+      - OPENCLAW_CHAT_ENABLED=${OPENCLAW_CHAT_ENABLED:-false}
       - HERMES_URL=http://hermes:8642
+      - HERMES_API_SERVER_KEY=${HERMES_API_SERVER_KEY:-6f3a80c274be419d9a52e781c6430fb7}
+      - HERMES_CHAT_ENABLED=${HERMES_CHAT_ENABLED:-false}
       - TEI_URL=http://tei:80
       - RERANKER_URL=http://reranker:80
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
@@ -254,8 +262,13 @@ services:
       reranker:
         condition: service_healthy
     volumes:
-      - ./backend:/app
       - ./deploy:/deploy:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5)"]
+      interval: 10s
+      timeout: 6s
+      retries: 6
+      start_period: 20s
     networks:
       - agent-network
 
@@ -266,7 +279,8 @@ services:
     ports:
       - "3000:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     networks:
       - agent-network
 
