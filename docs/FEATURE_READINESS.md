@@ -7,7 +7,7 @@
 ## 证据摘要
 
 - 后端基线：承接分支后 `uv run pytest -q` 为 **220 passed**；本轮新增通知渠道、工具节点、调用边界、文档 parser 与认证安全测试，最终全量回归 **247 passed**。
-- 前端：`npm run lint` 通过（4 个既有 Fast Refresh warning）；`npm run build` 通过，主 JS 约 635 kB，仍有 code-splitting warning。
+- 前端：`npm run lint` 通过（4 个既有 Fast Refresh warning）；`npm run build` 通过，主 JS 约 637 kB，仍有 code-splitting warning。
 - 真实依赖：独立 PostgreSQL 数据库 `claw_auto_20260723`、Redis、MinIO、Elasticsearch 8.11、OpenClaw 2026.7.1、Hermes 0.18.2 healthy；迁移到 head 且 `alembic check` 无漂移。
 - 真实 API：注册/登录、TXT/MD/HTML/JSON/CSV/PDF/DOCX/XLSX/PPTX/EPUB→MinIO→解析→hash embedding→ES 检索引用、OpenClaw `web_fetch`、画布 tool 节点、加密通知渠道/owner 拦截、APScheduler 实际触发及暂停后重启保持均通过。
 - 浏览器：前端 dev server 可用，但 in-app Browser 运行时初始化被 `Cannot redefine property: process` 阻塞；本批次不沿用昨日截图宣称浏览器通过。
@@ -77,7 +77,7 @@
 ## 遗留优先级
 
 - P0 部署条件：生产必须配置强 JWT/加密密钥、真实 1024 维 embedding 和至少一个真实 LLM；当前代码无已知未修 P0。
-- P1：真实 LLM/token stream UI；Hermes/其它工具真实调用；在途调用强制中断；多实例调度防重；逐格式摄取 E2E；推送成功链路/重试；浏览器 CI；移除静默错误。
+- P1：真实 LLM/token stream UI；Hermes/其它工具真实调用；在途调用强制中断；多实例调度防重；推送成功链路/重试；浏览器 CI；移除静默错误。
 - P2：OCR/多模态、语义分块、Redis TTL 记忆、文件版本、索引备份、checkpoint/评测/可观测、K8s/压测。
 
 ## 需用户确认
