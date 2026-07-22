@@ -174,7 +174,7 @@ def _parse_markdown(binary: bytes, chunk_token_num: int) -> list[dict]:
 
     md_text = binary.decode("utf-8", errors="ignore")
     parser = MarkdownParser(chunk_token_num=chunk_token_num)
-    tables, remainder = parser.extract_tables_and_remainder(md_text)
+    remainder, tables = parser.extract_tables_and_remainder(md_text)
 
     blocks = []
     if remainder and remainder.strip():

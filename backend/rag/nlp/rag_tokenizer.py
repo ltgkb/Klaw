@@ -14,6 +14,8 @@
 #  limitations under the License.
 #
 
+import re
+
 import infinity.rag_tokenizer
 
 
@@ -23,8 +25,12 @@ class RagTokenizer(infinity.rag_tokenizer.RagTokenizer):
 
         if settings.DOC_ENGINE_INFINITY:
             return line
-        else:
+        try:
             return super().tokenize(line)
+        except LookupError:
+            # NLTK punkt data is optional and is not bundled in the runtime image.
+            tokens = re.findall(r"[\u3400-\u9fff]|[^\W_]+|_+|[^\w\s]", line.lower())
+            return " ".join(tokens)
 
     def fine_grained_tokenize(self, tks: str) -> str:
         from common import settings  # moved from the top of the file to avoid circular import
