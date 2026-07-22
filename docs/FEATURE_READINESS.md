@@ -77,7 +77,7 @@
 
 ## 遗留优先级
 
-- P0 部署条件：生产必须配置强 JWT/加密密钥、真实 1024 维 embedding 和至少一个真实 LLM；当前代码无已知未修 P0。
+- P0 部署条件：生产必须配置强 JWT/加密密钥、覆盖 MinIO/OpenClaw 开发凭据、真实 1024 维 embedding 和至少一个真实 LLM；当前代码无已知未修 P0。
 - P1：真实 LLM/token stream UI；Hermes/其它工具真实调用；在途调用强制中断；多实例调度防重；推送成功链路/重试；浏览器 CI；移除静默错误。
 - P2：OCR/多模态、语义分块、Redis TTL 记忆、文件版本、索引备份、checkpoint/评测/可观测、K8s/压测。
 
