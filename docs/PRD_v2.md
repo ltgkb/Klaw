@@ -145,7 +145,7 @@ API 网关 FastAPI + JWT + RBAC + 全局异常 + 结构化 JSON 日志
 |---|---|---|
 | 认证 | `/auth` register/login/refresh/me | ✅ |
 | 用户 | `/users` (admin 列表/改角色, `/me` 更新含 API Key) | ✅ |
-| 知识库 | `/knowledge-bases` CRUD + documents + chunks + search | ✅ |
+| 知识库 | `/knowledge-bases` CRUD + documents + chunks + search；失败原因/重解析 | ✅ |
 | Agent 画布 | `/agent-flows` CRUD + execute + executions + pause/resume/cancel + SSE stream | ✅ |
 | 模型供应商 | `/providers` + `/models` + `/chat` + `/chat/stream` | ✅ |
 | 本地 Agent | `/local-agent/tools` + `/tools/{id}/call` + `/health` | ✅ 本轮新增 |

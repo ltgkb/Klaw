@@ -482,8 +482,9 @@ async def test_parse_failure_marks_failed_with_error(client, mock_infra, monkeyp
 
     docs_resp = await client.get(f"/api/v1/knowledge-bases/{kb_id}/documents", headers=_auth_headers(token))
     assert docs_resp.json()[0]["parse_status"] == "failed"
+    assert "维度不符" in docs_resp.json()[0]["parse_error"]
 
-    # parse_result 含失败原因 (DocumentRead 不暴露该字段, 直接查 DB)
+    # parse_result 仍在 DB 保留结构化失败原因。
     from sqlalchemy import select
     from sqlalchemy.ext.asyncio import async_sessionmaker
     from app.models.document import Document

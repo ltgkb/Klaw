@@ -22,7 +22,7 @@
 | RBAC 与用户启停 | `/users`（admin） | 可用 | 动态读取 DB 角色/状态，保护最后 admin 和自锁 | auth/negative tests | 可用 | 组织级角色策略缺失（P2） |
 | owner 隔离与密钥保护 | 各资源页、设置、通知节点 | 持久化渠道选择并脱敏 | owner-scoped 查询；AES-256-GCM；新 DAG 禁止内联渠道 | 自动化；真实密文落库、跨 owner 执行失败、内联写入 422 | 可用 | 旧 DAG 仍兼容读取，需用户主动迁移；单租户 owner 隔离（P2） |
 | 知识库 CRUD | `/kb` | 可用 | PG CRUD，分页上限 100 | 自动化；真实创建/列表 | 可用 | 无 |
-| TXT/MD/HTML/JSON/DOCX/XLSX/PPTX/EPUB | KB 详情上传 | 可用 | MinIO + DeepDoc 类型路由；修复 MD/PPTX 契约与离线 tokenizer | 生成文件 parser tests；8 种格式真实全链路并分别检索 marker | 可用 | 复杂版式/损坏文件样本仍需扩展（P2） |
+| TXT/MD/HTML/JSON/DOCX/XLSX/PPTX/EPUB | KB 详情上传 | 可用；失败原因与重试入口 | MinIO + DeepDoc 类型路由；修复 MD/PPTX 契约与离线 tokenizer | 生成文件 parser tests；8 种格式真实全链路并分别检索 marker；failed→reparse→parsed | 可用 | 复杂版式/损坏文件样本仍需扩展（P2） |
 | PDF 解析/OCR | KB 详情上传 | 文本 PDF 可上传 | pypdf 文本路径；视觉模块未启用 | 真实单页文本 PDF 全链路并检索 marker；未跑扫描 PDF | 部分可用 | OCR/版面/图片表格缺失（P2） |
 | 分块、引用、删除 | KB chunks/文档列表 | 可用 | fixed/recursive/markdown；semantic 降级；page/doc metadata | tests；真实 TXT chunk/引用 | 可用 | semantic 不是独立算法（P2） |
 | 向量化 | 摄取后台任务、系统配置 | 可配置 API | API -> TEI -> dev hash fallback | 真实 hash fallback，健康为 unhealthy | 部分可用 | 生产 embedding 环境阻塞（P0 部署条件） |
@@ -63,6 +63,7 @@
 9. OpenClaw 聊天改为默认关闭并在环境示例中显式配置；无上游凭据时不再把合成 agent 别名展示成可用模型，也不会让默认聊天等待失效上游。
 10. 修复 PPTX parser 返回值误解包；真实单页 PPTX 先复现 failed，再经同一文档 reparse 恢复并从 ES 命中，DOCX/XLSX 同批全链路通过。
 11. 修复 Markdown 返回值顺序和 HTML/EPUB 对未打包 NLTK 数据的硬依赖；三条 failed 记录原地恢复，最终 8 种文档与文本 PDF 全部从 ES 命中独立 marker。
+12. 文档列表返回 owner 可见的解析错误摘要，失败项新增原地重试入口并继续状态轮询，不再要求用户删除后重新上传。
 
 ## 对标参考（官方资料，检索日期 2026-07-23）
 

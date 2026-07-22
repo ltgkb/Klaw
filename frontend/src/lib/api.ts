@@ -171,6 +171,7 @@ export interface DocumentRead {
   file_size: number
   page_count: number
   parse_status: "pending" | "parsing" | "parsed" | "failed"
+  parse_error: string | null
   created_at: string
   updated_at: string
 }
@@ -239,6 +240,9 @@ export const kbApi = {
 
   deleteDocument: (kbId: string, docId: string) =>
     api.delete(`/knowledge-bases/${kbId}/documents/${docId}`),
+
+  reparseDocument: (kbId: string, docId: string) =>
+    api.post<DocumentRead>(`/knowledge-bases/${kbId}/documents/${docId}/reparse`),
 
   // Chunk 查询 (契约4)
   listChunks: (kbId: string, page = 1, pageSize = 10) =>

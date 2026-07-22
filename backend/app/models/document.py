@@ -33,6 +33,14 @@ class Document(Base, UUIDMixin, TimestampMixin):
     # DeepDoc 解析结果: {text, tables:[{html, page}], images:[{path, page, ocr_text}]}
     parse_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    @property
+    def parse_error(self) -> str | None:
+        """Return the persisted ingestion error without exposing parse internals."""
+        if not isinstance(self.parse_result, dict):
+            return None
+        error = self.parse_result.get("error")
+        return str(error) if error else None
+
     # 关系
     kb = relationship("KnowledgeBase", back_populates="documents")
     chunks = relationship("Chunk", back_populates="document", cascade="all, delete-orphan")

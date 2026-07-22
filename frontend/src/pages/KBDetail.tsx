@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   Clock,
   AlertCircle,
+  RotateCcw,
 } from "lucide-react"
 import { kbApi, type KBRead, type DocumentRead, type SearchHit, type ChunkRead } from "@/lib/api"
 import { Button } from "@/components/ui/button"
@@ -39,6 +40,7 @@ export function KBDetail() {
   const [docs, setDocs] = useState<DocumentRead[]>([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
+  const [reparsingId, setReparsingId] = useState<string | null>(null)
 
   // 检索
   const [query, setQuery] = useState("")
@@ -134,6 +136,19 @@ export function KBDetail() {
     }
   }
 
+  const handleReparseDoc = async (docId: string) => {
+    if (!kbId) return
+    setReparsingId(docId)
+    try {
+      await kbApi.reparseDocument(kbId, docId)
+      await fetchAll()
+    } catch {
+      // 错误由拦截器处理
+    } finally {
+      setReparsingId(null)
+    }
+  }
+
   const handleSearch = async () => {
     if (!kbId || !query.trim()) return
     setSearching(true)
@@ -188,7 +203,7 @@ export function KBDetail() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">文档管理</CardTitle>
-          <CardDescription>支持 PDF / DOCX / XLSX / PPTX / TXT / MD / HTML / JSON</CardDescription>
+          <CardDescription>支持 PDF / DOCX / XLSX / PPTX / TXT / MD / HTML / JSON / EPUB</CardDescription>
         </CardHeader>
         <CardContent>
           <div
@@ -245,15 +260,34 @@ export function KBDetail() {
                         {formatSize(doc.file_size)}
                         {doc.page_count > 0 && ` · ${doc.page_count} 页`}
                       </p>
+                      {doc.parse_status === "failed" && doc.parse_error && (
+                        <p className="mt-1 line-clamp-2 text-xs text-destructive" title={doc.parse_error}>
+                          {doc.parse_error}
+                        </p>
+                      )}
                     </div>
                     <div className={`flex items-center gap-1 text-xs ${status.color}`}>
                       <StatusIcon className={`h-3.5 w-3.5 ${doc.parse_status === "parsing" && "animate-spin"}`} />
                       {status.label}
                     </div>
+                    {doc.parse_status === "failed" && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleReparseDoc(doc.id)}
+                        disabled={reparsingId === doc.id}
+                        title="重新解析"
+                        aria-label={`重新解析 ${doc.filename}`}
+                      >
+                        <RotateCcw className={`h-4 w-4 ${reparsingId === doc.id ? "animate-spin" : ""}`} />
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
-                      size="sm"
+                      size="icon"
                       onClick={() => handleDeleteDoc(doc.id)}
+                      title="删除文档"
+                      aria-label={`删除 ${doc.filename}`}
                     >
                       <Trash2 className="h-4 w-4 text-destructive" />
                     </Button>

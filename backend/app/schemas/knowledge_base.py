@@ -58,6 +58,7 @@ class DocumentRead(BaseModel):
     file_size: int
     page_count: int
     parse_status: ParseStatus
+    parse_error: str | None = None
     created_at: datetime
     updated_at: datetime
 
