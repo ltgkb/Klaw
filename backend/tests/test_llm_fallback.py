@@ -51,6 +51,7 @@ async def test_fallback_order(monkeypatch):
     monkeypatch.setattr(llm_client, "_call_openclaw", fake_openclaw)
     monkeypatch.setattr(llm_client, "_call_openai_compatible", fake_kaiweb)
     monkeypatch.setattr(llm_client, "_call_openai", fake_openai)
+    monkeypatch.setattr(settings, "openclaw_chat_enabled", True)
     monkeypatch.setattr(settings, "kaiweb_api_key", "kw-key")
     monkeypatch.setattr(settings, "openai_api_key", "oa-key")
 
@@ -165,6 +166,7 @@ async def test_stream_zero_byte_falls_back(monkeypatch):
 
     monkeypatch.setattr(llm_client, "_stream_openai_compatible", empty_stream)
     monkeypatch.setattr(llm_client, "_stream_openclaw", openclaw_stream)
+    monkeypatch.setattr(settings, "openclaw_chat_enabled", True)
     monkeypatch.setattr(settings, "kaiweb_api_key", "kw-key")
 
     chunks = [c async for c in llm_client.chat_stream(MESSAGES)]
@@ -186,6 +188,7 @@ async def test_stream_no_fallback_after_started(monkeypatch):
 
     monkeypatch.setattr(llm_client, "_stream_openclaw", openclaw_stream)
     monkeypatch.setattr(llm_client, "_stream_openai_compatible", kaiweb_stream)
+    monkeypatch.setattr(settings, "openclaw_chat_enabled", True)
     monkeypatch.setattr(settings, "kaiweb_api_key", "kw-key")
 
     chunks = []

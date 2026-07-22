@@ -15,6 +15,7 @@ async def test_empty_openclaw_stream_falls_back_to_kaiweb(monkeypatch):
         yield "fallback"
 
     monkeypatch.setattr(llm_client.settings, "kaiweb_api_key", "test-key")
+    monkeypatch.setattr(llm_client.settings, "openclaw_chat_enabled", True)
     monkeypatch.setattr(llm_client, "_stream_openclaw", empty_stream)
     monkeypatch.setattr(llm_client, "_stream_openai_compatible", fallback_stream)
 
@@ -42,6 +43,7 @@ async def test_partial_stream_failure_does_not_duplicate_from_fallback(monkeypat
         yield "duplicate"
 
     monkeypatch.setattr(llm_client.settings, "kaiweb_api_key", "test-key")
+    monkeypatch.setattr(llm_client.settings, "openclaw_chat_enabled", True)
     monkeypatch.setattr(llm_client, "_stream_openclaw", partial_stream)
     monkeypatch.setattr(llm_client, "_stream_openai_compatible", fallback_stream)
 
@@ -65,6 +67,7 @@ async def test_non_streaming_prefers_openclaw_over_direct_kaiweb(monkeypatch):
         raise AssertionError("direct Kaiweb must not run before OpenClaw")
 
     monkeypatch.setattr(llm_client.settings, "kaiweb_api_key", "test-key")
+    monkeypatch.setattr(llm_client.settings, "openclaw_chat_enabled", True)
     monkeypatch.setattr(llm_client, "_call_openclaw", openclaw)
     monkeypatch.setattr(llm_client, "_call_openai_compatible", unexpected_kaiweb)
 

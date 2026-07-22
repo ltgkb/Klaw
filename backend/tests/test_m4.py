@@ -195,6 +195,7 @@ def mock_llm_provider(monkeypatch):
     monkeypatch.setattr(llm_client, "health_check", mock_health)
     monkeypatch.setattr(llm_client, "chat", mock_chat)
     monkeypatch.setattr(llm_client, "list_models", mock_list_models)
+    monkeypatch.setattr(llm_client.settings, "openclaw_chat_enabled", True)
 
 
 @pytest.mark.asyncio

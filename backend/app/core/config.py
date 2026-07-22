@@ -66,7 +66,9 @@ class Settings(BaseSettings):
     openclaw_url: str = "http://localhost:8080"
     openclaw_token: str = ""  # Gateway auth token (--auth token --token xxx)
     # Gateway tools can remain available while model routing is intentionally disabled.
-    openclaw_chat_enabled: bool = True
+    # Opt in only after the gateway has a usable inference provider. OpenClaw's
+    # /v1/models endpoint exposes agent aliases even when upstream auth is absent.
+    openclaw_chat_enabled: bool = False
 
     # ── 本地 Agent: Hermes ──
     hermes_url: str = "http://localhost:8081"

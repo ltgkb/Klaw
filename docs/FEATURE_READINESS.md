@@ -6,7 +6,7 @@
 
 ## 证据摘要
 
-- 后端基线：承接分支后 `uv run pytest -q` 为 **220 passed**；本轮新增通知渠道、工具节点、调用边界与认证安全测试，最终全量回归 **236 passed**。
+- 后端基线：承接分支后 `uv run pytest -q` 为 **220 passed**；本轮新增通知渠道、工具节点、调用边界与认证安全测试，最终全量回归 **237 passed**。
 - 前端：`npm run lint` 通过（4 个既有 Fast Refresh warning）；`npm run build` 通过，主 JS 约 635 kB，仍有 code-splitting warning。
 - 真实依赖：独立 PostgreSQL 数据库 `claw_auto_20260723`、Redis、MinIO、Elasticsearch 8.11、OpenClaw 2026.7.1、Hermes 0.18.2 healthy；迁移到 head 且 `alembic check` 无漂移。
 - 真实 API：注册/登录、TXT→MinIO→解析→hash embedding→ES 检索引用、OpenClaw `web_fetch`、画布 tool 节点、加密通知渠道/owner 拦截、APScheduler 实际触发及暂停后重启保持均通过。
@@ -36,7 +36,7 @@
 | SSE 鉴权与密钥保护 | 画布、Agent 对话 | Header 流客户端 | 仅 Bearer Header；active/owner 校验 | Header/query-reject/disabled/malformed/live-session tests；浏览器无 query token | 可用 | 无 |
 | 暂停/恢复/取消 | 执行详情、对话停止键 | UI/API 可用 | 状态轮询；取消终帧同步节点状态且优先于 success | 自动化；真实延迟 HTTP 暂停/恢复/取消 + Header SSE | 部分可用 | 在途 HTTP/LLM 不会被强制中断；下个让出点终止（P1） |
 | Agent 对话与历史 | `/agents` | 实时节点进度、停止、错误可见 | conversation/message PG + flow execution | 真实 SSE + 2 消息落库；浏览器回答可见 | 部分可用 | 是执行状态流，不是 LLM token 流；单固定会话（P1） |
-| 模型发现/切换 | 设置、LLM 节点 | 仅展示已启用本地模型 | OpenClaw→Hermes→Kaiweb→OpenAI→Anthropic；本地路由有独立开关 | Hermes models/chat 接口真实探测；适配自动化 | 部分可用 | Hermes 无推理供应商、其它无真实 LLM 凭据（P0 部署条件） |
+| 模型发现/切换 | 设置、LLM 节点 | 仅展示已启用本地模型 | OpenClaw→Hermes→Kaiweb→OpenAI→Anthropic；本地路由默认关闭、需显式启用 | 真实 OpenClaw 别名存在但 upstream auth missing；修复后仅列 default/mock，默认 chat 4ms 返回显式 Mock | 部分可用 | Hermes/OpenClaw 均无推理供应商、其它无真实 LLM 凭据（P0 部署条件） |
 | provider 流式/fallback/错误 | `/providers/chat/stream`、设置 | 设置测试为非流式 | SSE delta；多级 fallback；dev Mock 显式标记 | fallback/stream tests | 部分可用 | UI 未消费 token stream；真实 provider 未验证（P1） |
 | OpenClaw/Hermes 发现 | 设置、tool 节点 | 清单标记“可调用/仅发现” | manifest + executable 契约；双网关健康 | 3 个清单；Hermes 0.18.2 无工具调用端点 | 可用（诚实） | `data_analysis` 仅发现（P1） |
 | 本地工具调用 | 设置工具调用器、画布 tool 节点 | JSON 参数、变量、结果/错误可见 | allowlist + web_fetch SSRF guard 后调用 OpenClaw；仅发现工具不接触网关 | 真实公网接口/工作流 success；loopback 在网关前拒绝 | 部分可用 | 仅 web_fetch 完成真实调用；Hermes 工具待稳定端点（P1） |
@@ -44,22 +44,23 @@
 | 调度重启持久化 | `/schedules` | next run 可见 | PG JobStore 恢复 | 后端重启后 next run 恢复并再次触发；暂停清空 next run | 可用 | 多实例重复触发风险（P1） |
 | PostgreSQL/Redis 记忆 | `/memories` | PG 记忆 UI 可用 | PG CRUD/search/upsert；Redis 只探活 | memory tests；Redis healthy | 部分可用 | Redis TTL 短期会话记忆缺失（P2） |
 | 文件工作区/分享 | `/files` | 上传/下载/删除/分享 | MinIO + owner PG + presigned URL | tests；本次 MinIO 实际存储由 KB 链路覆盖 | 部分可用 | 本次未重跑文件分享浏览器 E2E；无版本/撤销（P1/P2） |
-| 推送渠道与失败重试 | 设置、notify 节点 | 创建/原地编辑/测试；节点选择渠道；旧配置可清除 | owner-scoped `channel_ids` 解密；PUT 保持 ID；SSRF/DNS pin | 236 tests；真实密文保留/轮换且 flow 引用不变；跨 owner 拦截 | 部分可用 | 无真实外部推送凭据；无持久重试（P1/P2） |
+| 推送渠道与失败重试 | 设置、notify 节点 | 创建/原地编辑/测试；节点选择渠道；旧配置可清除 | owner-scoped `channel_ids` 解密；PUT 保持 ID；SSRF/DNS pin | 237 tests；真实密文保留/轮换且 flow 引用不变；跨 owner 拦截 | 部分可用 | 无真实外部推送凭据；无持久重试（P1/P2） |
 | 系统设置/健康 | `/settings`、`/health` | 依赖状态可见 | PG/Redis/ES/MinIO/OpenClaw/Hermes/reranker 探活 | 前六项真实 ok；embedding error 使 overall degraded | 可用（诚实） | 缺延迟、版本和历史趋势（P2） |
 | 导航/空态/错误态/移动端 | 全站 | 响应式主导航和 Agent 选择 | React Router + toast | lint/build；本批次浏览器工具环境阻塞 | 部分可用 | 多页仍有静默 catch；无浏览器 CI（P1） |
 | Compose/迁移/部署 | Compose、Makefile | N/A | backend 启动前 Alembic；health gating；无运行时依赖安装 | config 通过；真实迁移/head/check；六项依赖健康 | 部分可用 | reranker 下载和镜像 metadata 超时；固定 container_name 阻碍并行（P1/P2） |
-| 测试/lint/build/CI | Makefile、GitHub Actions | N/A | pytest/oxlint/tsc/Vite/Compose jobs；health tests 隔离本机服务 | 236 tests；lint/build/config/YAML 通过 | 部分可用 | 新 workflow 待远端首次运行；bundle 636 kB；无浏览器 CI（P1） |
+| 测试/lint/build/CI | Makefile、GitHub Actions | N/A | pytest/oxlint/tsc/Vite/Compose jobs；health tests 隔离本机服务 | 237 tests；lint/build/config/YAML 通过 | 部分可用 | OAuth 缺 `workflow` scope，CI 尚未推送运行；bundle 636 kB；无浏览器 CI（P1） |
 
 ## 本轮矩阵变化
 
 1. notify 节点从 DAG 明文凭据改为选择 owner-scoped 加密渠道 ID；新写入拒绝内联配置，旧流程保留可回退兼容。
 2. 画布新增 tool 节点，支持清单选择、JSON 变量参数、结构化输出、重试与明确失败；真实 OpenClaw `web_fetch` 工作流通过。
 3. 工具清单新增 executable 契约，Hermes `data_analysis` 明确标为“仅发现”，不会误发给 OpenClaw。
-4. 新增 GitHub Actions 基线，覆盖后端、前端和 Compose；远端首次运行结果将在 push 后确认。
+4. 新增 GitHub Actions 基线，覆盖后端、前端和 Compose；OAuth token 缺少 `workflow` scope，远端首次运行仍待授权后 push 确认。
 5. 今日真实重跑知识库摄取/检索、调度触发/暂停重启和迁移漂移检查；降级依赖均如实标记。
 6. 密码哈希从静默截断 72 字节改为版本化 bcrypt-SHA256，保留 legacy 校验并对普通长度旧哈希惰性升级。
 7. 推送渠道支持原地编辑和密钥轮换，敏感字段留空保留旧密文，工作流引用 ID 不变。
 8. PostgreSQL 注册事务新增 advisory lock，修复不同邮箱并发注册都成为首个 admin 的竞态；健康端点测试不再连接工作站真实服务。
+9. OpenClaw 聊天改为默认关闭并在环境示例中显式配置；无上游凭据时不再把合成 agent 别名展示成可用模型，也不会让默认聊天等待失效上游。
 
 ## 对标参考（官方资料，检索日期 2026-07-23）
 

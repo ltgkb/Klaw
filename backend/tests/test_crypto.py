@@ -93,8 +93,9 @@ def test_prod_accepts_strong_secrets(monkeypatch):
 
 
 def test_contract_fields_defaults():
-    """跨包契约 1：scheduler_timezone / minio_public_url 默认值。"""
+    """跨包契约 1：调度、MinIO 和本地推理安全默认值。"""
     from app.core.config import settings
 
     assert settings.scheduler_timezone == "Asia/Shanghai"
     assert settings.minio_public_url is None
+    assert settings.openclaw_chat_enabled is False
