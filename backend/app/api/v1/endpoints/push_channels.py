@@ -15,7 +15,13 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.deps import CurrentUser, DBSession
 from app.models.push_channel import ChannelType, PushChannel
-from app.schemas.push_channel import SENSITIVE_CONFIG_KEYS, PushChannelCreate, PushChannelRead
+from app.schemas.push_channel import (
+    REQUIRED_FIELDS_BY_TYPE,
+    SENSITIVE_CONFIG_KEYS,
+    PushChannelCreate,
+    PushChannelRead,
+    PushChannelUpdate,
+)
 from app.utils.crypto import encrypt
 
 logger = logging.getLogger("claw.push_channels")
@@ -96,6 +102,56 @@ async def create_channel(data: PushChannelCreate, current_user: CurrentUser, db:
         config=stored,
     )
     db.add(channel)
+    await db.commit()
+    await db.refresh(channel)
+    return PushChannelRead.model_validate(channel).model_copy(
+        update={"config": _mask_config(channel.config)}
+    )
+
+
+@router.put("/channels/{channel_id}", response_model=PushChannelRead)
+async def update_channel(
+    channel_id: uuid.UUID,
+    data: PushChannelUpdate,
+    current_user: CurrentUser,
+    db: DBSession,
+):
+    """Update name/config without changing the channel id referenced by workflows."""
+    result = await db.execute(
+        select(PushChannel).where(
+            PushChannel.id == channel_id,
+            PushChannel.owner_id == current_user.id,
+        )
+    )
+    channel = result.scalar_one_or_none()
+    if channel is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="渠道不存在")
+
+    new_type = data.type or channel.type
+    type_changed = new_type != channel.type
+    stored = {} if type_changed else dict(channel.config or {})
+    raw = data.config.model_dump(exclude_none=True) if data.config is not None else {}
+
+    for key, value in raw.items():
+        if key in _SENSITIVE_KEYS and not value:
+            continue
+        stored[key] = encrypt(str(value)) if key in _SENSITIVE_KEYS else value
+
+    required = REQUIRED_FIELDS_BY_TYPE.get(new_type, ())
+    missing = [key for key in required if not stored.get(key)]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"{new_type.value} 渠道缺少必填配置字段: {', '.join(missing)}",
+        )
+
+    if new_type in (ChannelType.feishu, ChannelType.wechat) and raw.get("webhook_url"):
+        _validate_webhook_host(new_type, str(raw["webhook_url"]))
+
+    if data.name is not None:
+        channel.name = data.name
+    channel.type = new_type
+    channel.config = stored
     await db.commit()
     await db.refresh(channel)
     return PushChannelRead.model_validate(channel).model_copy(

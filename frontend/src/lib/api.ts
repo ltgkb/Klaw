@@ -714,6 +714,11 @@ export const pushChannelApi = {
     type: PushChannelType
     config: { webhook_url?: string; bot_token?: string; chat_id?: string; channel?: string }
   }) => api.post<PushChannelRead>("/push/channels", data),
+  update: (id: string, data: {
+    name?: string
+    type?: PushChannelType
+    config?: { webhook_url?: string; bot_token?: string; chat_id?: string; channel?: string }
+  }) => api.put<PushChannelRead>(`/push/channels/${id}`, data),
   delete: (id: string) => api.delete(`/push/channels/${id}`),
 }
 

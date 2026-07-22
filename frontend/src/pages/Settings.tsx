@@ -23,7 +23,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Loader2, Send, Cpu, Cloud, Server, KeyRound, Trash2, Wrench, Plus, Zap, Play } from "lucide-react"
+import { Loader2, Send, Cpu, Cloud, Server, KeyRound, Trash2, Wrench, Plus, Zap, Play, Pencil, X } from "lucide-react"
 
 type StatusMeta = { label: string; dotClass: string }
 
@@ -89,6 +89,8 @@ export function Settings() {
   const [chField2, setChField2] = useState("")
   const [chSaving, setChSaving] = useState(false)
   const [testingId, setTestingId] = useState<string | null>(null)
+  const [editingChannelId, setEditingChannelId] = useState<string | null>(null)
+  const [editingOriginalType, setEditingOriginalType] = useState<PushChannelType | null>(null)
 
   // 本地 Agent 健康 (openclaw / hermes 连通性)
   const [agentHealth, setAgentHealth] = useState<LocalAgentHealth | null>(null)
@@ -222,20 +224,42 @@ export function Settings() {
     }
   }
 
-  const handleAddChannel = async () => {
-    if (!chName.trim() || !chField1.trim()) return
+  const resetChannelForm = () => {
+    setChName("")
+    setChType("feishu")
+    setChField1("")
+    setChField2("")
+    setEditingChannelId(null)
+    setEditingOriginalType(null)
+  }
+
+  const handleEditChannel = (channel: PushChannelRead) => {
+    setEditingChannelId(channel.id)
+    setEditingOriginalType(channel.type)
+    setChName(channel.name)
+    setChType(channel.type)
+    setChField1(channel.type === "hermes" ? channel.config.channel || "" : "")
+    setChField2(channel.type === "telegram" ? channel.config.chat_id || "" : "")
+  }
+
+  const handleSaveChannel = async () => {
+    if (!chName.trim()) return
     setChSaving(true)
     try {
       const config: Record<string, string> = {}
-      if (chType === "feishu" || chType === "wechat") config.webhook_url = chField1
+      if ((chType === "feishu" || chType === "wechat") && chField1) config.webhook_url = chField1
       else if (chType === "telegram") {
-        config.bot_token = chField1
+        if (chField1) config.bot_token = chField1
         config.chat_id = chField2
       } else if (chType === "hermes") config.channel = chField1
-      await pushChannelApi.create({ name: chName.trim(), type: chType, config })
-      setChName("")
-      setChField1("")
-      setChField2("")
+      if (editingChannelId) {
+        await pushChannelApi.update(editingChannelId, { name: chName.trim(), type: chType, config })
+        toast.success("渠道已更新")
+      } else {
+        await pushChannelApi.create({ name: chName.trim(), type: chType, config })
+        toast.success("渠道已添加")
+      }
+      resetChannelForm()
       await loadAll()
     } catch {
       // 拦截器处理
@@ -248,6 +272,7 @@ export function Settings() {
     if (!confirm(`确认删除推送渠道「${name}」？`)) return
     try {
       await pushChannelApi.delete(id)
+      if (editingChannelId === id) resetChannelForm()
       toast.success("渠道已删除")
       await loadAll()
     } catch {
@@ -316,6 +341,7 @@ export function Settings() {
 
   const channelHint = CHANNEL_TYPES.find((c) => c.value === chType)?.hint ?? ""
   const isTelegram = chType === "telegram"
+  const requiresNewSecret = !editingChannelId || editingOriginalType !== chType
 
   return (
     <div className="space-y-6">
@@ -559,6 +585,9 @@ export function Settings() {
                           )}
                           测试
                         </Button>
+                        <Button variant="ghost" size="icon" title="编辑渠道" onClick={() => handleEditChannel(c)}>
+                          <Pencil className="h-4 w-4" />
+                        </Button>
                         <Button variant="ghost" size="icon" onClick={() => handleDeleteChannel(c.id, c.name)}>
                           <Trash2 className="h-4 w-4 text-destructive" />
                         </Button>
@@ -572,7 +601,11 @@ export function Settings() {
                 <select
                   className="h-9 rounded-md border bg-background px-2 text-sm"
                   value={chType}
-                  onChange={(e) => setChType(e.target.value as PushChannelType)}
+                  onChange={(e) => {
+                    setChType(e.target.value as PushChannelType)
+                    setChField1("")
+                    setChField2("")
+                  }}
                 >
                   {CHANNEL_TYPES.map((c) => (
                     <option key={c.value} value={c.value}>
@@ -581,24 +614,45 @@ export function Settings() {
                   ))}
                 </select>
                 <Input
-                  placeholder={isTelegram ? "bot_token" : channelHint}
+                  placeholder={editingChannelId && chType !== "hermes" ? `${isTelegram ? "bot_token" : channelHint}（留空保留）` : isTelegram ? "bot_token" : channelHint}
                   value={chField1}
                   onChange={(e) => setChField1(e.target.value)}
                 />
                 {isTelegram ? (
                   <Input placeholder="chat_id" value={chField2} onChange={(e) => setChField2(e.target.value)} />
                 ) : (
-                  <Button onClick={handleAddChannel} disabled={chSaving || !chName.trim() || !chField1.trim()}>
-                    {chSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                    添加
-                  </Button>
+                  <div className="flex gap-1">
+                    <Button
+                      className="flex-1"
+                      onClick={handleSaveChannel}
+                      disabled={chSaving || !chName.trim() || ((requiresNewSecret || chType === "hermes") && !chField1.trim())}
+                    >
+                      {chSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : editingChannelId ? <Pencil className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+                      {editingChannelId ? "更新" : "添加"}
+                    </Button>
+                    {editingChannelId && (
+                      <Button variant="ghost" size="icon" title="取消编辑" onClick={resetChannelForm}>
+                        <X className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
                 )}
               </div>
               {isTelegram && (
-                <Button onClick={handleAddChannel} disabled={chSaving || !chName.trim() || !chField1.trim() || !chField2.trim()}>
-                  {chSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                  添加 Telegram 渠道
-                </Button>
+                <div className="flex gap-1">
+                  <Button
+                    onClick={handleSaveChannel}
+                    disabled={chSaving || !chName.trim() || (requiresNewSecret && !chField1.trim()) || !chField2.trim()}
+                  >
+                    {chSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : editingChannelId ? <Pencil className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+                    {editingChannelId ? "更新 Telegram 渠道" : "添加 Telegram 渠道"}
+                  </Button>
+                  {editingChannelId && (
+                    <Button variant="ghost" size="icon" title="取消编辑" onClick={resetChannelForm}>
+                      <X className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
               )}
             </CardContent>
           </Card>

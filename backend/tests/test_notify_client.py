@@ -286,6 +286,70 @@ async def test_create_channel_plaintext_chat_id_echo(client):
 
 
 @pytest.mark.asyncio
+async def test_update_channel_preserves_id_and_omitted_secret(client, db_session):
+    """原地编辑保留 channel id；敏感字段留空时保留旧密文。"""
+    import uuid
+
+    from sqlalchemy import select
+
+    from app.models.push_channel import PushChannel
+    from app.utils.crypto import decrypt
+
+    h = await _register_and_login(client, "channel-update@test.com")
+    created = await client.post("/api/v1/push/channels", json={
+        "name": "old", "type": "telegram",
+        "config": {"bot_token": "123:old-secret", "chat_id": "100"},
+    }, headers=h)
+    channel_id = created.json()["id"]
+
+    updated = await client.put(f"/api/v1/push/channels/{channel_id}", json={
+        "name": "new",
+        "config": {"bot_token": "", "chat_id": "200"},
+    }, headers=h)
+    assert updated.status_code == 200
+    assert updated.json()["id"] == channel_id
+    assert updated.json()["name"] == "new"
+    assert updated.json()["config"] == {"bot_token": "******", "chat_id": "200"}
+
+    result = await db_session.execute(
+        select(PushChannel).where(PushChannel.id == uuid.UUID(channel_id))
+    )
+    stored = result.scalar_one()
+    assert decrypt(stored.config["bot_token"]) == "123:old-secret"
+
+    rotated = await client.put(f"/api/v1/push/channels/{channel_id}", json={
+        "config": {"bot_token": "123:new-secret"},
+    }, headers=h)
+    assert rotated.status_code == 200
+    await db_session.refresh(stored)
+    assert decrypt(stored.config["bot_token"]) == "123:new-secret"
+
+
+@pytest.mark.asyncio
+async def test_update_channel_owner_isolation_and_type_requirements(client):
+    owner = await _register_and_login(client, "channel-owner-update@test.com")
+    other = await _register_and_login(client, "channel-other-update@test.com")
+    created = await client.post("/api/v1/push/channels", json={
+        "name": "ops", "type": "hermes", "config": {"channel": "ops"},
+    }, headers=owner)
+    channel_id = created.json()["id"]
+
+    forbidden = await client.put(
+        f"/api/v1/push/channels/{channel_id}",
+        json={"name": "stolen"},
+        headers=other,
+    )
+    assert forbidden.status_code == 404
+
+    missing_secret = await client.put(
+        f"/api/v1/push/channels/{channel_id}",
+        json={"type": "telegram", "config": {"chat_id": "9"}},
+        headers=owner,
+    )
+    assert missing_secret.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_create_channel_host_whitelist_prod_rejects(client, monkeypatch):
     """prod 环境下非白名单 host 创建飞书渠道被拒绝。"""
     from app.core.config import settings
