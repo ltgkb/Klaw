@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react"
-import { Brain, Database, GitBranch, Type, Bell, BrainCog, Trash2, Plus, X, Play, Repeat2, Square, Globe } from "lucide-react"
-import { providerApi, type NodeType, type ModelInfo } from "@/lib/api"
+import { Link } from "react-router-dom"
+import { AlertTriangle, Brain, Database, GitBranch, Type, Bell, BrainCog, Trash2, Plus, X, Play, Repeat2, Square, Globe, Loader2, RefreshCw, Settings2 } from "lucide-react"
+import { providerApi, pushChannelApi, type NodeType, type ModelInfo, type PushChannelRead } from "@/lib/api"
 import type { Node } from "@xyflow/react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -72,6 +73,124 @@ function ModelSelect({ value, onChange }: { value: string; onChange: (v: string)
         default → Kaiweb → OpenClaw → OpenAI → Anthropic fallback
       </p>
     </>
+  )
+}
+
+const CHANNEL_TYPE_LABELS: Record<PushChannelRead["type"], string> = {
+  feishu: "飞书",
+  wechat: "企业微信",
+  telegram: "Telegram",
+  hermes: "Hermes",
+}
+
+function NotifyChannelSelector({
+  value,
+  legacyCount,
+  onChange,
+  onClearLegacy,
+}: {
+  value: string[]
+  legacyCount: number
+  onChange: (ids: string[]) => void
+  onClearLegacy: () => void
+}) {
+  const [channels, setChannels] = useState<PushChannelRead[]>([])
+  const [loading, setLoading] = useState(true)
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
+
+  useEffect(() => {
+    let active = true
+    setLoading(true)
+    setLoadFailed(false)
+    pushChannelApi
+      .list()
+      .then((response) => {
+        if (active) setChannels(response.data)
+      })
+      .catch(() => {
+        if (active) setLoadFailed(true)
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [reloadKey])
+
+  const toggle = (channelId: string) => {
+    onChange(
+      value.includes(channelId)
+        ? value.filter((id) => id !== channelId)
+        : [...value, channelId],
+    )
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <Label>已保存渠道</Label>
+        <Button asChild variant="ghost" size="sm" className="h-7 px-2 text-xs">
+          <Link to="/settings">
+            <Settings2 className="h-3.5 w-3.5" />
+            管理渠道
+          </Link>
+        </Button>
+      </div>
+
+      {legacyCount > 0 && (
+        <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <p>此旧节点含 {legacyCount} 个内联渠道配置。</p>
+            <button type="button" className="mt-1 font-medium underline" onClick={onClearLegacy}>
+              清除旧配置
+            </button>
+          </div>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="flex h-16 items-center justify-center rounded-md border">
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        </div>
+      ) : loadFailed ? (
+        <div className="flex h-16 items-center justify-between rounded-md border px-3 text-sm text-destructive">
+          <span>渠道加载失败</span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 w-8 p-0"
+            title="重新加载渠道"
+            onClick={() => setReloadKey((key) => key + 1)}
+          >
+            <RefreshCw className="h-4 w-4" />
+          </Button>
+        </div>
+      ) : channels.length === 0 ? (
+        <p className="rounded-md border p-3 text-sm text-muted-foreground">暂无已保存渠道</p>
+      ) : (
+        <div className="max-h-52 space-y-1 overflow-auto rounded-md border p-1">
+          {channels.map((channel) => (
+            <label
+              key={channel.id}
+              className="flex min-h-10 cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-accent"
+            >
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-input"
+                checked={value.includes(channel.id)}
+                onChange={() => toggle(channel.id)}
+              />
+              <span className="min-w-0 flex-1 truncate text-sm">{channel.name}</span>
+              <span className="text-xs text-muted-foreground">{CHANNEL_TYPE_LABELS[channel.type]}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -644,99 +763,17 @@ export function NodeConfigPanel({ node, allNodes = [], onChange, onDelete }: Pro
                 {"{node_id} 引用上游节点输出"}
               </p>
             </div>
-            <div className="space-y-2">
-              <Label>推送渠道</Label>
-              {((config.channels as Array<Record<string, string>>) || []).map((ch, i) => (
-                <div key={i} className="space-y-1.5 rounded-md border p-2">
-                  <div className="flex items-center gap-2">
-                    <select
-                      className="flex h-8 flex-1 rounded-md border border-input bg-background px-2 text-xs"
-                      value={ch.type || "feishu"}
-                      onChange={(e) => {
-                        const channels = [...((config.channels as Array<Record<string, string>>) || [])]
-                        channels[i] = { ...ch, type: e.target.value }
-                        updateConfig("channels", channels)
-                      }}
-                    >
-                      <option value="feishu">飞书</option>
-                      <option value="wechat">企业微信</option>
-                      <option value="telegram">Telegram</option>
-                      <option value="hermes">Hermes</option>
-                    </select>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 px-2"
-                      onClick={() => {
-                        const channels = [...((config.channels as Array<Record<string, string>>) || [])]
-                        channels.splice(i, 1)
-                        updateConfig("channels", channels)
-                      }}
-                    >
-                      <X className="h-3 w-3" />
-                    </Button>
-                  </div>
-                  {ch.type === "telegram" ? (
-                    <>
-                      <Input
-                        className="h-8 text-xs"
-                        value={ch.bot_token || ""}
-                        onChange={(e) => {
-                          const channels = [...((config.channels as Array<Record<string, string>>) || [])]
-                          channels[i] = { ...ch, bot_token: e.target.value }
-                          updateConfig("channels", channels)
-                        }}
-                        placeholder="Bot Token"
-                      />
-                      <Input
-                        className="h-8 text-xs"
-                        value={ch.chat_id || ""}
-                        onChange={(e) => {
-                          const channels = [...((config.channels as Array<Record<string, string>>) || [])]
-                          channels[i] = { ...ch, chat_id: e.target.value }
-                          updateConfig("channels", channels)
-                        }}
-                        placeholder="Chat ID"
-                      />
-                    </>
-                  ) : ch.type === "hermes" ? (
-                    <Input
-                      className="h-8 text-xs"
-                      value={ch.channel || ""}
-                      onChange={(e) => {
-                        const channels = [...((config.channels as Array<Record<string, string>>) || [])]
-                        channels[i] = { ...ch, channel: e.target.value }
-                        updateConfig("channels", channels)
-                      }}
-                      placeholder="Hermes channel"
-                    />
-                  ) : (
-                    <Input
-                      className="h-8 text-xs"
-                      value={ch.webhook_url || ""}
-                      onChange={(e) => {
-                        const channels = [...((config.channels as Array<Record<string, string>>) || [])]
-                        channels[i] = { ...ch, webhook_url: e.target.value }
-                        updateConfig("channels", channels)
-                      }}
-                      placeholder="Webhook URL"
-                    />
-                  )}
-                </div>
-              ))}
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full"
-                onClick={() => {
-                  const channels = [...((config.channels as Array<Record<string, string>>) || []), { type: "feishu", webhook_url: "" }]
-                  updateConfig("channels", channels)
-                }}
-              >
-                <Plus className="h-3 w-3" />
-                添加渠道
-              </Button>
-            </div>
+            <NotifyChannelSelector
+              value={(config.channel_ids as string[]) || []}
+              legacyCount={((config.channels as unknown[]) || []).length}
+              onChange={(channelIds) => {
+                onChange(node.id, {
+                  ...nodeData,
+                  config: { ...config, channel_ids: channelIds, channels: [] },
+                })
+              }}
+              onClearLegacy={() => updateConfig("channels", [])}
+            />
           </>
         )}
 

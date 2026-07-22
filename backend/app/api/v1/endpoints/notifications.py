@@ -4,19 +4,12 @@
 - 渠道配置管理见 /push/channels
 """
 
-import logging
-
 from fastapi import APIRouter, HTTPException, status
-from sqlalchemy import select
 
 from app.core.deps import CurrentUser, DBSession
 from app.core.notify_client import notify
-from app.models.push_channel import PushChannel
-from app.schemas.notification import NotifyChannelConfig, NotifyRequest, NotifyResponse, NotifyResult
-from app.schemas.push_channel import SENSITIVE_CONFIG_KEYS
-from app.utils.crypto import decrypt
-
-logger = logging.getLogger("claw.notifications")
+from app.schemas.notification import NotifyRequest, NotifyResponse, NotifyResult
+from app.services.push_channel_service import resolve_channel_configs
 
 router = APIRouter(prefix="/notifications", tags=["推送通知"])
 
@@ -33,31 +26,14 @@ async def send_notification(data: NotifyRequest, current_user: CurrentUser, db: 
 
     # 解析已持久化渠道 id
     if data.channel_ids:
-        result = await db.execute(
-            select(PushChannel).where(
-                PushChannel.owner_id == current_user.id,
-                PushChannel.id.in_(data.channel_ids),
+        channels_cfg.extend(
+            await resolve_channel_configs(
+                db,
+                current_user.id,
+                data.channel_ids,
+                skip_unusable=True,
             )
         )
-        for ch in result.scalars().all():
-            decrypted = {}
-            decrypt_failed = False
-            for k, v in (ch.config or {}).items():
-                if k in SENSITIVE_CONFIG_KEYS and isinstance(v, str):
-                    try:
-                        decrypted[k] = decrypt(v)
-                    except Exception:
-                        # 解密失败 (密钥变更/数据损坏) → 记 warning 并跳过该渠道,
-                        # 绝不把密文/原文当明文发出
-                        logger.warning("渠道 %s 敏感字段 %s 解密失败, 跳过该渠道", ch.id, k)
-                        decrypt_failed = True
-                        break
-                else:
-                    decrypted[k] = v
-            if decrypt_failed:
-                continue
-            decrypted["type"] = ch.type.value
-            channels_cfg.append(decrypted)
 
     if not channels_cfg:
         raise HTTPException(

@@ -258,7 +258,7 @@ export type TriggerType = "manual" | "scheduled" | "webhook"
 export type ExecutionStatus = "pending" | "running" | "paused" | "success" | "failed" | "cancelled"
 
 /** XYFlow 节点类型 */
-export type NodeType = "start" | "end" | "llm" | "retrieval" | "condition" | "loop" | "text" | "notify" | "memory"
+export type NodeType = "start" | "end" | "llm" | "retrieval" | "condition" | "loop" | "text" | "notify" | "memory" | "http"
 
 /** XYFlow 兼容的 DAG 格式 */
 export interface FlowDag {

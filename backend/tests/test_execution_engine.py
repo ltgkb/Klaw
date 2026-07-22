@@ -17,8 +17,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.models.agent_flow import AgentFlow
 from app.models.execution import Execution, ExecutionStatus
 from app.models.knowledge_base import KnowledgeBase
+from app.models.push_channel import ChannelType, PushChannel
 from app.models.user import User
 from app.services import execution_service
+from app.utils.crypto import encrypt
 
 
 # ── 辅助函数 ──
@@ -67,6 +69,97 @@ def mock_llm(monkeypatch):
 def _text_node(nid, label, template):
     return {"id": nid, "type": "text", "position": {"x": 0, "y": 0},
             "data": {"label": label, "config": {"template": template}}}
+
+
+def _notify_node(channel_ids):
+    return {
+        "id": "notify-1",
+        "type": "notify",
+        "position": {"x": 0, "y": 0},
+        "data": {
+            "label": "通知",
+            "config": {
+                "channel_ids": channel_ids,
+                "title_template": "完成",
+                "content_template": "结果: {input}",
+            },
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_notify_node_resolves_owner_channel(
+    db_session, patch_session_factory, monkeypatch
+):
+    """工作流只存 channel id，执行时按 owner 解密并发送。"""
+    user = await _make_user(db_session, "notify-owner@test.com")
+    channel = PushChannel(
+        owner_id=user.id,
+        name="团队通知",
+        type=ChannelType.telegram,
+        config={"bot_token": encrypt("123:secret"), "chat_id": "9988"},
+    )
+    db_session.add(channel)
+    await db_session.commit()
+
+    flow = await _make_flow(
+        db_session,
+        user.id,
+        {"nodes": [_notify_node([str(channel.id)])], "edges": []},
+    )
+    execution = await _make_execution(db_session, flow.id, {"input": "日报"})
+    sent = []
+
+    async def fake_notify(channels, title, content):
+        sent.extend(channels)
+        assert title == "完成"
+        assert content == "结果: 日报"
+        return [{"channel": "telegram", "success": True, "error": None}]
+
+    monkeypatch.setattr("app.core.notify_client.notify", fake_notify)
+    await execution_service.run_flow(execution.id, flow.id)
+
+    await db_session.refresh(execution)
+    assert execution.status == ExecutionStatus.success
+    assert sent == [{"bot_token": "123:secret", "chat_id": "9988", "type": "telegram"}]
+    assert execution.node_states["notify-1"]["output"] == "推送完成: 1/1 渠道成功"
+
+
+@pytest.mark.asyncio
+async def test_notify_node_rejects_foreign_channel(
+    db_session, patch_session_factory, monkeypatch
+):
+    """引用其他 owner 的渠道时执行失败，且不会调用发送器。"""
+    owner = await _make_user(db_session, "flow-owner@test.com")
+    other = await _make_user(db_session, "channel-owner@test.com")
+    channel = PushChannel(
+        owner_id=other.id,
+        name="foreign",
+        type=ChannelType.hermes,
+        config={"channel": "ops"},
+    )
+    db_session.add(channel)
+    await db_session.commit()
+
+    flow = await _make_flow(
+        db_session,
+        owner.id,
+        {"nodes": [_notify_node([str(channel.id)])], "edges": []},
+    )
+    execution = await _make_execution(db_session, flow.id)
+    sent = []
+
+    async def fake_notify(*args):
+        sent.append(args)
+        return []
+
+    monkeypatch.setattr("app.core.notify_client.notify", fake_notify)
+    await execution_service.run_flow(execution.id, flow.id)
+
+    await db_session.refresh(execution)
+    assert execution.status == ExecutionStatus.failed
+    assert "不存在或无权访问" in execution.node_states["notify-1"]["error"]
+    assert sent == []
 
 
 # ── P0-2: 启动前取消 ──

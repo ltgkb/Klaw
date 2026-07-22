@@ -520,7 +520,7 @@ async def _execute_node(
     elif node_type == "text":
         return _execute_text_node(config, context)
     elif node_type == "notify":
-        return await _execute_notify_node(config, context)
+        return await _execute_notify_node(config, context, user)
     elif node_type == "memory":
         return await _execute_memory_node(config, context, user)
     else:
@@ -947,17 +947,29 @@ def _stringify_output(value: Any) -> str:
 
 # ── 推送节点 (M4) ──
 
-async def _execute_notify_node(config: dict, context: dict) -> str:
+async def _execute_notify_node(config: dict, context: dict, user=None) -> str:
     """多平台推送节点。
 
     config:
+      - channel_ids: 已加密持久化渠道 id 列表 (按 flow owner 解析)
       - channels: 推送渠道列表 [{type, webhook_url/bot_token+chat_id/channel}]
+        仅兼容历史流程, 新流程写入已禁止内联渠道
       - title_template: 标题模板 (支持 {var})
       - content_template: 内容模板 (支持 {var})
     """
+    from app.core.database import async_session_factory
     from app.core.notify_client import notify as do_notify
+    from app.services.push_channel_service import resolve_channel_configs
 
-    channels = config.get("channels", [])
+    channels = list(config.get("channels") or [])
+    channel_ids = list(config.get("channel_ids") or [])
+    if channel_ids:
+        if user is None:
+            raise ValueError("无法确认推送渠道所有者")
+        async with async_session_factory() as db:
+            channels.extend(
+                await resolve_channel_configs(db, user.id, channel_ids)
+            )
     if not channels:
         return "[推送节点未配置渠道]"
 

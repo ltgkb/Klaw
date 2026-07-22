@@ -177,7 +177,7 @@ const DEFAULT_CONFIGS: Record<CanvasNodeType, Record<string, unknown>> = {
   condition: { cases: [{ id: "case1", name: "条件1", expression: "{input} == ''" }], default_name: "默认" },
   loop: { items_template: "{input}", body_node_id: "", item_variable: "item", index_variable: "index", max_iterations: 20, continue_on_error: false },
   text: { template: "" },
-  notify: { title_template: "Agent 通知", content_template: "{input}", channels: [] },
+  notify: { title_template: "Agent 通知", content_template: "{input}", channel_ids: [] },
   memory: { action: "save", key: "", value_template: "{input}", session_id: "" },
   http: { method: "GET", url: "", headers: {}, body: "", timeout_s: 30 },
 }

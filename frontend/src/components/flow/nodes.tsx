@@ -228,8 +228,9 @@ function NodeSummary({ type, config }: { type: CanvasNodeType; config: Record<st
     return <p className="mt-0.5 text-xs text-gray-400">最多 {maxIterations} 次</p>
   }
   if (type === "notify") {
-    const channels = (config.channels as unknown[]) || []
-    return <p className="mt-0.5 text-xs text-gray-400">{channels.length} 渠道</p>
+    const savedChannels = (config.channel_ids as unknown[]) || []
+    const legacyChannels = (config.channels as unknown[]) || []
+    return <p className="mt-0.5 text-xs text-gray-400">{savedChannels.length + legacyChannels.length} 渠道</p>
   }
   if (type === "memory") {
     const action = (config.action as string) || "save"

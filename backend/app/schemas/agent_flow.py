@@ -4,13 +4,26 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.agent_flow import FlowStatus, TriggerType
 from app.models.execution import ExecutionStatus
 
 
 # ── 工作流 ──
+
+def _reject_inline_notify_channels(dag: dict | None) -> dict | None:
+    """Keep channel credentials out of the plaintext workflow JSON."""
+    if dag is None:
+        return None
+    for node in dag.get("nodes", []):
+        if node.get("type") != "notify":
+            continue
+        config = node.get("data", {}).get("config", {})
+        if config.get("channels"):
+            raise ValueError("通知节点不允许内联渠道配置，请使用已加密保存的 channel_ids")
+    return dag
+
 
 class FlowCreate(BaseModel):
     """创建工作流。"""
@@ -19,6 +32,8 @@ class FlowCreate(BaseModel):
     dag: dict = Field(default_factory=lambda: {"nodes": [], "edges": []})
     trigger_type: TriggerType = TriggerType.manual
     trigger_config: dict | None = None
+
+    _validate_notify_channels = field_validator("dag")(_reject_inline_notify_channels)
 
 
 class FlowUpdate(BaseModel):
@@ -29,6 +44,8 @@ class FlowUpdate(BaseModel):
     status: FlowStatus | None = None
     trigger_type: TriggerType | None = None
     trigger_config: dict | None = None
+
+    _validate_notify_channels = field_validator("dag")(_reject_inline_notify_channels)
 
 
 class FlowRead(BaseModel):
