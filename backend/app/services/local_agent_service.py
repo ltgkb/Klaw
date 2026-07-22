@@ -112,7 +112,8 @@ async def call_tool(tool_id: str, parameters: dict) -> dict:
             "error": f"本地工具不存在: {tool_id}",
             "source": "local",
         }
-    if not tool.executable:
+    executable = getattr(tool, "executable", True)
+    if not executable:
         return {
             "tool_id": tool_id,
             "success": False,
