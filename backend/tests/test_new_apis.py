@@ -81,6 +81,9 @@ async def test_local_agent_tools_discovery(client):
     assert "send_notification" in ids
     # deploy/hermes/skills 下应有 data_analysis
     assert "data_analysis" in ids
+    tools = {tool["id"]: tool for tool in data}
+    assert tools["web_fetch"]["executable"] is True
+    assert tools["data_analysis"]["executable"] is False
 
 
 @pytest.mark.asyncio
@@ -467,6 +470,29 @@ async def test_local_agent_tool_call_unknown_tool(client, monkeypatch):
     data = resp.json()
     assert data["success"] is False
     assert "不存在" in data["error"]
+
+
+@pytest.mark.asyncio
+async def test_local_agent_discovered_only_tool_does_not_contact_openclaw(client, monkeypatch):
+    """Hermes 清单工具没有调用端点时，必须明确失败且不误发给 OpenClaw。"""
+    from app.services import local_agent_service
+
+    class _UnexpectedClient:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("discovered-only tool must not contact OpenClaw")
+
+    monkeypatch.setattr(local_agent_service.httpx, "AsyncClient", _UnexpectedClient)
+    token = await _register_and_login(client, "hermestool@test.com")
+    resp = await client.post(
+        "/api/v1/local-agent/tools/data_analysis/call",
+        json={"parameters": {"dataset_url": "https://example.com/data.csv"}},
+        headers=_auth_headers(token),
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["success"] is False
+    assert resp.json()["source"] == "hermes"
+    assert "没有可用的调用端点" in resp.json()["error"]
 
 
 @pytest.mark.asyncio

@@ -639,6 +639,7 @@ export interface ToolInfo {
   description: string | null
   source: string
   parameters: Record<string, unknown> | null
+  executable: boolean
 }
 
 export interface ToolCallResponse {

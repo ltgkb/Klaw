@@ -122,10 +122,11 @@ export function Settings() {
     if (modelsR.status === "fulfilled") setModels(modelsR.value.data)
     if (toolsR.status === "fulfilled") {
       setTools(toolsR.value.data)
+      const executableTools = toolsR.value.data.filter((tool) => tool.executable)
       setSelectedToolId((current) =>
-        toolsR.value.data.some((tool) => tool.id === current)
+        executableTools.some((tool) => tool.id === current)
           ? current
-          : toolsR.value.data[0]?.id || "",
+          : executableTools[0]?.id || "",
       )
     }
     if (channelsR.status === "fulfilled") setChannels(channelsR.value.data)
@@ -142,6 +143,8 @@ export function Settings() {
   useEffect(() => {
     loadAll()
   }, [])
+
+  const executableTools = tools.filter((tool) => tool.executable)
 
   const handleSend = async () => {
     const message = chatInput.trim()
@@ -637,7 +640,7 @@ export function Settings() {
                       <div className="flex items-center justify-between">
                         <span className="font-medium">{t.name}</span>
                         <span className="rounded bg-secondary px-1.5 py-0.5 text-xs text-muted-foreground">
-                          {t.source}
+                          {t.source} · {t.executable ? "可调用" : "仅发现"}
                         </span>
                       </div>
                       <div className="mt-1 text-xs text-muted-foreground">{t.description}</div>
@@ -645,7 +648,7 @@ export function Settings() {
                   ))}
                 </div>
               )}
-              {tools.length > 0 && (
+              {executableTools.length > 0 && (
                 <div className="space-y-3 border-t pt-3">
                   <div className="grid gap-3 sm:grid-cols-[minmax(0,220px)_1fr]">
                     <div className="space-y-2">
@@ -661,7 +664,7 @@ export function Settings() {
                           setToolParameters(toolId === "web_fetch" ? '{\n  "url": "https://example.com"\n}' : "{}")
                         }}
                       >
-                        {tools.map((tool) => <option key={tool.id} value={tool.id}>{tool.name}</option>)}
+                        {executableTools.map((tool) => <option key={tool.id} value={tool.id}>{tool.name}</option>)}
                       </select>
                     </div>
                     <div className="space-y-2">

@@ -64,6 +64,7 @@ def _scan_skills_dir(source: str, skills_dir: Path) -> list[ToolInfo]:
             description=data.get("description"),
             source=source,
             parameters=data.get("parameters"),
+            executable=source == "openclaw",
         ))
 
     return tools
@@ -100,14 +101,23 @@ async def call_tool(tool_id: str, parameters: dict) -> dict:
       - 网关返回无效响应 / HTTP 错误 → success=False + error (source=mock)
       - 连接级失败 (网关不可达) → success=False，明确报告网关不可用
     """
-    allowed_tool_ids = {tool.id for tool in await discover_tools()}
-    if tool_id not in allowed_tool_ids:
+    tools_by_id = {tool.id: tool for tool in await discover_tools()}
+    tool = tools_by_id.get(tool_id)
+    if tool is None:
         return {
             "tool_id": tool_id,
             "success": False,
             "result": None,
             "error": f"本地工具不存在: {tool_id}",
             "source": "local",
+        }
+    if not tool.executable:
+        return {
+            "tool_id": tool_id,
+            "success": False,
+            "result": None,
+            "error": f"{tool.source} 工具仅完成清单发现，当前没有可用的调用端点: {tool_id}",
+            "source": tool.source,
         }
 
     headers = {"Content-Type": "application/json"}

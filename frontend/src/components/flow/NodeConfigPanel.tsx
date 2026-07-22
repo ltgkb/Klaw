@@ -100,7 +100,8 @@ function ToolSelect({ value, onChange }: { value: string; onChange: (v: string) 
     }
   }, [])
 
-  const selected = tools.find((tool) => tool.id === value)
+  const executableTools = tools.filter((tool) => tool.executable)
+  const selected = executableTools.find((tool) => tool.id === value)
   return (
     <>
       <select
@@ -110,7 +111,7 @@ function ToolSelect({ value, onChange }: { value: string; onChange: (v: string) 
         onChange={(event) => onChange(event.target.value)}
       >
         <option value="">{loaded ? "选择工具" : "加载工具中…"}</option>
-        {tools.map((tool) => (
+        {executableTools.map((tool) => (
           <option key={tool.id} value={tool.id}>{tool.name} ({tool.source})</option>
         ))}
       </select>

@@ -13,6 +13,7 @@ class ToolInfo(BaseModel):
     description: str | None = None
     source: str = "local"  # local (skills 目录) / openclaw / hermes
     parameters: dict[str, Any] | None = None  # 参数 schema
+    executable: bool = True
 
 
 class ToolCallRequest(BaseModel):
