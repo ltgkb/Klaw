@@ -108,15 +108,17 @@ def unschedule_flow(job_id: str):
         pass  # job 不存在时忽略
 
 
-def pause_scheduled_job(job_id: str):
+def pause_scheduled_job(job_id: str) -> bool:
     """暂停定时任务。"""
     if scheduler is None:
-        return
+        return False
     try:
         scheduler.pause_job(job_id)
         logger.info("定时任务已暂停: %s", job_id)
+        return True
     except Exception:
-        pass
+        logger.exception("定时任务暂停失败: %s", job_id)
+        return False
 
 
 def resume_scheduled_job(job_id: str) -> datetime | None:

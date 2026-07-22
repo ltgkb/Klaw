@@ -6,7 +6,7 @@
 
 ## 证据摘要
 
-- 后端基线：承接分支后 `uv run pytest -q` 为 **220 passed**；本轮新增通知渠道、工具节点、调用边界、文档 parser 与认证安全测试，最终全量回归 **248 passed**。
+- 后端基线：承接分支后 `uv run pytest -q` 为 **220 passed**；本轮新增通知渠道、工具节点、调用边界、文档 parser 与认证安全测试，最终全量回归 **249 passed**。
 - 前端：`npm run lint` 通过（4 个既有 Fast Refresh warning）；`npm run build` 通过，主 JS 约 637 kB，仍有 code-splitting warning。
 - 真实依赖：独立 PostgreSQL 数据库 `claw_auto_20260723`、Redis、MinIO、Elasticsearch 8.11、OpenClaw 2026.7.1、Hermes 0.18.2 healthy；迁移到 head 且 `alembic check` 无漂移。
 - 真实 API：注册/登录、TXT/MD/HTML/JSON/CSV/PDF/DOCX/XLSX/PPTX/EPUB→MinIO→解析→hash embedding→ES 检索引用、OpenClaw `web_fetch`、画布 tool 节点、加密通知渠道/owner 拦截、APScheduler 实际触发及暂停后重启保持均通过。
@@ -40,15 +40,15 @@
 | provider 流式/fallback/错误 | `/providers/chat/stream`、设置 | 设置测试为非流式 | SSE delta；多级 fallback；dev Mock 显式标记 | fallback/stream tests | 部分可用 | UI 未消费 token stream；真实 provider 未验证（P1） |
 | OpenClaw/Hermes 发现 | 设置、tool 节点 | 清单标记“可调用/仅发现” | manifest + executable 契约；双网关健康 | 3 个清单；Hermes 0.18.2 无工具调用端点 | 可用（诚实） | `data_analysis` 仅发现（P1） |
 | 本地工具调用 | 设置工具调用器、画布 tool 节点 | JSON 参数、变量、结果/错误可见 | allowlist + web_fetch SSRF guard 后调用 OpenClaw；仅发现工具不接触网关 | 真实公网接口/工作流 success；loopback 在网关前拒绝 | 部分可用 | 仅 web_fetch 完成真实调用；Hermes 工具待稳定端点（P1） |
-| APScheduler CRUD/控制/触发 | `/schedules` | 创建/编辑/暂停/恢复 | PG SQLAlchemyJobStore | 每分钟任务真实触发 success | 可用 | 多实例无 leader/分布式锁（P1/P2） |
+| APScheduler CRUD/控制/触发 | `/schedules` | 创建/编辑/暂停/恢复 | PG SQLAlchemyJobStore；暂停失败 503 且不提交假状态 | 自动化错误态；每分钟任务真实触发 success | 可用 | 多实例无 leader/分布式锁（P1/P2） |
 | 调度重启持久化 | `/schedules` | next run 可见 | PG JobStore 恢复 | 后端重启后 next run 恢复并再次触发；暂停清空 next run | 可用 | 多实例重复触发风险（P1） |
 | PostgreSQL/Redis 记忆 | `/memories` | PG 记忆 UI 可用 | PG CRUD/search/upsert；Redis 只探活 | memory tests；Redis healthy | 部分可用 | Redis TTL 短期会话记忆缺失（P2） |
 | 文件工作区/分享 | `/files` | 上传/下载/删除/分享 | MinIO + owner PG + presigned URL | tests；本次 MinIO 实际存储由 KB 链路覆盖 | 部分可用 | 本次未重跑文件分享浏览器 E2E；无版本/撤销（P1/P2） |
-| 推送渠道与失败重试 | 设置、notify 节点 | 创建/原地编辑/测试；节点选择渠道；旧配置可清除 | owner-scoped `channel_ids` 解密；PUT 保持 ID；SSRF/DNS pin | 248 tests；真实密文保留/轮换且 flow 引用不变；跨 owner 拦截 | 部分可用 | 无真实外部推送凭据；无持久重试（P1/P2） |
+| 推送渠道与失败重试 | 设置、notify 节点 | 创建/原地编辑/测试；节点选择渠道；旧配置可清除 | owner-scoped `channel_ids` 解密；PUT 保持 ID；SSRF/DNS pin | 249 tests；真实密文保留/轮换且 flow 引用不变；跨 owner 拦截 | 部分可用 | 无真实外部推送凭据；无持久重试（P1/P2） |
 | 系统设置/健康 | `/settings`、`/health` | 依赖状态可见 | PG/Redis/ES/MinIO/OpenClaw/Hermes/reranker 探活 | 前六项真实 ok；embedding error 使 overall degraded | 可用（诚实） | 缺延迟、版本和历史趋势（P2） |
 | 导航/空态/错误态/移动端 | 全站 | 响应式主导航和 Agent 选择 | React Router + toast | lint/build；本批次浏览器工具环境阻塞 | 部分可用 | 多页仍有静默 catch；无浏览器 CI（P1） |
 | Compose/迁移/部署 | Compose、Makefile | N/A | 透传 environment/debug；prod 拒绝弱 JWT/加密密钥；启动前 Alembic；health gating | config 通过；prod 默认值拒绝测试；真实迁移/head/check；六项依赖健康 | 部分可用 | reranker 下载和镜像 metadata 超时；固定 container_name 阻碍并行（P1/P2） |
-| 测试/lint/build/CI | Makefile、GitHub Actions | N/A | pytest/oxlint/tsc/Vite/Compose jobs；health tests 隔离本机服务 | 248 tests；lint/build/config/YAML 通过 | 部分可用 | OAuth 缺 `workflow` scope，CI 尚未推送运行；bundle 637 kB；无浏览器 CI（P1） |
+| 测试/lint/build/CI | Makefile、GitHub Actions | N/A | pytest/oxlint/tsc/Vite/Compose jobs；health tests 隔离本机服务 | 249 tests；lint/build/config/YAML 通过 | 部分可用 | OAuth 缺 `workflow` scope，CI 尚未推送运行；bundle 637 kB；无浏览器 CI（P1） |
 
 ## 本轮矩阵变化
 
@@ -67,6 +67,7 @@
 13. 统一前后端分块大小边界并拒绝 `chunk_overlap >= chunk_size`，避免步长退化为 1 导致 chunk 数量爆炸。
 14. CSV 纳入明确支持并完成真实摄取；无可靠解析器的旧 `.doc/.xls/.ppt` 改为上传阶段 415，不再先返回 201 再后台失败。
 15. Compose 透传 `ENVIRONMENT/DEBUG`，生产启动校验覆盖 Compose 的弱 JWT 占位值，避免部署者设置 prod 后应用仍静默运行在 dev。
+16. APScheduler 暂停失败不再被吞掉；API 返回 503 并回滚状态，避免 UI 显示 paused 但任务仍继续触发。
 
 ## 对标参考（官方资料，检索日期 2026-07-23）
 

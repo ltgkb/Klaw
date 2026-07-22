@@ -357,7 +357,7 @@ def mock_scheduler(monkeypatch):
         pass
 
     def mock_pause(job_id):
-        pass
+        return True
 
     def mock_resume(job_id):
         return datetime.now(timezone.utc)
