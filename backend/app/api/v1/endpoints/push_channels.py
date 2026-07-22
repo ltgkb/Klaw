@@ -14,6 +14,7 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.deps import CurrentUser, DBSession
+from app.models.agent_flow import AgentFlow
 from app.models.push_channel import ChannelType, PushChannel
 from app.schemas.push_channel import (
     REQUIRED_FIELDS_BY_TYPE,
@@ -170,5 +171,23 @@ async def delete_channel(channel_id: uuid.UUID, current_user: CurrentUser, db: D
     channel = result.scalar_one_or_none()
     if channel is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="渠道不存在")
+
+    flow_result = await db.execute(
+        select(AgentFlow).where(AgentFlow.owner_id == current_user.id)
+    )
+    references = []
+    channel_key = str(channel_id)
+    for flow in flow_result.scalars().all():
+        for node in (flow.dag or {}).get("nodes", []):
+            config = node.get("data", {}).get("config", {})
+            if node.get("type") == "notify" and channel_key in config.get("channel_ids", []):
+                references.append(flow.name)
+                break
+    if references:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"渠道正被 {len(references)} 个工作流引用，请先迁移通知节点",
+        )
+
     await db.delete(channel)
     await db.commit()

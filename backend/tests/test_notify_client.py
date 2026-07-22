@@ -350,6 +350,40 @@ async def test_update_channel_owner_isolation_and_type_requirements(client):
 
 
 @pytest.mark.asyncio
+async def test_delete_channel_referenced_by_flow_conflicts(client):
+    """删除被 notify 节点引用的渠道应返回 409，避免静默破坏工作流。"""
+    h = await _register_and_login(client, "channel-reference@test.com")
+    created = await client.post("/api/v1/push/channels", json={
+        "name": "ops", "type": "hermes", "config": {"channel": "ops"},
+    }, headers=h)
+    channel_id = created.json()["id"]
+    dag = {
+        "nodes": [{
+            "id": "notify",
+            "type": "notify",
+            "position": {"x": 0, "y": 0},
+            "data": {"label": "Notify", "config": {
+                "channel_ids": [channel_id],
+                "title_template": "t",
+                "content_template": "c",
+            }},
+        }],
+        "edges": [],
+    }
+    flow = await client.post(
+        "/api/v1/agent-flows", json={"name": "Referenced", "dag": dag}, headers=h
+    )
+    assert flow.status_code == 201
+
+    deleted = await client.delete(f"/api/v1/push/channels/{channel_id}", headers=h)
+    assert deleted.status_code == 409
+    assert "1 个工作流引用" in deleted.json()["detail"]
+
+    listed = await client.get("/api/v1/push/channels", headers=h)
+    assert any(channel["id"] == channel_id for channel in listed.json())
+
+
+@pytest.mark.asyncio
 async def test_create_channel_host_whitelist_prod_rejects(client, monkeypatch):
     """prod 环境下非白名单 host 创建飞书渠道被拒绝。"""
     from app.core.config import settings
