@@ -8,7 +8,7 @@ DeepDoc 各 parser 返回结构不一致:
   - DocxParser: (sections, tables) — sections=[(text, style)], tables=[html]
   - PlainParser (PDF): ([(line, "")], [])
   - ExcelParser: [text_line, ...]
-  - PptParser: (sections, tables)
+  - PptParser: [slide_text, ...]
   - MarkdownParser: 无 __call__, 使用 extract_tables_and_remainder
 
 本服务统一输出: list[dict] — 每项 {content, content_type, page}
@@ -157,20 +157,14 @@ def _parse_excel(fnm: str, binary: bytes) -> list[dict]:
 
 
 def _parse_ppt(fnm: str, binary: bytes) -> list[dict]:
-    """PptParser 返回 (sections, tables)。"""
+    """PptParser 返回按页排列的文本列表。"""
     from deepdoc.parser import PptParser
 
-    sections, tables = PptParser()(fnm, from_page=0, to_page=10000)
+    sections = PptParser()(binary if binary else fnm, from_page=0, to_page=10000)
     blocks = []
-    if sections:
-        for item in sections:
-            text = item[0] if isinstance(item, (list, tuple)) else str(item)
-            if text and str(text).strip():
-                blocks.append({"content": str(text), "content_type": "text", "page": 0})
-    if tables:
-        for tbl in tables:
-            if tbl and str(tbl).strip():
-                blocks.append({"content": str(tbl), "content_type": "table", "page": 0})
+    for page, text in enumerate(sections):
+        if text and str(text).strip():
+            blocks.append({"content": str(text), "content_type": "text", "page": page})
     return blocks
 
 
