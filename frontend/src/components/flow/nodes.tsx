@@ -11,12 +11,12 @@ import {
   type NodeProps,
   type EdgeProps,
 } from "@xyflow/react"
-import { Brain, Database, GitBranch, Type, Bell, BrainCog, Play, Repeat2, Square, Globe } from "lucide-react"
+import { Brain, Database, GitBranch, Type, Bell, BrainCog, Play, Repeat2, Square, Globe, Wrench } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { NodeType, NodeState } from "@/lib/api"
 
-/** 画布节点类型 (api.ts 的 NodeType + 契约2 的 http 节点; api.ts 归 WP9, 此处本地扩展) */
-export type CanvasNodeType = NodeType | "http"
+/** 画布与 API 共用的节点类型。 */
+export type CanvasNodeType = NodeType
 
 /** 节点状态视图类型 (契约2: 新增 skipped 状态与 duration_ms 字段) */
 export interface NodeStateView extends Omit<NodeState, "status"> {
@@ -36,6 +36,7 @@ const NODE_META: Record<CanvasNodeType, { icon: typeof Brain; color: string; lab
   notify: { icon: Bell, color: "border-pink-400 bg-pink-50", label: "消息推送" },
   memory: { icon: BrainCog, color: "border-teal-400 bg-teal-50", label: "记忆读写" },
   http: { icon: Globe, color: "border-cyan-400 bg-cyan-50", label: "HTTP 请求" },
+  tool: { icon: Wrench, color: "border-indigo-400 bg-indigo-50", label: "本地工具" },
 }
 
 /** 执行状态 → 边框颜色 */
@@ -250,6 +251,10 @@ function NodeSummary({ type, config }: { type: CanvasNodeType; config: Record<st
       </p>
     )
   }
+  if (type === "tool") {
+    const toolId = (config.tool_id as string) || ""
+    return <p className="mt-0.5 truncate text-xs text-gray-400">{toolId || "未选择工具"}</p>
+  }
   // text
   const template = (config.template as string) || ""
   return (
@@ -269,6 +274,7 @@ export const TextNode = memo(BaseNode)
 export const NotifyNode = memo(BaseNode)
 export const MemoryNode = memo(BaseNode)
 export const HttpNode = memo(BaseNode)
+export const ToolNode = memo(BaseNode)
 
 export const nodeTypes = {
   start: StartNode,
@@ -281,6 +287,7 @@ export const nodeTypes = {
   notify: NotifyNode,
   memory: MemoryNode,
   http: HttpNode,
+  tool: ToolNode,
 }
 
 /** 可删除的连线: 中点显示 × 按钮, 点击删除; 选中后高亮 */

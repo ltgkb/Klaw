@@ -45,6 +45,7 @@ import {
   Repeat2,
   Square,
   Globe,
+  Wrench,
   GripVertical,
   Home,
 } from "lucide-react"
@@ -180,6 +181,7 @@ const DEFAULT_CONFIGS: Record<CanvasNodeType, Record<string, unknown>> = {
   notify: { title_template: "Agent 通知", content_template: "{input}", channel_ids: [] },
   memory: { action: "save", key: "", value_template: "{input}", session_id: "" },
   http: { method: "GET", url: "", headers: {}, body: "", timeout_s: 30 },
+  tool: { tool_id: "", parameters_template: "{}" },
 }
 
 const NODE_LABELS: Record<CanvasNodeType, string> = {
@@ -193,6 +195,7 @@ const NODE_LABELS: Record<CanvasNodeType, string> = {
   notify: "消息推送",
   memory: "记忆读写",
   http: "HTTP 请求",
+  tool: "本地工具",
 }
 
 // 拖线弹出菜单可添加的节点 (不含 start, start 是入口)
@@ -206,6 +209,7 @@ const ADDABLE_TYPES: { type: CanvasNodeType; label: string; icon: typeof Brain }
   { type: "notify", label: "消息推送", icon: Bell },
   { type: "memory", label: "记忆读写", icon: BrainCog },
   { type: "http", label: "HTTP 请求", icon: Globe },
+  { type: "tool", label: "本地工具", icon: Wrench },
 ]
 
 function FlowCanvasInner() {

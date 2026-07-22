@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { Link } from "react-router-dom"
-import { AlertTriangle, Brain, Database, GitBranch, Type, Bell, BrainCog, Trash2, Plus, X, Play, Repeat2, Square, Globe, Loader2, RefreshCw, Settings2 } from "lucide-react"
-import { providerApi, pushChannelApi, type NodeType, type ModelInfo, type PushChannelRead } from "@/lib/api"
+import { AlertTriangle, Brain, Database, GitBranch, Type, Bell, BrainCog, Trash2, Plus, X, Play, Repeat2, Square, Globe, Loader2, RefreshCw, Settings2, Wrench } from "lucide-react"
+import { localAgentApi, providerApi, pushChannelApi, type NodeType, type ModelInfo, type PushChannelRead, type ToolInfo } from "@/lib/api"
 import type { Node } from "@xyflow/react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -20,6 +20,7 @@ const NODE_ICONS: Record<CanvasNodeType, typeof Brain> = {
   notify: Bell,
   memory: BrainCog,
   http: Globe,
+  tool: Wrench,
 }
 
 const NODE_LABELS: Record<CanvasNodeType, string> = {
@@ -33,6 +34,7 @@ const NODE_LABELS: Record<CanvasNodeType, string> = {
   notify: "消息推送",
   memory: "记忆读写",
   http: "HTTP 请求",
+  tool: "本地工具",
 }
 
 /** 模型选择器: 从 /providers/models 拉取真实模型列表 */
@@ -72,6 +74,49 @@ function ModelSelect({ value, onChange }: { value: string; onChange: (v: string)
       <p className="text-xs text-muted-foreground">
         default → Kaiweb → OpenClaw → OpenAI → Anthropic fallback
       </p>
+    </>
+  )
+}
+
+function ToolSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [tools, setTools] = useState<ToolInfo[]>([])
+  const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    localAgentApi
+      .listTools()
+      .then((response) => {
+        if (active) setTools(response.data)
+      })
+      .catch(() => {
+        if (active) setTools([])
+      })
+      .finally(() => {
+        if (active) setLoaded(true)
+      })
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const selected = tools.find((tool) => tool.id === value)
+  return (
+    <>
+      <select
+        id="tool-id"
+        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        <option value="">{loaded ? "选择工具" : "加载工具中…"}</option>
+        {tools.map((tool) => (
+          <option key={tool.id} value={tool.id}>{tool.name} ({tool.source})</option>
+        ))}
+      </select>
+      {selected?.description && (
+        <p className="text-xs text-muted-foreground">{selected.description}</p>
+      )}
     </>
   )
 }
@@ -331,7 +376,7 @@ export function NodeConfigPanel({ node, allNodes = [], onChange, onDelete }: Pro
   ]
 
   const loopBodyOptions = allNodes.filter(
-    (n) => n.id !== node.id && ["llm", "retrieval", "text", "notify", "memory"].includes(n.type || ""),
+    (n) => n.id !== node.id && ["llm", "retrieval", "text", "notify", "memory", "tool"].includes(n.type || ""),
   )
 
   const updateLabel = (label: string) => {
@@ -944,6 +989,35 @@ export function NodeConfigPanel({ node, allNodes = [], onChange, onDelete }: Pro
             <p className="text-xs text-muted-foreground">
               响应文本作为节点输出存入上下文, 下游可用 {`{节点名}`} 引用
             </p>
+          </>
+        )}
+
+        {nodeType === "tool" && (
+          <>
+            <div className="space-y-2">
+              <Label htmlFor="tool-id">工具</Label>
+              <ToolSelect
+                value={(config.tool_id as string) || ""}
+                onChange={(toolId) => updateConfig("tool_id", toolId)}
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="tool-parameters">JSON 参数</Label>
+                <VarPicker vars={availableVars} onInsert={(token) => insertVar("parameters_template", token)} />
+              </div>
+              <textarea
+                id="tool-parameters"
+                className={cn(
+                  "flex min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-2",
+                  "font-mono text-xs ring-offset-background placeholder:text-muted-foreground",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                )}
+                value={(config.parameters_template as string) || "{}"}
+                onChange={(event) => updateConfig("parameters_template", event.target.value)}
+                placeholder={'{"url": "{input}"}'}
+              />
+            </div>
           </>
         )}
       </div>

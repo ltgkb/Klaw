@@ -4,7 +4,7 @@
   1. 解析 flow.dag (XYFlow nodes + edges)
   2. 拓扑排序 (Kahn 算法)
   3. 逐节点执行, 每步提交 node_states (SSE 可读)
-  4. 节点类型: llm / retrieval / condition / text
+  4. 节点类型: llm / retrieval / condition / text / http / tool / notify / memory
 
 对齐 PRD 第 3.2 节: 画布编排 → DAG 执行 → SSE 状态同步。
 """
@@ -477,7 +477,7 @@ def _validate_loop_bodies(nodes: list[dict], edges: list[dict]) -> set[str]:
         if body is None:
             raise ValueError(f"循环节点 {node['id']} 引用了不存在的循环体节点 {body_id}")
         if body.get("type") in {"start", "end", "condition", "loop"}:
-            raise ValueError("循环体仅支持 LLM、检索、文本、推送或记忆节点")
+            raise ValueError("循环体仅支持 LLM、检索、文本、工具、推送或记忆节点")
         if body_id in connected_ids:
             raise ValueError(f"循环体节点 {body_id} 必须保持未连线")
         if body_id in owners:
@@ -498,7 +498,7 @@ async def _execute_node(
     """执行单个节点, 返回输出文本。
 
     Args:
-        node_type: start / end / llm / retrieval / condition / text / http / notify / memory
+        node_type: start / end / llm / retrieval / condition / text / http / tool / notify / memory
         config: 节点配置 (从 dag.data.config 读取)
         context: 累积上下文 (按 节点id / label / 命名变量 存)
         user: User 对象 (LLM API Key)
@@ -515,6 +515,8 @@ async def _execute_node(
         return await _execute_retrieval_node(config, context, user)
     elif node_type == "http":
         return await _execute_http_node(config, context)
+    elif node_type == "tool":
+        return await _execute_tool_node(config, context)
     elif node_type == "condition":
         return await _execute_condition_node(config, context)
     elif node_type == "text":
@@ -847,6 +849,34 @@ async def _execute_http_node(config: dict, context: dict) -> str:
     if resp.status_code >= 400:
         raise RuntimeError(f"HTTP request returned {resp.status_code}")
     return resp.text
+
+
+# ── 本地工具节点 ──
+
+async def _execute_tool_node(config: dict, context: dict) -> Any:
+    """Invoke an allowlisted OpenClaw tool with rendered JSON parameters."""
+    from app.services import local_agent_service
+
+    tool_id = str(config.get("tool_id") or "").strip()
+    if not tool_id:
+        raise ValueError("本地工具节点未选择工具")
+
+    parameters_template = config.get("parameters_template", "{}")
+    if isinstance(parameters_template, dict):
+        parameters = _render_json_templates(parameters_template, context)
+    else:
+        try:
+            raw_parameters = json.loads(str(parameters_template or "{}"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"本地工具参数不是有效 JSON: {exc.msg}") from exc
+        parameters = _render_json_templates(raw_parameters, context)
+    if not isinstance(parameters, dict):
+        raise ValueError("本地工具参数必须是 JSON 对象")
+
+    response = await local_agent_service.call_tool(tool_id, parameters)
+    if not response.get("success"):
+        raise RuntimeError(response.get("error") or f"本地工具调用失败: {tool_id}")
+    return response.get("result")
 
 
 def _try_parse_json(raw: str):

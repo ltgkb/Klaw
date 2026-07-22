@@ -275,6 +275,66 @@ async def test_execute_notify_flow_with_saved_channel(client, db_engine, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_execute_local_tool_flow(client, db_engine, monkeypatch):
+    """API 纵向链路：画布工具节点保存、变量渲染、执行和结果查询。"""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    import app.core.database as db_module
+
+    test_factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    monkeypatch.setattr(db_module, "async_session_factory", test_factory)
+    calls = []
+
+    async def fake_call(tool_id, parameters):
+        calls.append((tool_id, parameters))
+        return {
+            "tool_id": tool_id,
+            "success": True,
+            "result": {"status": 200, "title": "Klaw"},
+            "error": None,
+            "source": "openclaw",
+        }
+
+    monkeypatch.setattr("app.services.local_agent_service.call_tool", fake_call)
+    token = await _register_and_login(client, "tool-api@test.com")
+    headers = _auth_headers(token)
+    dag = {
+        "nodes": [{
+            "id": "tool",
+            "type": "tool",
+            "position": {"x": 0, "y": 0},
+            "data": {"label": "网页抓取", "config": {
+                "tool_id": "web_fetch",
+                "parameters_template": '{"url": "{input}"}',
+            }},
+        }],
+        "edges": [],
+    }
+    flow_resp = await client.post(
+        "/api/v1/agent-flows",
+        json={"name": "Tool Flow", "dag": dag},
+        headers=headers,
+    )
+    assert flow_resp.status_code == 201
+    flow_id = flow_resp.json()["id"]
+
+    execute_resp = await client.post(
+        f"/api/v1/agent-flows/{flow_id}/execute",
+        json={"input": {"input": "https://example.com"}},
+        headers=headers,
+    )
+    execution_id = execute_resp.json()["execution_id"]
+    detail_resp = await client.get(
+        f"/api/v1/agent-flows/{flow_id}/executions/{execution_id}",
+        headers=headers,
+    )
+
+    assert detail_resp.json()["status"] == "success"
+    assert detail_resp.json()["node_states"]["tool"]["output"] == '{"status": 200, "title": "Klaw"}'
+    assert calls == [("web_fetch", {"url": "https://example.com"})]
+
+
+@pytest.mark.asyncio
 async def test_execute_flow_condition(client, mock_llm, db_engine, monkeypatch):
     """测试条件节点执行。"""
     from sqlalchemy.ext.asyncio import async_sessionmaker

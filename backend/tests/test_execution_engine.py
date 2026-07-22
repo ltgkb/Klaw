@@ -162,6 +162,104 @@ async def test_notify_node_rejects_foreign_channel(
     assert sent == []
 
 
+@pytest.mark.asyncio
+async def test_tool_node_renders_parameters_and_exposes_result(
+    db_session, patch_session_factory, monkeypatch
+):
+    """工具节点渲染上下文参数，成功结果可写入节点状态。"""
+    user = await _make_user(db_session, "tool-flow@test.com")
+    dag = {
+        "nodes": [{
+            "id": "tool-1",
+            "type": "tool",
+            "position": {"x": 0, "y": 0},
+            "data": {"label": "抓取", "config": {
+                "tool_id": "web_fetch",
+                "parameters_template": '{"url": "{input}", "limit": 3}',
+            }},
+        }],
+        "edges": [],
+    }
+    flow = await _make_flow(db_session, user.id, dag)
+    execution = await _make_execution(
+        db_session, flow.id, {"input": "https://example.com/report"}
+    )
+    calls = []
+
+    async def fake_call(tool_id, parameters):
+        calls.append((tool_id, parameters))
+        return {
+            "tool_id": tool_id,
+            "success": True,
+            "result": {"title": "Report", "items": 3},
+            "error": None,
+            "source": "openclaw",
+        }
+
+    monkeypatch.setattr("app.services.local_agent_service.call_tool", fake_call)
+    await execution_service.run_flow(execution.id, flow.id)
+
+    await db_session.refresh(execution)
+    assert execution.status == ExecutionStatus.success
+    assert calls == [("web_fetch", {"url": "https://example.com/report", "limit": 3})]
+    assert execution.node_states["tool-1"]["output"] == '{"title": "Report", "items": 3}'
+
+
+@pytest.mark.asyncio
+async def test_tool_node_failure_is_not_reported_as_success(
+    db_session, patch_session_factory, monkeypatch
+):
+    """OpenClaw 明确失败时，工具节点和整体执行都必须失败。"""
+    user = await _make_user(db_session, "tool-failure@test.com")
+    dag = {
+        "nodes": [{
+            "id": "tool-1",
+            "type": "tool",
+            "position": {"x": 0, "y": 0},
+            "data": {"label": "抓取", "config": {
+                "tool_id": "web_fetch",
+                "parameters_template": "{}",
+            }},
+        }],
+        "edges": [],
+    }
+    flow = await _make_flow(db_session, user.id, dag)
+    execution = await _make_execution(db_session, flow.id)
+
+    async def failed_call(tool_id, parameters):
+        return {
+            "tool_id": tool_id,
+            "success": False,
+            "result": {"mock": True},
+            "error": "OpenClaw 工具服务不可用",
+            "source": "mock",
+        }
+
+    monkeypatch.setattr("app.services.local_agent_service.call_tool", failed_call)
+    await execution_service.run_flow(execution.id, flow.id)
+
+    await db_session.refresh(execution)
+    assert execution.status == ExecutionStatus.failed
+    assert execution.node_states["tool-1"]["status"] == "failed"
+    assert "OpenClaw 工具服务不可用" in execution.node_states["tool-1"]["error"]
+
+
+@pytest.mark.asyncio
+async def test_tool_node_rejects_invalid_json_before_call(monkeypatch):
+    calls = []
+
+    async def unexpected_call(*args):
+        calls.append(args)
+
+    monkeypatch.setattr("app.services.local_agent_service.call_tool", unexpected_call)
+    with pytest.raises(ValueError, match="有效 JSON"):
+        await execution_service._execute_tool_node(
+            {"tool_id": "web_fetch", "parameters_template": "{broken"},
+            {},
+        )
+    assert calls == []
+
+
 # ── P0-2: 启动前取消 ──
 
 @pytest.mark.asyncio
