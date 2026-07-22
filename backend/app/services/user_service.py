@@ -1,6 +1,6 @@
 """用户业务逻辑。"""
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,9 +16,24 @@ from app.schemas.auth import UserLogin, UserRegister
 from app.schemas.user import UserUpdate
 from app.utils.crypto import encrypt
 
+_USER_REGISTRATION_LOCK_ID = 1263292791
+
+
+async def _lock_user_registration(db: AsyncSession) -> None:
+    """Serialize first-user role selection on PostgreSQL."""
+    bind = db.get_bind()
+    dialect_name = getattr(getattr(bind, "dialect", None), "name", None)
+    if dialect_name == "postgresql":
+        await db.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_id)"),
+            {"lock_id": _USER_REGISTRATION_LOCK_ID},
+        )
+
 
 async def register_user(db: AsyncSession, data: UserRegister) -> User:
     """注册新用户。首个用户自动成为 admin。"""
+    await _lock_user_registration(db)
+
     # 检查邮箱是否已注册
     existing = await db.execute(select(User).where(User.email == data.email))
     if existing.scalar_one_or_none() is not None:

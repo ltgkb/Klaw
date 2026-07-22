@@ -326,6 +326,8 @@ async def test_register_user_integrity_error_becomes_conflict():
 
     db = AsyncMock()
     db.add = MagicMock()  # Session.add 是同步方法
+    from types import SimpleNamespace
+    db.get_bind = MagicMock(return_value=SimpleNamespace(dialect=SimpleNamespace(name="sqlite")))
     # 预检查：邮箱不存在、已有其他用户（非首个）
     result = MagicMock()
     result.scalar_one_or_none.return_value = None
@@ -337,3 +339,23 @@ async def test_register_user_integrity_error_becomes_conflict():
             db, UserRegister(email="race@test.com", name="Race", password="secret123")
         )
     db.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_postgres_registration_acquires_advisory_lock():
+    """首用户角色判断前应在 PostgreSQL 事务内串行化注册。"""
+    from unittest.mock import AsyncMock, MagicMock
+    from types import SimpleNamespace
+
+    from app.services.user_service import _lock_user_registration
+
+    db = AsyncMock()
+    db.get_bind = MagicMock(
+        return_value=SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+    )
+    await _lock_user_registration(db)
+
+    db.execute.assert_awaited_once()
+    statement, params = db.execute.await_args.args
+    assert "pg_advisory_xact_lock" in str(statement)
+    assert isinstance(params["lock_id"], int)
