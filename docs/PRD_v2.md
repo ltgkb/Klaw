@@ -1,7 +1,7 @@
 # Claw-Native Agent 平台 — PRD v2
 
-> **版本**: v2.2
-> **日期**: 2026-07-22
+> **版本**: v2.3
+> **日期**: 2026-07-23
 > **状态**: MVP 主链可演示；生产级能力仍以 `FEATURE_READINESS.md` 的部分可用/环境阻塞为准
 > **本文档定位**: 在 v1.1 基础上，**按代码实际实现状态**重生成 PRD，如实标注已实现 / 偏差 / 本轮新增 / 剩余路线图。
 
@@ -70,7 +70,7 @@ v1.1 是设计草案。v2.0 以**已落地代码**为准重新对齐：保留 v1
 
 ### 3.2 Agent 画布 — ✅
 - **画布引擎**：@xyflow/react；节点拖拽/连线/删除、缩放/平移/minimap、序列化为 DAG JSON。
-- **节点类型**（10 类）：`start` / `end` / `text` / `llm` / `retrieval` / `condition` / `loop` / `http` / `notify` / `memory`。
+- **节点类型**（11 类）：`start` / `end` / `text` / `llm` / `retrieval` / `condition` / `loop` / `http` / `tool` / `notify` / `memory`。
 - **条件节点**：多 case 按顺序求值，使用 XYFlow `sourceHandle` 只推进命中分支；未命中节点记录为 `skipped`，默认分支显式路由。
 - **循环节点**：数组、对象、JSON 或多行文本输入；选择一个未连线节点作为循环体，注入循环项与索引变量，顺序执行并聚合结构化结果；支持 1-100 次上限、单次失败后继续及迭代状态。
 - **执行引擎**：自研 asyncio DAG（Kahn 拓扑排序，逐节点执行，每步写 `node_states`）；后台任务 + SSE 实时状态推送（`progress`/`complete`）；Bearer Header 鉴权且每轮刷新跨 session 状态；暂停/恢复/取消（DB 状态轮询）；节点失败即终止。
@@ -82,7 +82,7 @@ v1.1 是设计草案。v2.0 以**已落地代码**为准重新对齐：保留 v1
 - **供应商与优先级**：**OpenClaw** → 启用后的 **Hermes** → Kaiweb 直连 → OpenAI → Anthropic → dev Mock；两个本地网关未配置推理供应商时不进入默认路径。
 - **Kaiweb 适配**：OpenClaw 自定义 `openai-completions` provider 指向 `https://ai.kaiweb.net/v1`；Klaw 的 `_call_openai_compatible` / `_stream_openai_compatible` 保留为 OpenClaw 故障时的直连 fallback；兼容推理模型 content 为空时回退 `reasoning_content`。
 - **流式**：`/providers/chat/stream`（SSE）。
-- **本地集成**：OpenClaw `/v1/chat/completions`、`/v1/models`、`/readyz`；`/api/v1/local-agent/tools` 扫描本地 manifest，`/tools/{id}/call` 通过 OpenClaw `/tools/invoke` 调用。`web_fetch` 已真实通过；失败返回 `success=false`，不会用 mock 冒充成功。
+- **本地集成**：OpenClaw `/v1/chat/completions`、`/v1/models`、`/readyz`；`/api/v1/local-agent/tools` 扫描 manifest 并标记是否可执行，`/tools/{id}/call` 通过 OpenClaw `/tools/invoke` 调用。画布 `tool` 节点支持变量 JSON 参数和结构化输出；`web_fetch` 已真实通过，Hermes 清单工具在无调用端点时明确标为仅发现。
 
 ### 3.4 定时任务 — ✅
 - **引擎**：APScheduler AsyncIO + PostgreSQL SQLAlchemyJobStore（持久化，重启不丢）。
@@ -97,8 +97,8 @@ v1.1 是设计草案。v2.0 以**已落地代码**为准重新对齐：保留 v1
 ### 3.6 多平台推送 — ✅（本轮补全渠道配置）
 - **渠道**：飞书 / 企业微信 / Telegram / Hermes（httpx 直调 Webhook/Bot API）。
 - **即时推送**：`POST /api/v1/notifications/send`（内联 `channels` 或按 `channel_ids` 解析已配置渠道）。
-- **渠道配置**（本轮新增）：`/api/v1/push/channels` GET/POST/DELETE；敏感字段（webhook_url/bot_token）AES-256-GCM 加密存储，API 返回脱敏 `******`。
-- **节点**：画布 `notify` 节点内联多渠道；本轮补 `hermes` 渠道选项。
+- **渠道配置**：`/api/v1/push/channels` GET/POST/PUT/DELETE；PUT 原地轮换密钥并保持工作流引用 ID；敏感字段（webhook_url/bot_token）AES-256-GCM 加密存储，API 返回脱敏 `******`。
+- **节点**：画布 `notify` 节点引用 owner-scoped `channel_ids`，不再把新凭据写入 DAG；旧内联配置仅保留兼容读取与手动迁移入口。
 
 ### 3.7 记忆与用户系统 — ✅
 - **记忆**：PostgreSQL 持久层；`preference`/`decision`/`context` 类型；按 (user,key,session) upsert；ilike 关键词搜索；画布 `memory` 节点读写。短期 Redis 记忆留作路线图。
@@ -159,7 +159,7 @@ API 网关 FastAPI + JWT + RBAC + 全局异常 + 结构化 JSON 日志
 
 ## 7. 非功能需求（现状）
 - **性能**：检索 P95 目标 <500ms（ES 混合）；单节点 LLM <5s；定时秒级。
-- **安全**：AES-256-GCM（API Key、推送渠道密钥）；JWT；RBAC；owner 隔离；SSRF guard（`common/ssrf_guard.py`）。
+- **安全**：AES-256-GCM（API Key、推送渠道密钥）；JWT；RBAC；owner 隔离；版本化 bcrypt-SHA256 完整密码哈希；PostgreSQL 首用户 advisory lock；HTTP/tool SSRF guard（`common/ssrf_guard.py`）。
 - **可观测**：结构化 JSON 日志（按 task 关联）；`/health` 多依赖探活。LangSmith 追踪留 M5。
 - **部署**：Docker Compose（postgres/redis/minio/es/tei/reranker/openclaw/hermes/backend/frontend）；亦可本地 `uv`+`vite` 开发。
 
@@ -173,7 +173,7 @@ API 网关 FastAPI + JWT + RBAC + 全局异常 + 结构化 JSON 日志
 | M2 知识库（DeepDoc+解析/分块/索引+混合检索） | ✅ |
 | M3 Agent 画布（XYFlow+节点+DAG 执行+SSE） | ✅ |
 | M4 全链路（本地工具+定时+记忆+文件工作区+推送+fallback） | ✅ 本轮补全 |
-| **本轮补全** | 本地工具发现 / 文件工作区 / 推送渠道配置 / dev Mock 兜底 / paused 枚举修复 / 前端补全（仪表盘统计、API Key 管理、渠道页、定时编辑、KB 分块设置、hermes 渠道） |
+| **本轮补全** | 加密通知节点 / 画布 tool 节点 / 可执行工具契约 / GitHub Actions 基线 / 真实依赖重验 |
 | M5 生产级 | ⬜ 见 §9 |
 
 ---
@@ -190,12 +190,11 @@ API 网关 FastAPI + JWT + RBAC + 全局异常 + 结构化 JSON 日志
 
 ---
 
-## 10. 验证状态（2026-07-22）
-- 后端：`uv run pytest -q` → **220 passed**。
-- 前端：lint/build 通过；Playwright 桌面/移动真实登录、工具调用、Agent 对话通过，无 console error 或横向溢出。
-- 真实依赖：PostgreSQL/Redis/MinIO/Elasticsearch/OpenClaw/Hermes/reranker healthy；空库迁移到 `5d4e1a2b8f66 (head)` 且无 schema 漂移。
-- 真实链路：TXT→MinIO→解析→hash embedding（明确 dev fallback）→ES→rerank；条件错误分支 skipped；Bearer SSE complete；Agent 消息落库；OpenClaw `web_fetch` HTTP 200；APScheduler 触发、重启恢复和暂停通过。
-- 环境阻塞：无真实 embedding/LLM/推送凭据，因此不宣称生产向量质量、真实模型推理或真实外部推送可用。详见 `docs/FEATURE_READINESS.md`。
+## 10. 验证状态（2026-07-23）
+- 后端：`uv run pytest -q` → **236 passed**；前端 lint/build 与 Compose config 通过。
+- 真实依赖：独立 PostgreSQL 数据库、Redis、MinIO、Elasticsearch、OpenClaw、Hermes healthy；迁移到 `5d4e1a2b8f66 (head)` 且无 schema 漂移。
+- 真实链路：TXT→MinIO→解析→hash embedding（明确 dev fallback）→ES 检索引用；OpenClaw `web_fetch` 接口及画布 tool DAG success，loopback 在网关前被拒绝；APScheduler 实际触发，暂停后重启仍保持；通知渠道密文原地保留/轮换且引用不变；legacy 密码哈希升级、超长碰撞拒绝；空库并发注册恰好 1 admin/1 user。
+- 环境阻塞：reranker 工件下载失败；无真实 embedding/LLM/推送凭据；Browser 插件初始化失败。因此不宣称重排、生产向量质量、真实模型/外部推送或本批次浏览器 E2E 可用。详见 `docs/FEATURE_READINESS.md`。
 
 ---
 
@@ -207,3 +206,4 @@ API 网关 FastAPI + JWT + RBAC + 全局异常 + 结构化 JSON 日志
 | v2.0 | 2026-07-15 | 按实际实现重生成；标注偏差；本轮补全 P0 接口与 UI；新增 Mock 兜底；修复 paused 枚举 |
 | v2.1 | 2026-07-16 | OpenClaw 接入 Kaiweb OpenAI 兼容网关（glm-4.5 默认），Kaiweb 直连作为 fallback；兼容 reasoning_content |
 | v2.2 | 2026-07-22 | 以真实审计证据修正条件分支、SSE、Agent 对话、本地工具和环境阻塞状态；新增功能就绪矩阵 |
+| v2.3 | 2026-07-23 | 通知节点改用加密渠道引用；新增画布工具节点、工具可执行状态、CI 与真实依赖复验 |
