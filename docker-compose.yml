@@ -228,6 +228,8 @@ services:
     ports:
       - "8000:8000"
     environment:
+      - ENVIRONMENT=${ENVIRONMENT:-dev}
+      - DEBUG=${DEBUG:-false}
       - POSTGRES_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-claw_agent}
       - ES_URL=http://elasticsearch:9200
       - REDIS_URL=redis://redis:6379/0

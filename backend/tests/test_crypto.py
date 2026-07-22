@@ -92,6 +92,23 @@ def test_prod_accepts_strong_secrets(monkeypatch):
     assert s.environment == "prod"
 
 
+def test_prod_rejects_compose_default_jwt_with_strong_encryption_key(monkeypatch):
+    """Compose 的占位 JWT 不能因加密主密钥已配置而漏过启动校验。"""
+    from pydantic import ValidationError
+
+    from app.core.config import Settings
+
+    monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
+    monkeypatch.delenv("ENCRYPTION_KEY", raising=False)
+    with pytest.raises(ValidationError, match="JWT_SECRET_KEY"):
+        Settings(
+            environment="prod",
+            jwt_secret_key="change-me-in-production",
+            encryption_key="b" * 64,
+            _env_file=None,
+        )
+
+
 def test_contract_fields_defaults():
     """跨包契约 1：调度、MinIO 和本地推理安全默认值。"""
     from app.core.config import settings

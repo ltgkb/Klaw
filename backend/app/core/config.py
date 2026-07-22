@@ -98,7 +98,10 @@ class Settings(BaseSettings):
     def _reject_default_secrets_in_prod(self) -> "Settings":
         """prod 环境启动校验：拒绝默认 JWT/加密密钥，防止弱密钥上线。"""
         if self.environment == "prod":
-            if self.jwt_secret_key == "change-me-in-production-please-use-a-long-random-string":
+            if self.jwt_secret_key in {
+                "change-me-in-production",
+                "change-me-in-production-please-use-a-long-random-string",
+            }:
                 raise ValueError(
                     "prod 环境必须通过 JWT_SECRET_KEY 设置强随机密钥"
                 )
