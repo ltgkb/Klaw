@@ -104,7 +104,7 @@ async def upload_document(
 ):
     """上传文档到知识库，后台自动解析+分块+向量化+索引。
 
-    支持: PDF, DOCX, XLSX, PPTX, TXT, MD, HTML, JSON, EPUB
+    支持: PDF, DOCX, XLSX, CSV, PPTX, TXT, MD, HTML, JSON, EPUB
     """
     kb = await kb_service.get_kb(db, kb_id, current_user.id)
     if kb is None:

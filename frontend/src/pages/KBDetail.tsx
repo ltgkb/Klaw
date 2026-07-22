@@ -203,7 +203,7 @@ export function KBDetail() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">文档管理</CardTitle>
-          <CardDescription>支持 PDF / DOCX / XLSX / PPTX / TXT / MD / HTML / JSON / EPUB</CardDescription>
+          <CardDescription>支持 PDF / DOCX / XLSX / CSV / PPTX / TXT / MD / HTML / JSON / EPUB</CardDescription>
         </CardHeader>
         <CardContent>
           <div

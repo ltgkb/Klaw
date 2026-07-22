@@ -25,12 +25,9 @@ logger = logging.getLogger("claw.deepdoc")
 EXTENSION_MAP = {
     ".pdf": "pdf",
     ".docx": "docx",
-    ".doc": "docx",
     ".xlsx": "excel",
-    ".xls": "excel",
     ".csv": "excel",
     ".pptx": "ppt",
-    ".ppt": "ppt",
     ".txt": "txt",
     ".md": "markdown",
     ".markdown": "markdown",

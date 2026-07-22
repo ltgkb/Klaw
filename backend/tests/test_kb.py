@@ -424,6 +424,28 @@ async def test_upload_unsupported_extension_415(client, mock_infra):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("filename", ["legacy.doc", "legacy.xls", "legacy.ppt"])
+async def test_upload_legacy_office_formats_rejected_before_background_parse(
+    client, mock_infra, filename
+):
+    token = await _register_and_login(client)
+    create_resp = await client.post(
+        "/api/v1/knowledge-bases",
+        json={"name": f"Reject {filename}"},
+        headers=_auth_headers(token),
+    )
+    kb_id = create_resp.json()["id"]
+
+    resp = await client.post(
+        f"/api/v1/knowledge-bases/{kb_id}/documents",
+        headers=_auth_headers(token),
+        files={"file": (filename, io.BytesIO(b"legacy binary"), "application/octet-stream")},
+    )
+
+    assert resp.status_code == 415
+
+
+@pytest.mark.asyncio
 async def test_reparse_document(client, mock_infra):
     """reparse 端点: 重置状态并后台重新解析, 最终回到 parsed。"""
     token = await _register_and_login(client)
