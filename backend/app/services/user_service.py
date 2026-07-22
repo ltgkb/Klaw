@@ -4,7 +4,13 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import create_access_token, create_refresh_token, hash_password, verify_password
+from app.core.security import (
+    create_access_token,
+    create_refresh_token,
+    hash_password,
+    password_needs_rehash,
+    verify_password,
+)
 from app.models.user import User, UserRole
 from app.schemas.auth import UserLogin, UserRegister
 from app.schemas.user import UserUpdate
@@ -47,6 +53,12 @@ async def authenticate_user(db: AsyncSession, data: UserLogin) -> User | None:
         return None
     if not verify_password(data.password, user.hashed_password):
         return None
+    # Existing raw-bcrypt hashes remain readable. Passwords within bcrypt's
+    # original byte limit can be upgraded without preserving truncation risk.
+    if password_needs_rehash(user.hashed_password) and len(data.password.encode("utf-8")) <= 72:
+        user.hashed_password = hash_password(data.password)
+        await db.commit()
+        await db.refresh(user)
     return user
 
 

@@ -70,6 +70,57 @@ async def test_login_wrong_password(client):
 
 
 @pytest.mark.asyncio
+async def test_long_password_suffix_cannot_authenticate(client):
+    """bcrypt 的 72 字节边界之后不同，不得被视为同一密码。"""
+    password = "a" * 72 + "registered"
+    collision = "a" * 72 + "attacker"
+    register = await client.post("/api/v1/auth/register", json={
+        "email": "long-password@test.com",
+        "name": "Long Password",
+        "password": password,
+    })
+    assert register.status_code == 201
+
+    rejected = await client.post("/api/v1/auth/login", json={
+        "email": "long-password@test.com",
+        "password": collision,
+    })
+    accepted = await client.post("/api/v1/auth/login", json={
+        "email": "long-password@test.com",
+        "password": password,
+    })
+    assert rejected.status_code == 401
+    assert accepted.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_legacy_password_hash_is_upgraded_on_login(client, db_session):
+    """普通长度的 legacy bcrypt 哈希在成功登录后惰性升级。"""
+    import bcrypt
+    from sqlalchemy import select
+
+    from app.models.user import User
+
+    await client.post("/api/v1/auth/register", json={
+        "email": "legacy-upgrade@test.com",
+        "name": "Legacy",
+        "password": "legacy-secret",
+    })
+    result = await db_session.execute(select(User).where(User.email == "legacy-upgrade@test.com"))
+    user = result.scalar_one()
+    user.hashed_password = bcrypt.hashpw(b"legacy-secret", bcrypt.gensalt()).decode("ascii")
+    await db_session.commit()
+
+    login = await client.post("/api/v1/auth/login", json={
+        "email": "legacy-upgrade@test.com",
+        "password": "legacy-secret",
+    })
+    assert login.status_code == 200
+    await db_session.refresh(user)
+    assert user.hashed_password.startswith("bcrypt-sha256$")
+
+
+@pytest.mark.asyncio
 async def test_me_with_valid_token(client):
     await client.post("/api/v1/auth/register", json={
         "email": "me@test.com", "name": "Me", "password": "secret123",

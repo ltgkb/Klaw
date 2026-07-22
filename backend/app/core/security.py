@@ -1,5 +1,7 @@
 """JWT 生成/校验 + 密码哈希。对齐 PRD 3.3.3 与 8.2。"""
 
+import base64
+import hashlib
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -11,22 +13,42 @@ from app.core.config import settings
 
 # ── 密码 ──
 
+_BCRYPT_SHA256_PREFIX = "bcrypt-sha256$"
+
 def _to_bcrypt_bytes(password: str) -> bytes:
-    """bcrypt 只处理前 72 字节，统一在此截断，避免超长密码触发 ValueError。"""
+    """Legacy bcrypt normalization retained only for existing hashes."""
     return password.encode("utf-8")[:72]
 
 
+def _to_bcrypt_sha256_bytes(password: str) -> bytes:
+    """Pre-hash to a fixed safe length so bcrypt covers the complete password."""
+    digest = hashlib.sha256(password.encode("utf-8")).digest()
+    return base64.urlsafe_b64encode(digest)
+
+
 def hash_password(password: str) -> str:
-    """bcrypt 哈希密码。bcrypt 限制 72 字节，先截断。"""
-    return bcrypt.hashpw(_to_bcrypt_bytes(password), bcrypt.gensalt()).decode("ascii")
+    """Hash the complete password with a versioned bcrypt-SHA256 scheme."""
+    hashed = bcrypt.hashpw(_to_bcrypt_sha256_bytes(password), bcrypt.gensalt()).decode("ascii")
+    return _BCRYPT_SHA256_PREFIX + hashed
 
 
 def verify_password(plain: str, hashed: str) -> bool:
     """校验明文密码与哈希。"""
     try:
-        return bcrypt.checkpw(_to_bcrypt_bytes(plain), hashed.encode("ascii"))
+        if hashed.startswith(_BCRYPT_SHA256_PREFIX):
+            encoded = _to_bcrypt_sha256_bytes(plain)
+            stored = hashed[len(_BCRYPT_SHA256_PREFIX):]
+        else:
+            encoded = _to_bcrypt_bytes(plain)
+            stored = hashed
+        return bcrypt.checkpw(encoded, stored.encode("ascii"))
     except (ValueError, TypeError):
         return False
+
+
+def password_needs_rehash(hashed: str) -> bool:
+    """Return true for legacy raw-bcrypt hashes that can be upgraded safely."""
+    return not hashed.startswith(_BCRYPT_SHA256_PREFIX)
 
 
 # ── JWT ──

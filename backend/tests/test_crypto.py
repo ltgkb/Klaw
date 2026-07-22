@@ -44,11 +44,22 @@ def test_decrypt_tampered_ciphertext_raises():
 
 
 def test_long_password_over_72_bytes_roundtrip():
-    """超过 72 字节的密码应截断后正常哈希/校验，不抛 ValueError (P2-7)。"""
-    password = "长密码" * 40  # 360 字节，远超 72
+    """超过 72 字节后的差异也必须参与密码校验。"""
+    password = "a" * 72 + "first-suffix"
+    colliding_legacy_password = "a" * 72 + "second-suffix"
     hashed = hash_password(password)
+    assert hashed.startswith("bcrypt-sha256$")
     assert verify_password(password, hashed)
-    assert not verify_password("完全不同的短密码", hashed)
+    assert not verify_password(colliding_legacy_password, hashed)
+
+
+def test_legacy_bcrypt_hash_remains_compatible():
+    """升级前保存的 raw bcrypt 哈希仍能登录。"""
+    import bcrypt
+
+    password = "legacy-secret"
+    legacy_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("ascii")
+    assert verify_password(password, legacy_hash)
 
 
 def test_verify_password_invalid_hash_returns_false():
