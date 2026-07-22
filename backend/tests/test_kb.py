@@ -120,6 +120,20 @@ async def test_create_kb(client):
 
 
 @pytest.mark.asyncio
+async def test_create_kb_rejects_overlap_not_smaller_than_chunk_size(client):
+    token = await _register_and_login(client)
+
+    resp = await client.post(
+        "/api/v1/knowledge-bases",
+        json={"name": "Invalid chunks", "chunk_size": 100, "chunk_overlap": 100},
+        headers=_auth_headers(token),
+    )
+
+    assert resp.status_code == 422
+    assert "chunk_overlap" in resp.text
+
+
+@pytest.mark.asyncio
 async def test_create_kb_unauthorized(client):
     resp = await client.post("/api/v1/knowledge-bases", json={"name": "test"})
     assert resp.status_code == 401

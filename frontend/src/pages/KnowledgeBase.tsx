@@ -18,6 +18,11 @@ export function KnowledgeBase() {
   const [chunkSize, setChunkSize] = useState(256)
   const [chunkOverlap, setChunkOverlap] = useState(32)
   const [creating, setCreating] = useState(false)
+  const chunkConfigValid =
+    chunkSize >= 100 &&
+    chunkSize <= 4096 &&
+    chunkOverlap >= 0 &&
+    chunkOverlap < chunkSize
 
   const fetchKbs = async () => {
     setLoading(true)
@@ -130,8 +135,15 @@ export function KnowledgeBase() {
                   id="kb-size"
                   type="number"
                   value={chunkSize}
-                  onChange={(e) => setChunkSize(Number(e.target.value))}
-                  min={32}
+                  onChange={(e) => {
+                    const size = Number(e.target.value)
+                    setChunkSize(size)
+                    if (Number.isFinite(size) && chunkOverlap >= size) {
+                      setChunkOverlap(Math.max(0, size - 1))
+                    }
+                  }}
+                  min={100}
+                  max={4096}
                 />
               </div>
               <div className="space-y-2">
@@ -142,11 +154,12 @@ export function KnowledgeBase() {
                   value={chunkOverlap}
                   onChange={(e) => setChunkOverlap(Number(e.target.value))}
                   min={0}
+                  max={Math.max(0, chunkSize - 1)}
                 />
               </div>
             </div>
             <div className="flex gap-2">
-              <Button onClick={handleCreate} disabled={creating || !name.trim()}>
+              <Button onClick={handleCreate} disabled={creating || !name.trim() || !chunkConfigValid}>
                 {creating && <Loader2 className="h-4 w-4 animate-spin" />}
                 创建
               </Button>

@@ -191,7 +191,7 @@ API 网关 FastAPI + JWT + RBAC + 全局异常 + 结构化 JSON 日志
 ---
 
 ## 10. 验证状态（2026-07-23）
-- 后端：`uv run pytest -q` → **243 passed**；前端 lint/build 与 Compose config 通过。
+- 后端：`uv run pytest -q` → **244 passed**；前端 lint/build 与 Compose config 通过。
 - 真实依赖：独立 PostgreSQL 数据库、Redis、MinIO、Elasticsearch、OpenClaw、Hermes healthy；迁移到 `5d4e1a2b8f66 (head)` 且无 schema 漂移。
 - 真实链路：TXT/MD/HTML/JSON/文本 PDF/DOCX/XLSX/PPTX/EPUB→MinIO→解析→hash embedding（明确 dev fallback）→ES 检索引用，失败记录经 reparse 恢复；OpenClaw `web_fetch` 接口及画布 tool DAG success，loopback 在网关前被拒绝；APScheduler 实际触发，暂停后重启仍保持；通知渠道密文原地保留/轮换且引用不变；legacy 密码哈希升级、超长碰撞拒绝；空库并发注册恰好 1 admin/1 user。
 - 环境阻塞：reranker 工件下载失败；无真实 embedding/LLM/推送凭据；Browser 插件初始化失败。因此不宣称重排、生产向量质量、真实模型/外部推送或本批次浏览器 E2E 可用。详见 `docs/FEATURE_READINESS.md`。

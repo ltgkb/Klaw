@@ -6,7 +6,7 @@
 
 ## 证据摘要
 
-- 后端基线：承接分支后 `uv run pytest -q` 为 **220 passed**；本轮新增通知渠道、工具节点、调用边界、文档 parser 与认证安全测试，最终全量回归 **243 passed**。
+- 后端基线：承接分支后 `uv run pytest -q` 为 **220 passed**；本轮新增通知渠道、工具节点、调用边界、文档 parser 与认证安全测试，最终全量回归 **244 passed**。
 - 前端：`npm run lint` 通过（4 个既有 Fast Refresh warning）；`npm run build` 通过，主 JS 约 635 kB，仍有 code-splitting warning。
 - 真实依赖：独立 PostgreSQL 数据库 `claw_auto_20260723`、Redis、MinIO、Elasticsearch 8.11、OpenClaw 2026.7.1、Hermes 0.18.2 healthy；迁移到 head 且 `alembic check` 无漂移。
 - 真实 API：注册/登录、TXT/MD/HTML/JSON/PDF/DOCX/XLSX/PPTX/EPUB→MinIO→解析→hash embedding→ES 检索引用、OpenClaw `web_fetch`、画布 tool 节点、加密通知渠道/owner 拦截、APScheduler 实际触发及暂停后重启保持均通过。
@@ -24,7 +24,7 @@
 | 知识库 CRUD | `/kb` | 可用 | PG CRUD，分页上限 100 | 自动化；真实创建/列表 | 可用 | 无 |
 | TXT/MD/HTML/JSON/DOCX/XLSX/PPTX/EPUB | KB 详情上传 | 可用；失败原因与重试入口 | MinIO + DeepDoc 类型路由；修复 MD/PPTX 契约与离线 tokenizer | 生成文件 parser tests；8 种格式真实全链路并分别检索 marker；failed→reparse→parsed | 可用 | 复杂版式/损坏文件样本仍需扩展（P2） |
 | PDF 解析/OCR | KB 详情上传 | 文本 PDF 可上传 | pypdf 文本路径；视觉模块未启用 | 真实单页文本 PDF 全链路并检索 marker；未跑扫描 PDF | 部分可用 | OCR/版面/图片表格缺失（P2） |
-| 分块、引用、删除 | KB chunks/文档列表 | 可用 | fixed/recursive/markdown；semantic 降级；page/doc metadata | tests；真实 TXT chunk/引用 | 可用 | semantic 不是独立算法（P2） |
+| 分块、引用、删除 | KB chunks/文档列表 | 可用；创建参数前端约束 | fixed/recursive/markdown；semantic 降级；强制 overlap < size；page/doc metadata | tests；危险窗口 422；真实 TXT chunk/引用 | 可用 | semantic 不是独立算法（P2） |
 | 向量化 | 摄取后台任务、系统配置 | 可配置 API | API -> TEI -> dev hash fallback | 真实 hash fallback，健康为 unhealthy | 部分可用 | 生产 embedding 环境阻塞（P0 部署条件） |
 | ES 索引与删除 | 摄取/删除触发 | 间接可见 | dense_vector + BM25；bulk 退避 | 真实索引、检索命中 `ORBIT-20260723` | 可用 | 缺索引备份/生命周期（P2） |
 | 混合检索、重排、引用 | KB 详情搜索 | rerank 开关可用 | kNN+BM25 + TEI Cross-Encoder | 真实 ES 混合检索和引用；reranker 本次启动失败 | 部分可用 | embedding 为 hash 且本次无重排，质量不可作生产结论（P1 环境） |
@@ -44,11 +44,11 @@
 | 调度重启持久化 | `/schedules` | next run 可见 | PG JobStore 恢复 | 后端重启后 next run 恢复并再次触发；暂停清空 next run | 可用 | 多实例重复触发风险（P1） |
 | PostgreSQL/Redis 记忆 | `/memories` | PG 记忆 UI 可用 | PG CRUD/search/upsert；Redis 只探活 | memory tests；Redis healthy | 部分可用 | Redis TTL 短期会话记忆缺失（P2） |
 | 文件工作区/分享 | `/files` | 上传/下载/删除/分享 | MinIO + owner PG + presigned URL | tests；本次 MinIO 实际存储由 KB 链路覆盖 | 部分可用 | 本次未重跑文件分享浏览器 E2E；无版本/撤销（P1/P2） |
-| 推送渠道与失败重试 | 设置、notify 节点 | 创建/原地编辑/测试；节点选择渠道；旧配置可清除 | owner-scoped `channel_ids` 解密；PUT 保持 ID；SSRF/DNS pin | 243 tests；真实密文保留/轮换且 flow 引用不变；跨 owner 拦截 | 部分可用 | 无真实外部推送凭据；无持久重试（P1/P2） |
+| 推送渠道与失败重试 | 设置、notify 节点 | 创建/原地编辑/测试；节点选择渠道；旧配置可清除 | owner-scoped `channel_ids` 解密；PUT 保持 ID；SSRF/DNS pin | 244 tests；真实密文保留/轮换且 flow 引用不变；跨 owner 拦截 | 部分可用 | 无真实外部推送凭据；无持久重试（P1/P2） |
 | 系统设置/健康 | `/settings`、`/health` | 依赖状态可见 | PG/Redis/ES/MinIO/OpenClaw/Hermes/reranker 探活 | 前六项真实 ok；embedding error 使 overall degraded | 可用（诚实） | 缺延迟、版本和历史趋势（P2） |
 | 导航/空态/错误态/移动端 | 全站 | 响应式主导航和 Agent 选择 | React Router + toast | lint/build；本批次浏览器工具环境阻塞 | 部分可用 | 多页仍有静默 catch；无浏览器 CI（P1） |
 | Compose/迁移/部署 | Compose、Makefile | N/A | backend 启动前 Alembic；health gating；无运行时依赖安装 | config 通过；真实迁移/head/check；六项依赖健康 | 部分可用 | reranker 下载和镜像 metadata 超时；固定 container_name 阻碍并行（P1/P2） |
-| 测试/lint/build/CI | Makefile、GitHub Actions | N/A | pytest/oxlint/tsc/Vite/Compose jobs；health tests 隔离本机服务 | 243 tests；lint/build/config/YAML 通过 | 部分可用 | OAuth 缺 `workflow` scope，CI 尚未推送运行；bundle 636 kB；无浏览器 CI（P1） |
+| 测试/lint/build/CI | Makefile、GitHub Actions | N/A | pytest/oxlint/tsc/Vite/Compose jobs；health tests 隔离本机服务 | 244 tests；lint/build/config/YAML 通过 | 部分可用 | OAuth 缺 `workflow` scope，CI 尚未推送运行；bundle 637 kB；无浏览器 CI（P1） |
 
 ## 本轮矩阵变化
 
@@ -64,6 +64,7 @@
 10. 修复 PPTX parser 返回值误解包；真实单页 PPTX 先复现 failed，再经同一文档 reparse 恢复并从 ES 命中，DOCX/XLSX 同批全链路通过。
 11. 修复 Markdown 返回值顺序和 HTML/EPUB 对未打包 NLTK 数据的硬依赖；三条 failed 记录原地恢复，最终 8 种文档与文本 PDF 全部从 ES 命中独立 marker。
 12. 文档列表返回 owner 可见的解析错误摘要，失败项新增原地重试入口并继续状态轮询，不再要求用户删除后重新上传。
+13. 统一前后端分块大小边界并拒绝 `chunk_overlap >= chunk_size`，避免步长退化为 1 导致 chunk 数量爆炸。
 
 ## 对标参考（官方资料，检索日期 2026-07-23）
 
