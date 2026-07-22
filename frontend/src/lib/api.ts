@@ -176,6 +176,15 @@ export interface DocumentRead {
   updated_at: string
 }
 
+export interface DocumentUploadResponse {
+  id: string
+  kb_id: string
+  filename: string
+  file_size: number
+  parse_status: "pending"
+  message: string
+}
+
 export interface SearchHit {
   chunk_id: string
   doc_id: string
@@ -233,7 +242,7 @@ export const kbApi = {
   uploadDocument: (kbId: string, file: File) => {
     const formData = new FormData()
     formData.append("file", file)
-    return api.post<DocumentRead>(`/knowledge-bases/${kbId}/documents`, formData, {
+    return api.post<DocumentUploadResponse>(`/knowledge-bases/${kbId}/documents`, formData, {
       headers: { "Content-Type": "multipart/form-data" },
     })
   },
