@@ -14,6 +14,7 @@ from pathlib import Path
 
 import httpx
 
+from common.ssrf_guard import assert_url_is_safe
 from app.core.config import settings
 from app.schemas.local_agent import ToolInfo
 
@@ -119,6 +120,18 @@ async def call_tool(tool_id: str, parameters: dict) -> dict:
             "error": f"{tool.source} 工具仅完成清单发现，当前没有可用的调用端点: {tool_id}",
             "source": tool.source,
         }
+
+    if tool_id == "web_fetch":
+        try:
+            assert_url_is_safe(str(parameters.get("url") or ""))
+        except ValueError as exc:
+            return {
+                "tool_id": tool_id,
+                "success": False,
+                "result": None,
+                "error": f"web_fetch URL 被安全策略拒绝: {exc}",
+                "source": "local",
+            }
 
     headers = {"Content-Type": "application/json"}
     if settings.openclaw_token:

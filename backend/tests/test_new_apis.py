@@ -496,6 +496,30 @@ async def test_local_agent_discovered_only_tool_does_not_contact_openclaw(client
 
 
 @pytest.mark.asyncio
+async def test_local_agent_web_fetch_blocks_private_network_before_gateway(client, monkeypatch):
+    """web_fetch 复用 SSRF guard，loopback 请求不得到达 OpenClaw。"""
+    from app.services import local_agent_service
+
+    class _UnexpectedClient:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("private URL must be rejected before contacting OpenClaw")
+
+    monkeypatch.setattr(local_agent_service.httpx, "AsyncClient", _UnexpectedClient)
+    token = await _register_and_login(client, "toolssrf@test.com")
+    resp = await client.post(
+        "/api/v1/local-agent/tools/web_fetch/call",
+        json={"parameters": {"url": "http://127.0.0.1:8000/internal"}},
+        headers=_auth_headers(token),
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["success"] is False
+    assert resp.json()["source"] == "local"
+    assert resp.json()["result"] is None
+    assert "安全策略拒绝" in resp.json()["error"]
+
+
+@pytest.mark.asyncio
 async def test_memory_upsert_same_key(client):
     """同 user+key+session 重复创建 → 更新而非新增 (upsert)。"""
     token = await _register_and_login(client, "memup@test.com")

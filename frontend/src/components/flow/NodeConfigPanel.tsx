@@ -72,7 +72,7 @@ function ModelSelect({ value, onChange }: { value: string; onChange: (v: string)
         ))}
       </select>
       <p className="text-xs text-muted-foreground">
-        default → Kaiweb → OpenClaw → OpenAI → Anthropic fallback
+        default → OpenClaw → Hermes → Kaiweb → OpenAI → Anthropic fallback
       </p>
     </>
   )
