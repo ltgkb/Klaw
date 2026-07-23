@@ -739,17 +739,35 @@ export const pushChannelApi = {
 
 export interface ConversationMessage {
   id: string
+  conversation_id?: string
   role: "user" | "assistant"
   content: string
   created_at: string
 }
 
+export interface ConversationRead {
+  id: string
+  flow_id: string
+  title: string
+  created_at: string
+  updated_at: string
+}
+
 export const chatApi = {
-  messages: (flowId: string) => api.get<ConversationMessage[]>(`/agent-flows/${flowId}/chat/messages`),
+  conversations: (flowId: string) =>
+    api.get<ConversationRead[]>(`/agent-flows/${flowId}/chat/conversations`),
+  createConversation: (flowId: string) =>
+    api.post<ConversationRead>(`/agent-flows/${flowId}/chat/conversations`),
+  deleteConversation: (flowId: string, conversationId: string) =>
+    api.delete(`/agent-flows/${flowId}/chat/conversations/${conversationId}`),
+  messages: (flowId: string, conversationId?: string) =>
+    api.get<ConversationMessage[]>(`/agent-flows/${flowId}/chat/messages`, {
+      params: conversationId ? { conversation_id: conversationId } : undefined,
+    }),
   /** 发起一轮对话 (异步触发, 返回 execution_id; 需轮询 messages 获取回答) */
-  send: (flowId: string, message: string) =>
+  send: (flowId: string, message: string, conversationId?: string) =>
     api.post<{ execution_id: string; conversation_id: string; status: string }>(
       `/agent-flows/${flowId}/chat`,
-      { message },
+      { message, conversation_id: conversationId },
     ),
 }

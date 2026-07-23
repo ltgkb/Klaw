@@ -47,12 +47,18 @@ def patch_session_factory(db_engine, monkeypatch):
     return factory
 
 
-async def _wait_assistant_message(client, flow_id, token, timeout_s=10.0):
+async def _wait_assistant_message(
+    client, flow_id, token, conversation_id=None, timeout_s=10.0
+):
     """轮询消息列表直到出现助手消息。"""
     deadline = asyncio.get_event_loop().time() + timeout_s
     while asyncio.get_event_loop().time() < deadline:
+        params = {"conversation_id": conversation_id} if conversation_id else None
         resp = await client.get(
-            f"/api/v1/agent-flows/{flow_id}/chat/messages", headers=_auth_headers(token))
+            f"/api/v1/agent-flows/{flow_id}/chat/messages",
+            params=params,
+            headers=_auth_headers(token),
+        )
         assert resp.status_code == 200
         messages = resp.json()
         assistants = [m for m in messages if m["role"] == "assistant"]
@@ -98,6 +104,104 @@ async def test_chat_roundtrip(client, db_engine, patch_session_factory, mock_llm
     assert messages[0]["content"] == "你好"
     assert "LLM回复" in answer["content"]
     assert "问题: 你好" in answer["content"]
+
+
+@pytest.mark.asyncio
+async def test_conversation_create_switch_and_delete(
+    client, db_engine, patch_session_factory, mock_llm
+):
+    """多个会话分别保存消息，切换不串历史，删除后消息也不可访问。"""
+    token = await _register_and_login(client, "chat-multi@test.com")
+    create_flow = await client.post(
+        "/api/v1/agent-flows",
+        json={"name": "Multi chat", "dag": {"nodes": [], "edges": []}},
+        headers=_auth_headers(token),
+    )
+    flow_id = create_flow.json()["id"]
+
+    initial = await client.get(
+        f"/api/v1/agent-flows/{flow_id}/chat/conversations",
+        headers=_auth_headers(token),
+    )
+    assert initial.status_code == 200
+    assert len(initial.json()) == 1
+    initial_id = initial.json()[0]["id"]
+
+    created = await client.post(
+        f"/api/v1/agent-flows/{flow_id}/chat/conversations",
+        headers=_auth_headers(token),
+    )
+    assert created.status_code == 201
+    conversation_id = created.json()["id"]
+
+    sent = await client.post(
+        f"/api/v1/agent-flows/{flow_id}/chat",
+        json={"message": "第二个会话", "conversation_id": conversation_id},
+        headers=_auth_headers(token),
+    )
+    assert sent.status_code == 202
+    assert sent.json()["conversation_id"] == conversation_id
+    messages, _ = await _wait_assistant_message(
+        client, flow_id, token, conversation_id=conversation_id
+    )
+    assert messages[0]["content"] == "第二个会话"
+
+    empty = await client.get(
+        f"/api/v1/agent-flows/{flow_id}/chat/messages",
+        params={"conversation_id": initial_id},
+        headers=_auth_headers(token),
+    )
+    assert empty.status_code == 200
+    assert empty.json() == []
+
+    conversations = await client.get(
+        f"/api/v1/agent-flows/{flow_id}/chat/conversations",
+        headers=_auth_headers(token),
+    )
+    titled = {item["id"]: item["title"] for item in conversations.json()}
+    assert titled[conversation_id] == "第二个会话"
+
+    deleted = await client.delete(
+        f"/api/v1/agent-flows/{flow_id}/chat/conversations/{conversation_id}",
+        headers=_auth_headers(token),
+    )
+    assert deleted.status_code == 204
+    missing = await client.get(
+        f"/api/v1/agent-flows/{flow_id}/chat/messages",
+        params={"conversation_id": conversation_id},
+        headers=_auth_headers(token),
+    )
+    assert missing.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_conversation_endpoints_enforce_flow_ownership(client):
+    owner_token = await _register_and_login(client, "chat-owner@test.com")
+    other_token = await _register_and_login(client, "chat-other@test.com")
+    flow = await client.post(
+        "/api/v1/agent-flows",
+        json={"name": "Private chat", "dag": {"nodes": [], "edges": []}},
+        headers=_auth_headers(owner_token),
+    )
+    flow_id = flow.json()["id"]
+    conversations = await client.get(
+        f"/api/v1/agent-flows/{flow_id}/chat/conversations",
+        headers=_auth_headers(owner_token),
+    )
+    conversation_id = conversations.json()[0]["id"]
+
+    assert (
+        await client.get(
+            f"/api/v1/agent-flows/{flow_id}/chat/conversations",
+            headers=_auth_headers(other_token),
+        )
+    ).status_code == 404
+    assert (
+        await client.delete(
+            f"/api/v1/agent-flows/{flow_id}/chat/conversations/{conversation_id}",
+            headers=_auth_headers(other_token),
+        )
+    ).status_code == 404
 
 
 @pytest.mark.asyncio

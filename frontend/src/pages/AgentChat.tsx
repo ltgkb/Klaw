@@ -1,38 +1,45 @@
 import { useEffect, useRef, useState } from "react"
 import { Link } from "react-router-dom"
-import { Bot, Send, Loader2, ArrowLeft, MessageSquare, Square } from "lucide-react"
+import { Bot, Send, Loader2, ArrowLeft, MessageSquare, Square, Plus, Trash2 } from "lucide-react"
 import {
   flowApi,
   chatApi,
   type FlowRead,
+  type ConversationRead,
   type ConversationMessage,
   type ExecutionStreamPayload,
 } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
+import { toast } from "@/lib/toast"
 
 export function AgentChat() {
   const [flows, setFlows] = useState<FlowRead[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [conversations, setConversations] = useState<ConversationRead[]>([])
+  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null)
   const [messages, setMessages] = useState<ConversationMessage[]>([])
   const [input, setInput] = useState("")
   const [loadingMsgs, setLoadingMsgs] = useState(false)
   const [thinking, setThinking] = useState(false)
   const [thinkingInfo, setThinkingInfo] = useState<string>("")
   const [activeExecutionId, setActiveExecutionId] = useState<string | null>(null)
+  const [loadingConversations, setLoadingConversations] = useState(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const streamAbortRef = useRef<AbortController | null>(null)
   const requestSequenceRef = useRef(0)
   const selectedIdRef = useRef<string | null>(null)
+  const selectedConversationIdRef = useRef<string | null>(null)
   selectedIdRef.current = selectedId
+  selectedConversationIdRef.current = selectedConversationId
 
   // 加载工作流列表
   useEffect(() => {
     flowApi.list().then((r) => setFlows(r.data.items)).catch(() => {})
   }, [])
 
-  // 选中工作流时加载历史; 切换时停止上一轮执行流并复位状态。
+  // 选中工作流时加载会话列表；旧数据首次访问时后端会创建一个空会话。
   useEffect(() => {
     streamAbortRef.current?.abort()
     streamAbortRef.current = null
@@ -40,15 +47,52 @@ export function AgentChat() {
     setThinking(false)
     setThinkingInfo("")
     setActiveExecutionId(null)
+    setConversations([])
+    setSelectedConversationId(null)
     setMessages([])
+    setLoadingMsgs(false)
     if (!selectedId) return
+    const flowId = selectedId
+    setLoadingConversations(true)
+    chatApi
+      .conversations(flowId)
+      .then((response) => {
+        if (selectedIdRef.current !== flowId) return
+        setConversations(response.data)
+        setSelectedConversationId(response.data[0]?.id || null)
+      })
+      .catch(() => {
+        if (selectedIdRef.current === flowId) setConversations([])
+      })
+      .finally(() => {
+        if (selectedIdRef.current === flowId) setLoadingConversations(false)
+      })
+  }, [selectedId])
+
+  // 每个会话独立加载消息，切换时不会混入上一个请求的结果。
+  useEffect(() => {
+    setMessages([])
+    if (!selectedId || !selectedConversationId) return
+    const flowId = selectedId
+    const conversationId = selectedConversationId
     setLoadingMsgs(true)
     chatApi
-      .messages(selectedId)
-      .then((r) => setMessages(r.data))
-      .catch(() => setMessages([]))
-      .finally(() => setLoadingMsgs(false))
-  }, [selectedId])
+      .messages(flowId, conversationId)
+      .then((response) => {
+        if (
+          selectedIdRef.current === flowId &&
+          selectedConversationIdRef.current === conversationId
+        ) {
+          setMessages(response.data)
+        }
+      })
+      .catch(() => {
+        if (selectedConversationIdRef.current === conversationId) setMessages([])
+      })
+      .finally(() => {
+        if (selectedConversationIdRef.current === conversationId) setLoadingMsgs(false)
+      })
+  }, [selectedId, selectedConversationId])
 
   // 自动滚到底
   useEffect(() => {
@@ -84,20 +128,28 @@ export function AgentChat() {
 
   const loadCompletedReply = async (
     flowId: string,
+    conversationId: string,
     assistantCountBefore: number,
     sequence: number,
     fallback: string,
   ) => {
     for (let attempt = 0; attempt < 25; attempt += 1) {
-      if (selectedIdRef.current !== flowId || requestSequenceRef.current !== sequence) return
+      if (
+        selectedIdRef.current !== flowId ||
+        selectedConversationIdRef.current !== conversationId ||
+        requestSequenceRef.current !== sequence
+      ) return
       try {
-        const response = await chatApi.messages(flowId)
+        const response = await chatApi.messages(flowId, conversationId)
         const assistantCount = response.data.filter((message) => message.role === "assistant").length
         if (assistantCount > assistantCountBefore) {
           setMessages(response.data)
           setThinking(false)
           setThinkingInfo("")
           setActiveExecutionId(null)
+          void chatApi.conversations(flowId).then((result) => {
+            if (selectedIdRef.current === flowId) setConversations(result.data)
+          })
           return
         }
       } catch {
@@ -105,7 +157,11 @@ export function AgentChat() {
       }
       await new Promise((resolve) => setTimeout(resolve, 200))
     }
-    if (selectedIdRef.current !== flowId || requestSequenceRef.current !== sequence) return
+    if (
+      selectedIdRef.current !== flowId ||
+      selectedConversationIdRef.current !== conversationId ||
+      requestSequenceRef.current !== sequence
+    ) return
     setThinking(false)
     setThinkingInfo("")
     setActiveExecutionId(null)
@@ -114,6 +170,7 @@ export function AgentChat() {
 
   const finishExecution = (
     flowId: string,
+    conversationId: string,
     assistantCountBefore: number,
     sequence: number,
     payload: ExecutionStreamPayload,
@@ -122,17 +179,22 @@ export function AgentChat() {
     const fallback = payload.status === "success"
       ? "(执行完成，但回答保存超时，请刷新后查看)"
       : `(${payload.error_message || (payload.status === "cancelled" ? "执行已取消" : "执行失败")})`
-    void loadCompletedReply(flowId, assistantCountBefore, sequence, fallback)
+    void loadCompletedReply(flowId, conversationId, assistantCountBefore, sequence, fallback)
   }
 
   const pollExecution = async (
     flowId: string,
+    conversationId: string,
     executionId: string,
     assistantCountBefore: number,
     sequence: number,
   ) => {
     for (let attempt = 0; attempt < 180; attempt += 1) {
-      if (selectedIdRef.current !== flowId || requestSequenceRef.current !== sequence) return
+      if (
+        selectedIdRef.current !== flowId ||
+        selectedConversationIdRef.current !== conversationId ||
+        requestSequenceRef.current !== sequence
+      ) return
       try {
         const response = await flowApi.getExecution(flowId, executionId)
         const execution = response.data
@@ -144,7 +206,7 @@ export function AgentChat() {
           error_message: execution.error_message,
         }))
         if (["success", "failed", "cancelled"].includes(execution.status)) {
-          finishExecution(flowId, assistantCountBefore, sequence, {
+          finishExecution(flowId, conversationId, assistantCountBefore, sequence, {
             execution_id: execution.id,
             status: execution.status,
             node_states: execution.node_states || {},
@@ -158,7 +220,11 @@ export function AgentChat() {
       }
       await new Promise((resolve) => setTimeout(resolve, 1000))
     }
-    if (selectedIdRef.current === flowId && requestSequenceRef.current === sequence) {
+    if (
+      selectedIdRef.current === flowId &&
+      selectedConversationIdRef.current === conversationId &&
+      requestSequenceRef.current === sequence
+    ) {
       setThinking(false)
       setActiveExecutionId(null)
       appendLocalReply("(执行状态查询超时，请在执行历史中查看)")
@@ -167,9 +233,10 @@ export function AgentChat() {
 
   const handleSend = async () => {
     const text = input.trim()
-    if (!text || !selectedId || thinking) return
+    if (!text || !selectedId || !selectedConversationId || thinking) return
     setInput("")
     const flowId = selectedId
+    const conversationId = selectedConversationId
     const assistantCountBefore = messages.filter(
       (message) => message.role === "assistant" && !message.id.startsWith("e-"),
     ).length
@@ -186,26 +253,38 @@ export function AgentChat() {
     setThinkingInfo("准备执行…")
 
     try {
-      const response = await chatApi.send(flowId, text)
+      const response = await chatApi.send(flowId, text, conversationId)
       const executionId = response.data.execution_id
       setActiveExecutionId(executionId)
       streamAbortRef.current?.abort()
       streamAbortRef.current = flowApi.streamExecution(flowId, executionId, {
         onProgress: (payload) => {
-          if (selectedIdRef.current === flowId && requestSequenceRef.current === sequence) {
+          if (
+            selectedIdRef.current === flowId &&
+            selectedConversationIdRef.current === conversationId &&
+            requestSequenceRef.current === sequence
+          ) {
             setThinkingInfo(progressLabel(payload))
           }
         },
         onComplete: (payload) => {
-          if (selectedIdRef.current === flowId && requestSequenceRef.current === sequence) {
-            finishExecution(flowId, assistantCountBefore, sequence, payload)
+          if (
+            selectedIdRef.current === flowId &&
+            selectedConversationIdRef.current === conversationId &&
+            requestSequenceRef.current === sequence
+          ) {
+            finishExecution(flowId, conversationId, assistantCountBefore, sequence, payload)
           }
         },
         onError: () => {
-          if (selectedIdRef.current !== flowId || requestSequenceRef.current !== sequence) return
+          if (
+            selectedIdRef.current !== flowId ||
+            selectedConversationIdRef.current !== conversationId ||
+            requestSequenceRef.current !== sequence
+          ) return
           streamAbortRef.current = null
           setThinkingInfo("实时连接中断，正在同步状态…")
-          void pollExecution(flowId, executionId, assistantCountBefore, sequence)
+          void pollExecution(flowId, conversationId, executionId, assistantCountBefore, sequence)
         },
       })
     } catch {
@@ -222,6 +301,49 @@ export function AgentChat() {
       await flowApi.cancelExecution(selectedId, activeExecutionId)
     } catch {
       setThinkingInfo("取消失败，执行仍在继续")
+    }
+  }
+
+  const handleNewConversation = async () => {
+    if (!selectedId || thinking || loadingConversations) return
+    const flowId = selectedId
+    setLoadingConversations(true)
+    try {
+      const response = await chatApi.createConversation(flowId)
+      if (selectedIdRef.current !== flowId) return
+      setConversations((current) => [response.data, ...current])
+      setSelectedConversationId(response.data.id)
+    } catch {
+      if (selectedIdRef.current === flowId) toast.error("新建对话失败")
+    } finally {
+      if (selectedIdRef.current === flowId) setLoadingConversations(false)
+    }
+  }
+
+  const handleDeleteConversation = async () => {
+    if (!selectedId || !selectedConversationId || thinking || loadingConversations) return
+    if (!confirm("确认删除当前对话？对话消息将无法恢复。")) return
+    const flowId = selectedId
+    const deletedId = selectedConversationId
+    setLoadingConversations(true)
+    try {
+      await chatApi.deleteConversation(flowId, deletedId)
+      if (selectedIdRef.current !== flowId) return
+      const remaining = conversations.filter((conversation) => conversation.id !== deletedId)
+      if (remaining.length > 0) {
+        setConversations(remaining)
+        setSelectedConversationId(remaining[0].id)
+      } else {
+        const created = await chatApi.createConversation(flowId)
+        if (selectedIdRef.current !== flowId) return
+        setConversations([created.data])
+        setSelectedConversationId(created.data.id)
+      }
+      toast.success("对话已删除")
+    } catch {
+      if (selectedIdRef.current === flowId) toast.error("删除对话失败")
+    } finally {
+      if (selectedIdRef.current === flowId) setLoadingConversations(false)
     }
   }
 
@@ -273,13 +395,13 @@ export function AgentChat() {
           </div>
         ) : (
           <>
-            <div className="flex items-center gap-2 border-b px-4 py-2">
+            <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2">
               <Link to="/flows" title="返回工作流列表">
                 <Button variant="ghost" size="sm">
                   <ArrowLeft className="h-4 w-4" />
                 </Button>
               </Link>
-              <div>
+              <div className="min-w-0">
                 <h1 className="text-sm font-semibold">
                   {flows.find((f) => f.id === selectedId)?.name}
                 </h1>
@@ -287,10 +409,45 @@ export function AgentChat() {
                   对话式运行 · 多轮历史作为 {`{history}`} 注入 LLM 节点
                 </p>
               </div>
+              <div className="ml-auto flex min-w-0 items-center gap-1">
+                <select
+                  className="h-9 min-w-0 max-w-52 rounded-md border border-input bg-background px-2 text-sm"
+                  value={selectedConversationId || ""}
+                  onChange={(event) => setSelectedConversationId(event.target.value)}
+                  disabled={thinking || loadingConversations || conversations.length === 0}
+                  aria-label="选择对话"
+                >
+                  {conversations.map((conversation) => (
+                    <option key={conversation.id} value={conversation.id}>
+                      {conversation.title}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleNewConversation}
+                  disabled={thinking || loadingConversations}
+                  title="新建对话"
+                  aria-label="新建对话"
+                >
+                  <Plus className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleDeleteConversation}
+                  disabled={thinking || loadingConversations || !selectedConversationId}
+                  title="删除当前对话"
+                  aria-label="删除当前对话"
+                >
+                  <Trash2 className="h-4 w-4 text-destructive" />
+                </Button>
+              </div>
             </div>
 
             <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto p-4">
-              {loadingMsgs ? (
+              {loadingMsgs || loadingConversations ? (
                 <div className="flex justify-center py-8">
                   <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                 </div>
@@ -327,9 +484,13 @@ export function AgentChat() {
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleSend()}
                 placeholder="输入消息, Enter 发送"
-                disabled={thinking}
+                disabled={thinking || !selectedConversationId}
               />
-              <Button className="shrink-0" onClick={handleSend} disabled={thinking || !input.trim()}>
+              <Button
+                className="shrink-0"
+                onClick={handleSend}
+                disabled={thinking || !selectedConversationId || !input.trim()}
+              >
                 {thinking ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                 发送
               </Button>
