@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { Plus, Trash2, Workflow, Loader2 } from "lucide-react"
+import { Plus, Trash2, Workflow, Loader2, Pencil, X } from "lucide-react"
 import { flowApi, type FlowRead } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -15,6 +15,10 @@ export function FlowList() {
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
   const [creating, setCreating] = useState(false)
+  const [editingFlow, setEditingFlow] = useState<FlowRead | null>(null)
+  const [editName, setEditName] = useState("")
+  const [editDescription, setEditDescription] = useState("")
+  const [savingEdit, setSavingEdit] = useState(false)
 
   const fetchFlows = async () => {
     setLoading(true)
@@ -56,6 +60,28 @@ export function FlowList() {
       await fetchFlows()
     } catch {
       // 错误由拦截器处理
+    }
+  }
+
+  const beginEdit = (flow: FlowRead) => {
+    setEditingFlow(flow)
+    setEditName(flow.name)
+    setEditDescription(flow.description || "")
+    setShowCreate(false)
+  }
+
+  const handleEdit = async () => {
+    if (!editingFlow || !editName.trim()) return
+    setSavingEdit(true)
+    try {
+      await flowApi.update(editingFlow.id, {
+        name: editName.trim(),
+        description: editDescription,
+      })
+      setEditingFlow(null)
+      await fetchFlows()
+    } finally {
+      setSavingEdit(false)
     }
   }
 
@@ -112,6 +138,33 @@ export function FlowList() {
         </Card>
       )}
 
+      {editingFlow && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">编辑工作流</CardTitle>
+              <Button variant="ghost" size="icon" onClick={() => setEditingFlow(null)} title="取消编辑">
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="edit-flow-name">名称</Label>
+              <Input id="edit-flow-name" value={editName} onChange={(e) => setEditName(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-flow-desc">描述</Label>
+              <Input id="edit-flow-desc" value={editDescription} onChange={(e) => setEditDescription(e.target.value)} />
+            </div>
+            <Button onClick={handleEdit} disabled={savingEdit || !editName.trim()}>
+              {savingEdit && <Loader2 className="h-4 w-4 animate-spin" />}
+              保存修改
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
       {loading ? (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -137,16 +190,30 @@ export function FlowList() {
                     <Workflow className="h-5 w-5 text-muted-foreground" />
                     <CardTitle className="text-base">{flow.name}</CardTitle>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      handleDelete(flow.id)
-                    }}
-                  >
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
+                  <div className="flex items-center">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title="编辑工作流"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        beginEdit(flow)
+                      }}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title="删除工作流"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleDelete(flow.id)
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  </div>
                 </div>
                 <CardDescription>{flow.description || "无描述"}</CardDescription>
               </CardHeader>
