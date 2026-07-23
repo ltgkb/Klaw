@@ -23,7 +23,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Loader2, Send, Cpu, Cloud, Server, KeyRound, Trash2, Wrench, Plus, Zap, Play, Pencil, X } from "lucide-react"
+import { Loader2, Send, Cpu, Cloud, Server, KeyRound, Trash2, Wrench, Plus, Zap, Play, Pencil, X, RefreshCw } from "lucide-react"
 
 type StatusMeta = { label: string; dotClass: string }
 
@@ -60,10 +60,15 @@ const CHANNEL_TYPES: { value: PushChannelType; label: string; hint: string }[] =
   { value: "hermes", label: "Hermes", hint: "channel" },
 ]
 
+function uniqueModels(models: ModelInfo[]) {
+  return Array.from(new Map(models.map((model) => [model.id, model])).values())
+}
+
 export function Settings() {
   const { user, fetchMe } = useAuthStore()
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [models, setModels] = useState<ModelInfo[]>([])
+  const [modelsLoadFailed, setModelsLoadFailed] = useState(false)
   const [tools, setTools] = useState<ToolInfo[]>([])
   const [selectedToolId, setSelectedToolId] = useState("web_fetch")
   const [toolParameters, setToolParameters] = useState('{\n  "url": "https://example.com"\n}')
@@ -104,12 +109,13 @@ export function Settings() {
   const [embMsg, setEmbMsg] = useState<string | null>(null)
 
   // LLM 默认模型 (画布新建 LLM 节点默认用此模型)
-  const [llmDefault, setLlmDefault] = useState("")
+  const [llmDefault, setLlmDefault] = useState("default")
   const [llmDefaultSaving, setLlmDefaultSaving] = useState(false)
   const [llmDefaultMsg, setLlmDefaultMsg] = useState<string | null>(null)
 
   const loadAll = async () => {
     setLoading(true)
+    setModelsLoadFailed(false)
     // 各区块独立加载, 单个接口失败不影响其它区块展示 (Promise.allSettled)
     const [providersR, modelsR, toolsR, channelsR, embR, llmR, healthR] = await Promise.allSettled([
       providerApi.list(),
@@ -121,7 +127,8 @@ export function Settings() {
       localAgentApi.health(),
     ])
     if (providersR.status === "fulfilled") setProviders(providersR.value.data)
-    if (modelsR.status === "fulfilled") setModels(modelsR.value.data)
+    if (modelsR.status === "fulfilled") setModels(uniqueModels(modelsR.value.data))
+    else setModelsLoadFailed(true)
     if (toolsR.status === "fulfilled") {
       setTools(toolsR.value.data)
       const executableTools = toolsR.value.data.filter((tool) => tool.executable)
@@ -137,7 +144,7 @@ export function Settings() {
       setEmbBase(embR.value.data.base_url)
       setEmbModel(embR.value.data.model)
     }
-    if (llmR.status === "fulfilled") setLlmDefault(llmR.value.data.default_model || "")
+    if (llmR.status === "fulfilled") setLlmDefault(llmR.value.data.default_model || "default")
     if (healthR.status === "fulfilled") setAgentHealth(healthR.value.data)
     setLoading(false)
   }
@@ -464,8 +471,8 @@ export function Settings() {
                 value={llmDefault}
                 onChange={(e) => setLlmDefault(e.target.value)}
               >
-                <option value="default">default (自动: Kaiweb 优先)</option>
-                {models.map((m) => (
+                <option value="default">default (自动路由)</option>
+                {models.filter((model) => model.id !== "default").map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name} ({m.provider})
                   </option>
@@ -760,7 +767,15 @@ export function Settings() {
               </div>
             </CardHeader>
             <CardContent>
-              {models.length === 0 ? (
+              {modelsLoadFailed ? (
+                <div className="flex items-center justify-between rounded-md border border-destructive/50 p-3 text-sm text-destructive">
+                  <span>模型列表加载失败</span>
+                  <Button variant="outline" size="sm" onClick={loadAll} disabled={loading}>
+                    <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+                    重试
+                  </Button>
+                </div>
+              ) : models.length === 0 ? (
                 <p className="py-6 text-center text-sm text-muted-foreground">暂无可用模型</p>
               ) : (
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -793,8 +808,8 @@ export function Settings() {
                 onChange={(e) => setChatModel(e.target.value)}
                 disabled={chatting}
               >
-                <option value="default">default (自动)</option>
-                {models.map((m) => (
+                <option value="default">default (自动路由)</option>
+                {models.filter((model) => model.id !== "default").map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name}
                   </option>

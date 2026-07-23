@@ -41,17 +41,37 @@ const NODE_LABELS: Record<CanvasNodeType, string> = {
 function ModelSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const [models, setModels] = useState<ModelInfo[]>([])
   const [loaded, setLoaded] = useState(false)
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
+    let active = true
+    setLoaded(false)
+    setLoadFailed(false)
     providerApi
       .listModels()
-      .then((r) => setModels(r.data))
-      .catch(() => setModels([]))
-      .finally(() => setLoaded(true))
-  }, [])
+      .then((response) => {
+        if (active) setModels(response.data)
+      })
+      .catch(() => {
+        if (active) {
+          setModels([])
+          setLoadFailed(true)
+        }
+      })
+      .finally(() => {
+        if (active) setLoaded(true)
+      })
+    return () => {
+      active = false
+    }
+  }, [reloadKey])
 
-  // 当前值不在列表里也保留显示
-  const options = [{ id: "default", name: "default (Kaiweb 优先)", provider: "auto" }, ...models]
+  // 后端可能已经返回 default；统一按 id 去重，当前自定义值仍保留显示。
+  const options = Array.from(new Map(models.map((model) => [model.id, model])).values())
+  if (!options.some((model) => model.id === "default")) {
+    options.unshift({ id: "default", name: "default (自动路由)", provider: "auto" })
+  }
   if (value && !options.some((m) => m.id === value)) {
     options.unshift({ id: value, name: value, provider: "自定义" })
   }
@@ -64,16 +84,36 @@ function ModelSelect({ value, onChange }: { value: string; onChange: (v: string)
         value={value || "default"}
         onChange={(e) => onChange(e.target.value)}
       >
-        {!loaded && <option value="default">加载模型中…</option>}
-        {options.map((m) => (
-          <option key={m.id} value={m.id}>
-            {m.name} ({m.provider})
-          </option>
-        ))}
+        {!loaded ? (
+          <option value="default">加载模型中…</option>
+        ) : (
+          options.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name} ({m.provider})
+            </option>
+          ))
+        )}
       </select>
-      <p className="text-xs text-muted-foreground">
-        default → OpenClaw → Hermes → Kaiweb → OpenAI → Anthropic fallback
-      </p>
+      {loadFailed ? (
+        <div className="flex items-center justify-between text-xs text-destructive">
+          <span>模型列表加载失败，当前仅保留自动路由</span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={() => setReloadKey((key) => key + 1)}
+            title="重新加载模型"
+            aria-label="重新加载模型"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          default 按当前可用状态自动路由；Mock 仅用于开发环境兜底
+        </p>
+      )}
     </>
   )
 }
