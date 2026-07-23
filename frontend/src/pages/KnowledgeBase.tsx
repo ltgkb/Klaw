@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { Plus, Trash2, BookOpen, Loader2 } from "lucide-react"
+import { Plus, Trash2, BookOpen, Loader2, Upload, FolderOpen, X } from "lucide-react"
 import { kbApi, type KBRead } from "@/lib/api"
+import { toast } from "@/lib/toast"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -18,6 +19,12 @@ export function KnowledgeBase() {
   const [chunkSize, setChunkSize] = useState(256)
   const [chunkOverlap, setChunkOverlap] = useState(32)
   const [creating, setCreating] = useState(false)
+  const [showImport, setShowImport] = useState(false)
+  const [importName, setImportName] = useState("")
+  const [importFiles, setImportFiles] = useState<File[]>([])
+  const [importing, setImporting] = useState(false)
+  const importInputRef = useRef<HTMLInputElement>(null)
+  const folderInputRef = useRef<HTMLInputElement>(null)
   const chunkConfigValid =
     chunkSize >= 100 &&
     chunkSize <= 4096 &&
@@ -39,6 +46,11 @@ export function KnowledgeBase() {
   useEffect(() => {
     fetchKbs()
   }, [])
+
+  useEffect(() => {
+    folderInputRef.current?.setAttribute("webkitdirectory", "")
+    folderInputRef.current?.setAttribute("directory", "")
+  }, [showImport])
 
   const handleCreate = async () => {
     if (!name.trim()) return
@@ -75,6 +87,54 @@ export function KnowledgeBase() {
     }
   }
 
+  const selectImportFiles = (files: FileList | null) => {
+    if (!files) return
+    const supported = Array.from(files).filter((file) =>
+      /\.(pdf|docx|xlsx|csv|pptx|txt|md|markdown|html|htm|json|epub)$/i.test(file.name),
+    )
+    setImportFiles(supported)
+    if (!importName && supported.length > 0) {
+      const relativeRoot = supported[0].webkitRelativePath?.split("/")[0]
+      setImportName(relativeRoot || supported[0].name.replace(/\.[^.]+$/, ""))
+    }
+    if (supported.length !== files.length) {
+      toast.error(`已忽略 ${files.length - supported.length} 个不支持的文件`)
+    }
+  }
+
+  const resetImport = () => {
+    setShowImport(false)
+    setImportName("")
+    setImportFiles([])
+    if (importInputRef.current) importInputRef.current.value = ""
+    if (folderInputRef.current) folderInputRef.current.value = ""
+  }
+
+  const handleImport = async () => {
+    if (!importName.trim() || importFiles.length === 0 || importing) return
+    setImporting(true)
+    try {
+      const created = await kbApi.create({ name: importName.trim() })
+      let failed = 0
+      for (const file of importFiles) {
+        try {
+          await kbApi.uploadDocument(created.data.id, file)
+        } catch {
+          failed += 1
+        }
+      }
+      if (failed > 0) {
+        toast.error(`知识库已创建，${importFiles.length - failed} 个文件已导入，${failed} 个失败`)
+      } else {
+        toast.success(`已导入 ${importFiles.length} 个文件`)
+      }
+      resetImport()
+      navigate(`/kb/${created.data.id}`)
+    } finally {
+      setImporting(false)
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -84,11 +144,74 @@ export function KnowledgeBase() {
             DeepDoc 解析 · BGE-M3 向量化 · ES 混合检索
           </p>
         </div>
-        <Button onClick={() => setShowCreate(!showCreate)}>
-          <Plus className="h-4 w-4" />
-          新建知识库
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => { setShowImport(!showImport); setShowCreate(false) }}>
+            <Upload className="h-4 w-4" />
+            导入知识库
+          </Button>
+          <Button onClick={() => { setShowCreate(!showCreate); setShowImport(false) }}>
+            <Plus className="h-4 w-4" />
+            新建知识库
+          </Button>
+        </div>
       </div>
+
+      {showImport && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-base">导入知识库</CardTitle>
+                <CardDescription>选择文件或文件夹，自动创建知识库并开始解析</CardDescription>
+              </div>
+              <Button variant="ghost" size="icon" onClick={resetImport} title="取消导入">
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="import-kb-name">知识库名称</Label>
+              <Input
+                id="import-kb-name"
+                value={importName}
+                onChange={(e) => setImportName(e.target.value)}
+                placeholder="导入的知识库"
+              />
+            </div>
+            <input
+              ref={importInputRef}
+              type="file"
+              multiple
+              accept=".pdf,.docx,.xlsx,.csv,.pptx,.txt,.md,.markdown,.html,.htm,.json,.epub"
+              className="hidden"
+              onChange={(e) => selectImportFiles(e.target.files)}
+            />
+            <input
+              ref={folderInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => selectImportFiles(e.target.files)}
+            />
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={() => importInputRef.current?.click()} disabled={importing}>
+                <Upload className="h-4 w-4" /> 选择文件
+              </Button>
+              <Button variant="outline" onClick={() => folderInputRef.current?.click()} disabled={importing}>
+                <FolderOpen className="h-4 w-4" /> 选择文件夹
+              </Button>
+              <span className="self-center text-sm text-muted-foreground">
+                {importFiles.length > 0 ? `已选择 ${importFiles.length} 个文件` : "尚未选择文件"}
+              </span>
+            </div>
+            <Button onClick={handleImport} disabled={importing || !importName.trim() || importFiles.length === 0}>
+              {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+              {importing ? "正在导入" : "开始导入"}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {showCreate && (
         <Card>
