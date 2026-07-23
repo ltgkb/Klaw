@@ -41,12 +41,12 @@ v1.1 是设计草案。v2.0 以**已落地代码**为准重新对齐：保留 v1
 ### 2.1 MVP 目标（主链演示可用）— ✅ 已达成
 - ✅ 用户可上传文档，DeepDoc 解析后建立知识库（DeepDoc 已复制入 `backend/deepdoc/`）
 - ✅ 用户可在画布上拖拽节点编排工作流（XYFlow）
-- ✅ 工作流外可发现并调用本地工具（`web_fetch` 已经 OpenClaw 真实验证）；画布工具节点与其它工具实现仍为 P1
+- ✅ 工作流外可发现并调用本地工具，画布工具节点已支持 `web_fetch` 并经 OpenClaw 真实验证；其它工具实现仍为 P1
 - ✅ 定时任务通过本地 APScheduler 驱动工作流（PostgreSQL JobStore）
 - ✅ 执行结果通过自建推送服务发送至飞书/企微/Telegram（本轮新增渠道持久化配置）
 - ✅ 支持 OpenAI 作为 OpenClaw / Hermes 的 fallback
 - ✅（本轮新增）dev 环境内置 Mock LLM / 向量兜底，无 API Key 亦可完整演示
-- ✅（Kaiweb 适配）OpenClaw 接入自建 OpenAI 兼容网关 https://ai.kaiweb.net，真实 GLM 模型已可用（默认 glm-4.5）
+- ✅（Kaiweb 适配）支持 OpenClaw 接入自建 OpenAI 兼容网关 https://ai.kaiweb.net；需部署方配置有效 Key，当前审计环境未验证真实 GLM 推理
 
 ### 2.2 生产级目标（可对外交付）— ⬜ 路线图
 - ⬜ 多租户权限隔离（当前为单租户 owner 隔离）
@@ -60,7 +60,7 @@ v1.1 是设计草案。v2.0 以**已落地代码**为准重新对齐：保留 v1
 ## 3. 功能模块规格（实现现状）
 
 ### 3.1 知识库 — ✅
-- **文档上传**：PDF/DOCX/XLSX/PPTX/TXT/MD/HTML/JSON/EPUB；单文件上传；MinIO 存储；100MB 限制。
+- **文档上传/导入**：PDF/DOCX/XLSX/PPTX/CSV/TXT/MD/HTML/JSON/EPUB；可单文件上传，也可从知识库列表选择多文件/文件夹自动创建并导入；MinIO 存储；单文件 100MB 限制。
 - **文档解析**：DeepDoc（`backend/deepdoc/`，含 parser + vision）；按类型路由；输出标准化 `{content, content_type, page}`。PDF 用 `PlainParser`（无 OCR，M5 启用 Vision）。
 - **分块**：`fixed`（token 窗口）/ `recursive` / `markdown` / `semantic`（降级为 recursive）；表格整块保留；token 计数用 tiktoken。
 - **向量化**：默认使用 OpenAI 兼容 Embedding API（要求 1024 维）；TEI sidecar（BGE-M3）作为 `local-embedding` 可选 profile 和 API 失败后的本地回退；TEI 分批 embed（每批 16）避免 413；dev 环境均不可用时回退确定性哈希向量。
@@ -75,6 +75,8 @@ v1.1 是设计草案。v2.0 以**已落地代码**为准重新对齐：保留 v1
 - **循环节点**：数组、对象、JSON 或多行文本输入；选择一个未连线节点作为循环体，注入循环项与索引变量，顺序执行并聚合结构化结果；支持 1-100 次上限、单次失败后继续及迭代状态。
 - **执行引擎**：自研 asyncio DAG（Kahn 拓扑排序，逐节点执行，每步写 `node_states`）；后台任务 + SSE 实时状态推送（`progress`/`complete`）；Bearer Header 鉴权且每轮刷新跨 session 状态；暂停/恢复/取消（DB 状态轮询）；节点失败即终止。
 - **模板与复用**：CRUD 已就绪，预设模板留作路线图。
+- **工作流元数据**：列表可编辑名称与描述；画布继续独立保存 DAG。
+- **Agent 对话**：每个工作流支持多会话创建、切换和删除；消息按会话隔离，首条用户消息自动生成标题，旧客户端不传会话 ID 时使用最新会话。
 - **MCP**：二期。
 
 ### 3.3 模型供应商 — ✅
@@ -133,7 +135,7 @@ API 网关 FastAPI + JWT + RBAC + 全局异常 + 结构化 JSON 日志
 ---
 
 ## 5. 数据模型（已实现表）
-`users` · `knowledge_bases` · `documents` · `chunks` · `agent_flows` · `executions` · `schedule_jobs` · `memories` · `workspace_files`(本轮新增) · `push_channels`(本轮新增)。
+`users` · `knowledge_bases` · `documents` · `chunks` · `agent_flows` · `executions` · `conversations` · `messages` · `schedule_jobs` · `memories` · `workspace_files` · `push_channels` · `system_settings`。
 
 枚举修复：`executionstatus` 本轮补 `paused` 值（v1.1 迁移漏写，PG 上暂停会崩，已修）。
 
@@ -146,7 +148,7 @@ API 网关 FastAPI + JWT + RBAC + 全局异常 + 结构化 JSON 日志
 | 认证 | `/auth` register/login/refresh/me | ✅ |
 | 用户 | `/users` (admin 列表/改角色, `/me` 更新含 API Key) | ✅ |
 | 知识库 | `/knowledge-bases` CRUD + documents + chunks + search；失败原因/重解析 | ✅ |
-| Agent 画布 | `/agent-flows` CRUD + execute + executions + pause/resume/cancel + SSE stream | ✅ |
+| Agent 画布 | `/agent-flows` CRUD + execute + executions + pause/resume/cancel + SSE stream + chat conversations/messages | ✅ |
 | 模型供应商 | `/providers` + `/models` + `/chat` + `/chat/stream` | ✅ |
 | 本地 Agent | `/local-agent/tools` + `/tools/{id}/call` + `/health` | ✅ 本轮新增 |
 | 文件工作区 | `/files` CRUD + `/{id}/share` | ✅ 本轮新增 |
@@ -191,7 +193,7 @@ API 网关 FastAPI + JWT + RBAC + 全局异常 + 结构化 JSON 日志
 ---
 
 ## 10. 验证状态（2026-07-23）
-- 后端：`uv run pytest -q` → **249 passed**；前端 lint/build 与 Compose config 通过。
+- 后端：`uv run pytest -q -W error::RuntimeWarning` → **251 passed**（2 个上游 sqlglot 弃用警告）；前端 lint/build、Compose config 与 Alembic check 通过。
 - 真实依赖：独立 PostgreSQL 数据库、Redis、MinIO、Elasticsearch、OpenClaw、Hermes healthy；迁移到 `5d4e1a2b8f66 (head)` 且无 schema 漂移。
 - 真实链路：TXT/MD/HTML/JSON/CSV/文本 PDF/DOCX/XLSX/PPTX/EPUB→MinIO→解析→hash embedding（明确 dev fallback）→ES 检索引用，失败记录经 reparse 恢复；OpenClaw `web_fetch` 接口及画布 tool DAG success，loopback 在网关前被拒绝；APScheduler 实际触发，暂停后重启仍保持；通知渠道密文原地保留/轮换且引用不变；legacy 密码哈希升级、超长碰撞拒绝；空库并发注册恰好 1 admin/1 user。
 - 环境阻塞：reranker 工件下载失败；无真实 embedding/LLM/推送凭据；Browser 插件初始化失败。因此不宣称重排、生产向量质量、真实模型/外部推送或本批次浏览器 E2E 可用。详见 `docs/FEATURE_READINESS.md`。
@@ -207,3 +209,4 @@ API 网关 FastAPI + JWT + RBAC + 全局异常 + 结构化 JSON 日志
 | v2.1 | 2026-07-16 | OpenClaw 接入 Kaiweb OpenAI 兼容网关（glm-4.5 默认），Kaiweb 直连作为 fallback；兼容 reasoning_content |
 | v2.2 | 2026-07-22 | 以真实审计证据修正条件分支、SSE、Agent 对话、本地工具和环境阻塞状态；新增功能就绪矩阵 |
 | v2.3 | 2026-07-23 | 通知节点改用加密渠道引用；新增画布工具节点、工具可执行状态、CI 与真实依赖复验 |
+| v2.4 | 2026-07-23 | 补知识库批量导入、工作流元数据编辑、Agent 多会话 CRUD 与模型列表去重/错误态 |
