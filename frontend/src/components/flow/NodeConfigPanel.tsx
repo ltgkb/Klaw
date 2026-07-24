@@ -413,7 +413,6 @@ function VarPicker({ vars, onInsert }: { vars: VarOpt[]; onInsert: (token: strin
                 className="block w-full rounded px-2 py-1 text-left text-xs hover:bg-accent"
                 onClick={() => {
                   onInsert(v.token)
-                  setOpen(false)
                 }}
               >
                 {v.label}
