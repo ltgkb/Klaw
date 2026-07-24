@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import { AlertTriangle, Brain, Database, GitBranch, Type, Bell, BrainCog, Trash2, Plus, X, Play, Repeat2, Square, Globe, Loader2, RefreshCw, Settings2, Wrench } from "lucide-react"
-import { localAgentApi, providerApi, pushChannelApi, type NodeType, type ModelInfo, type PushChannelRead, type ToolInfo } from "@/lib/api"
+import { kbApi, localAgentApi, providerApi, pushChannelApi, type KBRead, type NodeType, type ModelInfo, type PushChannelRead, type ToolInfo } from "@/lib/api"
 import type { Node } from "@xyflow/react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -115,6 +115,84 @@ function ModelSelect({ value, onChange }: { value: string; onChange: (v: string)
         </p>
       )}
     </>
+  )
+}
+
+/** 检索节点知识库选择器：UI 展示名称，保存时仍使用后端稳定 UUID。 */
+function KnowledgeBaseSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [knowledgeBases, setKnowledgeBases] = useState<KBRead[]>([])
+  const [loaded, setLoaded] = useState(false)
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
+
+  useEffect(() => {
+    let active = true
+    setLoaded(false)
+    setLoadFailed(false)
+    kbApi
+      .list(1, 100)
+      .then((response) => {
+        if (active) setKnowledgeBases(response.data.items)
+      })
+      .catch(() => {
+        if (active) {
+          setKnowledgeBases([])
+          setLoadFailed(true)
+        }
+      })
+      .finally(() => {
+        if (active) setLoaded(true)
+      })
+    return () => {
+      active = false
+    }
+  }, [reloadKey])
+
+  const selectedStillExists = knowledgeBases.some((knowledgeBase) => knowledgeBase.id === value)
+
+  return (
+    <div className="space-y-2">
+      <Label htmlFor="ret-kb">知识库</Label>
+      <select
+        id="ret-kb"
+        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        disabled={!loaded || loadFailed}
+      >
+        <option value="">{loaded ? "选择知识库" : "加载知识库中…"}</option>
+        {value && !selectedStillExists && (
+          <option value={value}>当前配置的知识库（已不可见，请重新选择）</option>
+        )}
+        {knowledgeBases.map((knowledgeBase) => (
+          <option key={knowledgeBase.id} value={knowledgeBase.id}>
+            {knowledgeBase.name}
+          </option>
+        ))}
+      </select>
+      {loadFailed ? (
+        <div className="flex items-center justify-between text-xs text-destructive">
+          <span>知识库列表加载失败</span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={() => setReloadKey((key) => key + 1)}
+            title="重新加载知识库"
+            aria-label="重新加载知识库"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      ) : knowledgeBases.length === 0 && loaded ? (
+        <p className="text-xs text-muted-foreground">
+          暂无知识库，<Link to="/kb" className="underline">先创建知识库</Link>
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground">选择名称后，工作流会保存对应知识库引用。</p>
+      )}
+    </div>
   )
 }
 
@@ -591,18 +669,10 @@ export function NodeConfigPanel({ node, allNodes = [], onChange, onDelete }: Pro
 
         {nodeType === "retrieval" && (
           <>
-            <div className="space-y-2">
-              <Label htmlFor="ret-kb">知识库 ID</Label>
-              <Input
-                id="ret-kb"
-                value={(config.kb_id as string) || ""}
-                onChange={(e) => updateConfig("kb_id", e.target.value)}
-                placeholder="粘贴知识库 UUID"
-              />
-              <p className="text-xs text-muted-foreground">
-                在知识库详情页可获取 UUID
-              </p>
-            </div>
+            <KnowledgeBaseSelect
+              value={(config.kb_id as string) || ""}
+              onChange={(value) => updateConfig("kb_id", value)}
+            />
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label htmlFor="ret-query">查询模板</Label>
