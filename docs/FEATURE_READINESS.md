@@ -7,11 +7,11 @@
 ## 证据摘要
 
 - 后端基线：承接分支后全量回归 **249 passed**；补多会话 CRUD/owner 隔离与 LLM 节点内置知识库检索测试，最终 **255 passed**（2 个上游 sqlglot 弃用警告）。
-- 前端：`npm run lint` 通过（4 个既有 Fast Refresh warning）；`npm run build` 通过，主 JS 约 637 kB，仍有 code-splitting warning。
-- 真实依赖：独立 PostgreSQL 数据库 `claw_auto_20260723`、Redis、MinIO、Elasticsearch 8.11、OpenClaw 2026.7.1、Hermes 0.18.2 healthy；迁移到 head 且 `alembic check` 无漂移。
+- 前端：`npm run lint` 通过（4 个既有 Fast Refresh warning）；`npm run build` 通过，主 JS 约 647 kB，仍有 code-splitting warning。
+- 真实依赖：独立 PostgreSQL 数据库 `claw_auto_20260723`、Redis、MinIO、Elasticsearch 8.11、OpenClaw 2026.7.1、Hermes 0.18.2 healthy；迁移到 head 且 `alembic check` 无漂移。2026-07-25 部署复核中服务器全部健康项（含 embedding/reranker）均为 `ok`。
 - 真实 API：注册/登录、TXT/MD/HTML/JSON/CSV/PDF/DOCX/XLSX/PPTX/EPUB→MinIO→解析→hash embedding→ES 检索引用、OpenClaw `web_fetch`、画布 tool 节点、加密通知渠道/owner 拦截、APScheduler 实际触发及暂停后重启保持均通过；本次再验证 MD 标记检索、工作流元数据更新与会话创建/删除。
 - 浏览器：前端 dev server 可用，但 in-app Browser 运行时初始化被 `Cannot redefine property: process` 阻塞；本批次不沿用昨日截图宣称浏览器通过。
-- 环境阻塞：reranker 因 Hugging Face 工件下载连接失败退出，镜像构建因 Docker Hub metadata 超时失败；TEI BGE-M3/真实 LLM/外部推送凭据均不可用。哈希向量与自动化 mock 不作为生产能力证据。
+- 环境阻塞：2026-07-23 隔离环境的 reranker 因 Hugging Face 工件下载连接失败退出，镜像构建因 Docker Hub metadata 超时失败；本轮仍没有真实 LLM/外部推送凭据的调用证据。哈希向量、健康探测与自动化 mock 均不替代生产问答质量验证。
 
 ## 功能矩阵
 
@@ -27,7 +27,7 @@
 | 分块、引用、删除 | KB chunks/文档列表 | 可用；创建参数前端约束 | fixed/recursive/markdown；semantic 降级；强制 overlap < size；page/doc metadata | tests；危险窗口 422；真实 TXT chunk/引用 | 可用 | semantic 不是独立算法（P2） |
 | 向量化 | 摄取后台任务、系统配置 | 可配置 API | API -> TEI -> dev hash fallback | 真实 hash fallback，健康为 unhealthy | 部分可用 | 生产 embedding 环境阻塞（P0 部署条件） |
 | ES 索引与删除 | 摄取/删除触发 | 间接可见 | dense_vector + BM25；bulk 退避 | 真实索引、检索命中 `ORBIT-20260723` | 可用 | 缺索引备份/生命周期（P2） |
-| 混合检索、重排、引用 | KB 详情搜索、LLM 对话节点内置知识库 | KB 搜索与 LLM 节点均可配置；LLM 节点按名称选择 KB、Top-K、重排及查询模板 | kNN+BM25 + TEI Cross-Encoder；LLM 执行前做 owner 校验并注入编号证据 | 真实 ES 混合检索和引用；内置检索 4 条执行测试覆盖命中、空结果、owner 拒绝、旧流程兼容；reranker 本次启动失败 | 部分可用 | embedding 为 hash，且无真实 LLM/重排服务证据，回答质量不可作生产结论（P1 环境） |
+| 混合检索、重排、引用 | KB 详情搜索、LLM 对话节点内置知识库 | KB 搜索与 LLM 节点均可配置；LLM 节点按名称选择 KB、Top-K、重排及查询模板 | kNN+BM25 + TEI Cross-Encoder；LLM 执行前做 owner 校验并注入编号证据 | 真实 ES 混合检索和引用；内置检索 4 条执行测试覆盖命中、空结果、owner 拒绝、旧流程兼容；服务器 reranker 健康但本次未实际调用验证 | 部分可用 | 无真实 LLM+重排联合问答证据，回答质量不可作生产结论（P1 环境） |
 | 画布保存/加载/元数据编辑/导入导出 | `/flows`、`/flows/:id` | 列表新增名称/描述编辑入口 | PUT 保存名称、描述、DAG JSON、node size 和 sourceHandle | build；真实 API `Original Flow`→`Renamed Flow` 且描述更新 | 可用 | 模板和版本历史缺失（P2） |
 | 节点配置 | 画布属性栏 | 11 类节点有入口；LLM 节点可直接挂载知识库，无需额外连接 retrieval 节点 | 新增 tool；LLM 内置检索与独立 retrieval 共用 UUID/owner 安全校验 | execution/API tests；LLM-KB 定向 4 tests；真实 OpenClaw tool DAG success；前端 lint/build | 可用 | 私网 HTTP 连接策略需确认（产品决策） |
 | 真正条件分支 | condition 多 handle | 可用 | 只推进 matched sourceHandle，未命中标记 skipped | 自动化；真实 yes 命中、错误分支 skipped | 可用 | 复杂多分支汇合仍需扩展测试（P1） |
@@ -48,7 +48,7 @@
 | 系统设置/健康 | `/settings`、`/health` | 依赖状态可见 | PG/Redis/ES/MinIO/OpenClaw/Hermes/reranker 探活 | 前六项真实 ok；embedding error 使 overall degraded | 可用（诚实） | 缺延迟、版本和历史趋势（P2） |
 | 导航/空态/错误态/移动端 | 全站 | 响应式主导航和 Agent 选择 | React Router + toast | lint/build；本批次浏览器工具环境阻塞 | 部分可用 | 多页仍有静默 catch；无浏览器 CI（P1） |
 | Compose/迁移/部署 | Compose、Makefile | N/A | 透传 environment/debug；prod 拒绝弱 JWT/加密密钥；启动前 Alembic；health gating | config 通过；prod 默认值拒绝测试；真实迁移/head/check；六项依赖健康 | 部分可用 | reranker 下载和镜像 metadata 超时；固定 container_name 阻碍并行（P1/P2） |
-| 测试/lint/build/CI | Makefile、GitHub Actions | N/A | pytest/oxlint/tsc/Vite/Compose jobs；health tests 隔离本机服务 | 251 tests；lint/build/Compose config/Alembic check 通过 | 部分可用 | OAuth 缺 `workflow` scope，CI 尚未推送运行；bundle 645 kB；无浏览器 CI（P1） |
+| 测试/lint/build/CI | Makefile、GitHub Actions | N/A | pytest/oxlint/tsc/Vite/Compose jobs；health tests 隔离本机服务 | 255 tests；lint/build/Compose config/lock/compileall 通过；日期分支推送成功 | 部分可用 | 本轮未取得远端 CI 运行证据；bundle 647 kB；无浏览器 CI（P1） |
 
 ## 本轮矩阵变化
 
