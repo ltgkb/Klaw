@@ -612,7 +612,177 @@ async def test_http_node_error_does_not_expose_url_credentials(monkeypatch):
     assert token not in str(exc_info.value)
 
 
-# ── P1-4: retrieval 节点 KB owner 校验 ──
+# ── P1-4: retrieval / LLM 节点 KB owner 校验与检索增强 ──
+
+@pytest.mark.asyncio
+async def test_llm_node_retrieves_owned_kb_and_injects_grounded_context(
+    db_session, patch_session_factory, monkeypatch
+):
+    """LLM 节点可直接检索本人知识库，并把 Top-K/重排及证据传给模型。"""
+    owner = await _make_user(db_session, "llm-kb-owner@test.com")
+    kb = KnowledgeBase(name="产品问答", owner_id=owner.id)
+    db_session.add(kb)
+    await db_session.commit()
+    searches = []
+    llm_calls = []
+
+    async def fake_search(db, kb_id, request):
+        searches.append((kb_id, request))
+        return SimpleNamespace(hits=[
+            SimpleNamespace(content="标准答案 A"),
+            SimpleNamespace(content="补充证据 B"),
+        ])
+
+    async def fake_chat(messages, model="default", user=None, **kwargs):
+        llm_calls.append((messages, model, user))
+        return "有依据的回答 [1]"
+
+    monkeypatch.setattr("app.services.document_service.search", fake_search)
+    monkeypatch.setattr("app.services.execution_service.llm_chat", fake_chat)
+    dag = {
+        "nodes": [{
+            "id": "llm-1",
+            "type": "llm",
+            "position": {"x": 0, "y": 0},
+            "data": {"label": "回答", "config": {
+                "model": "default",
+                "system_prompt": "回答产品问题",
+                "user_template": "用户问题：{input}",
+                "kb_id": str(kb.id),
+                "kb_query_template": "检索：{input}",
+                "kb_top_k": 3,
+                "kb_rerank": True,
+            }},
+        }],
+        "edges": [],
+    }
+    flow = await _make_flow(db_session, owner.id, dag)
+    ex = await _make_execution(db_session, flow.id, {"input": "如何退款"})
+
+    await execution_service.run_flow(ex.id, flow.id)
+
+    await db_session.refresh(ex)
+    assert ex.status == ExecutionStatus.success
+    assert searches[0][0] == kb.id
+    assert searches[0][1].query == "检索：如何退款"
+    assert searches[0][1].top_k == 3
+    assert searches[0][1].rerank is True
+    messages, model, called_user = llm_calls[0]
+    assert model == "default"
+    assert called_user.id == owner.id
+    assert "资料不足时明确说明" in messages[0]["content"]
+    assert "用户问题：如何退款" in messages[1]["content"]
+    assert "[1] 标准答案 A" in messages[1]["content"]
+    assert "[2] 补充证据 B" in messages[1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_llm_node_rejects_foreign_kb_before_model_call(
+    db_session, patch_session_factory, monkeypatch
+):
+    """LLM 节点不能借内置检索访问其他 owner 的知识库。"""
+    owner = await _make_user(db_session, "llm-flow-owner@test.com")
+    other = await _make_user(db_session, "llm-kb-other@test.com")
+    kb = KnowledgeBase(name="他人私有库", owner_id=other.id)
+    db_session.add(kb)
+    await db_session.commit()
+    llm_calls = []
+
+    async def unexpected_chat(*args, **kwargs):
+        llm_calls.append((args, kwargs))
+        return "不应调用"
+
+    monkeypatch.setattr("app.services.execution_service.llm_chat", unexpected_chat)
+    dag = {
+        "nodes": [{
+            "id": "llm-1",
+            "type": "llm",
+            "position": {"x": 0, "y": 0},
+            "data": {"label": "回答", "config": {
+                "user_template": "{input}",
+                "kb_id": str(kb.id),
+            }},
+        }],
+        "edges": [],
+    }
+    flow = await _make_flow(db_session, owner.id, dag)
+    ex = await _make_execution(db_session, flow.id)
+
+    await execution_service.run_flow(ex.id, flow.id)
+
+    await db_session.refresh(ex)
+    assert ex.status == ExecutionStatus.failed
+    assert "无权访问" in (ex.error_message or "")
+    assert llm_calls == []
+
+
+@pytest.mark.asyncio
+async def test_llm_node_without_kb_keeps_existing_message_contract(monkeypatch):
+    """旧工作流未配置知识库时，不改变发送给模型的消息。"""
+    llm_calls = []
+
+    async def fake_chat(messages, model="default", user=None, **kwargs):
+        llm_calls.append((messages, model))
+        return "旧行为回答"
+
+    monkeypatch.setattr("app.services.execution_service.llm_chat", fake_chat)
+
+    result = await execution_service._execute_llm_node(
+        {
+            "model": "legacy-model",
+            "system_prompt": "原系统提示",
+            "user_template": "问题：{input}",
+        },
+        {"input": "旧工作流"},
+    )
+
+    assert result == "旧行为回答"
+    assert llm_calls == [([
+        {"role": "system", "content": "原系统提示"},
+        {"role": "user", "content": "问题：旧工作流"},
+    ], "legacy-model")]
+
+
+@pytest.mark.asyncio
+async def test_llm_node_marks_empty_kb_results_for_conservative_answer(
+    db_session, patch_session_factory, monkeypatch
+):
+    """知识库无命中时仍明确告知模型证据不足，避免伪造检索结果。"""
+    owner = await _make_user(db_session, "llm-empty-kb@test.com")
+    kb = KnowledgeBase(name="空知识库", owner_id=owner.id)
+    db_session.add(kb)
+    await db_session.commit()
+    llm_messages = []
+
+    async def fake_search(db, kb_id, request):
+        return SimpleNamespace(hits=[])
+
+    async def fake_chat(messages, model="default", user=None, **kwargs):
+        llm_messages.extend(messages)
+        return "未找到相关资料"
+
+    monkeypatch.setattr("app.services.document_service.search", fake_search)
+    monkeypatch.setattr("app.services.execution_service.llm_chat", fake_chat)
+    dag = {
+        "nodes": [{
+            "id": "llm-1",
+            "type": "llm",
+            "position": {"x": 0, "y": 0},
+            "data": {"label": "回答", "config": {
+                "user_template": "{input}",
+                "kb_id": str(kb.id),
+            }},
+        }],
+        "edges": [],
+    }
+    flow = await _make_flow(db_session, owner.id, dag)
+    ex = await _make_execution(db_session, flow.id)
+
+    await execution_service.run_flow(ex.id, flow.id)
+
+    await db_session.refresh(ex)
+    assert ex.status == ExecutionStatus.success
+    assert "[未检索到与问题相关的知识库内容]" in llm_messages[-1]["content"]
 
 @pytest.mark.asyncio
 async def test_retrieval_node_rejects_other_users_kb(db_session, patch_session_factory, mock_llm):

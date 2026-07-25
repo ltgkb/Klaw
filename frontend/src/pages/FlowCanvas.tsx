@@ -173,7 +173,15 @@ function PanelResizeHandle({ label, value, min, max, direction, onPointerDown, o
 const DEFAULT_CONFIGS: Record<CanvasNodeType, Record<string, unknown>> = {
   start: { template: "{input}" },
   end: { template: "" },
-  llm: { model: "default", system_prompt: "", user_template: "{input}" },
+  llm: {
+    model: "default",
+    system_prompt: "",
+    user_template: "{input}",
+    kb_id: "",
+    kb_query_template: "{input}",
+    kb_top_k: 5,
+    kb_rerank: true,
+  },
   retrieval: { kb_id: "", query_template: "{input}", top_k: 5 },
   condition: { cases: [{ id: "case1", name: "条件1", expression: "{input} == ''" }], default_name: "默认" },
   loop: { items_template: "{input}", body_node_id: "", item_variable: "item", index_variable: "index", max_iterations: 20, continue_on_error: false },

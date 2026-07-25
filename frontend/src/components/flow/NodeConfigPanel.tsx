@@ -118,8 +118,18 @@ function ModelSelect({ value, onChange }: { value: string; onChange: (v: string)
   )
 }
 
-/** 检索节点知识库选择器：UI 展示名称，保存时仍使用后端稳定 UUID。 */
-function KnowledgeBaseSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+/** 知识库选择器：UI 展示名称，保存时仍使用后端稳定 UUID。 */
+function KnowledgeBaseSelect({
+  value,
+  onChange,
+  inputId = "ret-kb",
+  optional = false,
+}: {
+  value: string
+  onChange: (v: string) => void
+  inputId?: string
+  optional?: boolean
+}) {
   const [knowledgeBases, setKnowledgeBases] = useState<KBRead[]>([])
   const [loaded, setLoaded] = useState(false)
   const [loadFailed, setLoadFailed] = useState(false)
@@ -152,9 +162,9 @@ function KnowledgeBaseSelect({ value, onChange }: { value: string; onChange: (v:
 
   return (
     <div className="space-y-2">
-      <Label htmlFor="ret-kb">知识库</Label>
+      <Label htmlFor={inputId}>知识库{optional ? "（可选）" : ""}</Label>
       <select
-        id="ret-kb"
+        id={inputId}
         className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
         value={value}
         onChange={(event) => onChange(event.target.value)}
@@ -190,7 +200,11 @@ function KnowledgeBaseSelect({ value, onChange }: { value: string; onChange: (v:
           暂无知识库，<Link to="/kb" className="underline">先创建知识库</Link>
         </p>
       ) : (
-        <p className="text-xs text-muted-foreground">选择名称后，工作流会保存对应知识库引用。</p>
+        <p className="text-xs text-muted-foreground">
+          {optional
+            ? "选择后，此节点会先检索知识库，再结合命中内容回答。"
+            : "选择名称后，工作流会保存对应知识库引用。"}
+        </p>
       )}
     </div>
   )
@@ -663,6 +677,52 @@ export function NodeConfigPanel({ node, allNodes = [], onChange, onDelete }: Pro
                 {`{节点名} 引用上游节点输出, {input}/{sys.query} 引用输入, {history} 引用对话历史`}
               </p>
             </div>
+            <div className="border-t pt-4">
+              <KnowledgeBaseSelect
+                inputId="llm-kb"
+                optional
+                value={(config.kb_id as string) || ""}
+                onChange={(value) => updateConfig("kb_id", value)}
+              />
+            </div>
+            {(config.kb_id as string) && (
+              <>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="llm-kb-query">知识库查询模板</Label>
+                    <VarPicker vars={availableVars} onInsert={(t) => insertVar("kb_query_template", t)} />
+                  </div>
+                  <Input
+                    id="llm-kb-query"
+                    value={(config.kb_query_template as string) || "{input}"}
+                    onChange={(e) => updateConfig("kb_query_template", e.target.value)}
+                    placeholder="{input}"
+                  />
+                </div>
+                <div className="grid grid-cols-[1fr_auto] items-end gap-3">
+                  <div className="space-y-2">
+                    <Label htmlFor="llm-kb-topk">检索条数</Label>
+                    <Input
+                      id="llm-kb-topk"
+                      type="number"
+                      value={(config.kb_top_k as number) ?? 5}
+                      onChange={(e) => updateConfig("kb_top_k", parseInt(e.target.value) || 5)}
+                      min={1}
+                      max={50}
+                    />
+                  </div>
+                  <label className="flex h-9 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-input"
+                      checked={(config.kb_rerank as boolean | undefined) ?? true}
+                      onChange={(e) => updateConfig("kb_rerank", e.target.checked)}
+                    />
+                    智能重排
+                  </label>
+                </div>
+              </>
+            )}
           </>
         )}
 

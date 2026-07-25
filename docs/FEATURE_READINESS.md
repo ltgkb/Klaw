@@ -1,12 +1,12 @@
 # Klaw 功能就绪矩阵
 
-> 审计批次：2026-07-23（Asia/Shanghai）
+> 审计批次：2026-07-23，2026-07-25 持续补全（Asia/Shanghai）
 > 目标分支：`auto-iter-20260723`
 > 证据原则：状态只依据本批次代码、自动化和真实运行结果；SQLite/mock 不替代 PostgreSQL、模型、网关或外部渠道证据。
 
 ## 证据摘要
 
-- 后端基线：承接分支后全量回归 **249 passed**；本次补多会话 CRUD/owner 隔离测试，最终 **251 passed**（2 个上游 sqlglot 弃用警告）。
+- 后端基线：承接分支后全量回归 **249 passed**；补多会话 CRUD/owner 隔离与 LLM 节点内置知识库检索测试，最终 **255 passed**（2 个上游 sqlglot 弃用警告）。
 - 前端：`npm run lint` 通过（4 个既有 Fast Refresh warning）；`npm run build` 通过，主 JS 约 637 kB，仍有 code-splitting warning。
 - 真实依赖：独立 PostgreSQL 数据库 `claw_auto_20260723`、Redis、MinIO、Elasticsearch 8.11、OpenClaw 2026.7.1、Hermes 0.18.2 healthy；迁移到 head 且 `alembic check` 无漂移。
 - 真实 API：注册/登录、TXT/MD/HTML/JSON/CSV/PDF/DOCX/XLSX/PPTX/EPUB→MinIO→解析→hash embedding→ES 检索引用、OpenClaw `web_fetch`、画布 tool 节点、加密通知渠道/owner 拦截、APScheduler 实际触发及暂停后重启保持均通过；本次再验证 MD 标记检索、工作流元数据更新与会话创建/删除。
@@ -27,9 +27,9 @@
 | 分块、引用、删除 | KB chunks/文档列表 | 可用；创建参数前端约束 | fixed/recursive/markdown；semantic 降级；强制 overlap < size；page/doc metadata | tests；危险窗口 422；真实 TXT chunk/引用 | 可用 | semantic 不是独立算法（P2） |
 | 向量化 | 摄取后台任务、系统配置 | 可配置 API | API -> TEI -> dev hash fallback | 真实 hash fallback，健康为 unhealthy | 部分可用 | 生产 embedding 环境阻塞（P0 部署条件） |
 | ES 索引与删除 | 摄取/删除触发 | 间接可见 | dense_vector + BM25；bulk 退避 | 真实索引、检索命中 `ORBIT-20260723` | 可用 | 缺索引备份/生命周期（P2） |
-| 混合检索、重排、引用 | KB 详情搜索 | rerank 开关可用 | kNN+BM25 + TEI Cross-Encoder | 真实 ES 混合检索和引用；reranker 本次启动失败 | 部分可用 | embedding 为 hash 且本次无重排，质量不可作生产结论（P1 环境） |
+| 混合检索、重排、引用 | KB 详情搜索、LLM 对话节点内置知识库 | KB 搜索与 LLM 节点均可配置；LLM 节点按名称选择 KB、Top-K、重排及查询模板 | kNN+BM25 + TEI Cross-Encoder；LLM 执行前做 owner 校验并注入编号证据 | 真实 ES 混合检索和引用；内置检索 4 条执行测试覆盖命中、空结果、owner 拒绝、旧流程兼容；reranker 本次启动失败 | 部分可用 | embedding 为 hash，且无真实 LLM/重排服务证据，回答质量不可作生产结论（P1 环境） |
 | 画布保存/加载/元数据编辑/导入导出 | `/flows`、`/flows/:id` | 列表新增名称/描述编辑入口 | PUT 保存名称、描述、DAG JSON、node size 和 sourceHandle | build；真实 API `Original Flow`→`Renamed Flow` 且描述更新 | 可用 | 模板和版本历史缺失（P2） |
-| 节点配置 | 画布属性栏 | 11 类节点有入口 | 新增 tool；其余 start/end/text/llm/retrieval/condition/loop/http/notify/memory | execution/API tests；真实 OpenClaw tool DAG success | 可用 | 私网 HTTP 连接策略需确认（产品决策） |
+| 节点配置 | 画布属性栏 | 11 类节点有入口；LLM 节点可直接挂载知识库，无需额外连接 retrieval 节点 | 新增 tool；LLM 内置检索与独立 retrieval 共用 UUID/owner 安全校验 | execution/API tests；LLM-KB 定向 4 tests；真实 OpenClaw tool DAG success；前端 lint/build | 可用 | 私网 HTTP 连接策略需确认（产品决策） |
 | 真正条件分支 | condition 多 handle | 可用 | 只推进 matched sourceHandle，未命中标记 skipped | 自动化；真实 yes 命中、错误分支 skipped | 可用 | 复杂多分支汇合仍需扩展测试（P1） |
 | 循环节点 | 画布 loop | 可配置 detached body | 1-100 次、失败继续、迭代状态 | 自动化 | 部分可用 | 仅支持单个 detached body，非子图迭代（P1/P2） |
 | 执行、SSE、失败恢复 | 画布/执行详情 | 可用 | PG execution + SSE + stale reaper；Nginx 禁用缓冲 | 修复 identity-map 永久 progress；容器 Nginx 实时 progress→complete | 可用 | 无 durable checkpoint/幂等锁（P2） |
@@ -72,6 +72,7 @@
 18. 工作流列表新增名称和描述编辑入口，复用 owner-scoped PUT；真实 PostgreSQL API 更新回读一致。
 19. Agent 对话从每工作流固定单会话升级为 owner 隔离的多会话列表/创建/切换/删除，首条消息自动命名，并保持旧 API 调用兼容。
 20. 模型选择器统一按 ID 去重，修正自动路由文案，并将接口加载失败与真正空模型库区分且支持重试。
+21. LLM 对话节点新增可选知识库名称选择、查询模板、Top-K 与智能重排；执行时校验 owner、注入编号证据并要求资料不足时明确说明，旧工作流未配置知识库时消息契约保持不变。
 
 ## 对标参考（官方资料，检索日期 2026-07-23）
 
