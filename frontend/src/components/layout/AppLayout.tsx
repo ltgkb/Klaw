@@ -30,7 +30,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       {/* 侧边栏 */}
       <aside className="hidden w-60 shrink-0 flex-col border-r bg-secondary/30 md:flex">
         <div className="flex h-14 items-center border-b px-4 font-semibold">
-          🐾 Claw-Native Agent
+          Klaw期算平台
         </div>
         <nav className="flex-1 space-y-1 p-2">
           {navItems
@@ -58,7 +58,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         {/* 顶栏 */}
         <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b px-3 sm:px-6">
           <div className="min-w-0 truncate text-sm text-muted-foreground">
-            Claw-Native Agent 平台
+            Klaw期算平台
           </div>
           <div className="flex shrink-0 items-center gap-2 sm:gap-4">
             <span className="hidden text-sm sm:inline">

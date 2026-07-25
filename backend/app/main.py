@@ -98,7 +98,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title=settings.app_name,
         version="0.1.0",
-        description="Claw-Native Agent 平台 — 本地 OpenClaw/Hermes 为一等公民的 Agent 平台",
+        description="Klaw期算平台 — 本地 OpenClaw/Hermes 驱动的知识库与 Agent 工作流平台",
         docs_url="/docs",
         redoc_url="/redoc",
         lifespan=lifespan,

@@ -43,7 +43,7 @@ export function Register() {
       <Card className="w-[400px]">
         <CardHeader>
           <CardTitle className="text-2xl">注册</CardTitle>
-          <CardDescription>创建 Claw-Native Agent 平台账号</CardDescription>
+          <CardDescription>创建 Klaw期算平台账号</CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit}>
           <CardContent className="space-y-4">

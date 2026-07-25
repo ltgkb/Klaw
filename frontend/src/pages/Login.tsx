@@ -43,7 +43,7 @@ export function Login() {
       <Card className="w-[400px]">
         <CardHeader>
           <CardTitle className="text-2xl">登录</CardTitle>
-          <CardDescription>登录到 Claw-Native Agent 平台</CardDescription>
+          <CardDescription>登录到 Klaw期算平台</CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit}>
           <CardContent className="space-y-4">

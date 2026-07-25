@@ -1,4 +1,4 @@
-# Claw-Native Agent 平台 — PRD v2
+# Klaw期算平台 — PRD v2
 
 > **版本**: v2.3
 > **日期**: 2026-07-23

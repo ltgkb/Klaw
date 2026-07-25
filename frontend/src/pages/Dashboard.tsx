@@ -77,7 +77,7 @@ export function Dashboard() {
       <div>
         <h1 className="text-2xl font-semibold">欢迎，{user?.name} 👋</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Claw-Native Agent 平台 — 本地 OpenClaw/Hermes 为一等公民的 Agent 平台
+          Klaw期算平台 — 本地 OpenClaw/Hermes 驱动的知识库与 Agent 工作流
         </p>
       </div>
 
@@ -117,4 +117,3 @@ export function Dashboard() {
     </div>
   )
 }
-

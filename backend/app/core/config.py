@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     )
 
     # ── 应用 ──
-    app_name: str = "Claw-Native Agent Platform"
+    app_name: str = "Klaw期算平台"
     environment: Literal["dev", "staging", "prod"] = "dev"
     debug: bool = True
     api_v1_prefix: str = "/api/v1"
