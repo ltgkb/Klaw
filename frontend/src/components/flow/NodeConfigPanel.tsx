@@ -721,6 +721,23 @@ export function NodeConfigPanel({ node, allNodes = [], onChange, onDelete }: Pro
                     智能重排
                   </label>
                 </div>
+                {((config.kb_rerank as boolean | undefined) ?? true) && (
+                  <div className="space-y-2">
+                    <Label htmlFor="llm-kb-min-relevance">最低相关度</Label>
+                    <Input
+                      id="llm-kb-min-relevance"
+                      type="number"
+                      value={(config.kb_min_relevance as number) ?? 0.35}
+                      onChange={(e) => updateConfig("kb_min_relevance", parseFloat(e.target.value) || 0)}
+                      min={0}
+                      max={1}
+                      step={0.05}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      低于此重排分数的内容不会交给模型，减少无关片段干扰。
+                    </p>
+                  </div>
+                )}
               </>
             )}
           </>

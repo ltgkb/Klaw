@@ -755,7 +755,9 @@ async def test_llm_node_marks_empty_kb_results_for_conservative_answer(
     llm_messages = []
 
     async def fake_search(db, kb_id, request):
-        return SimpleNamespace(hits=[])
+        return SimpleNamespace(hits=[
+            SimpleNamespace(content="卖", rerank_score=0.02),
+        ])
 
     async def fake_chat(messages, model="default", user=None, **kwargs):
         llm_messages.extend(messages)
@@ -783,6 +785,8 @@ async def test_llm_node_marks_empty_kb_results_for_conservative_answer(
     await db_session.refresh(ex)
     assert ex.status == ExecutionStatus.success
     assert "[未检索到与问题相关的知识库内容]" in llm_messages[-1]["content"]
+    assert "卖" not in llm_messages[-1]["content"]
+    assert "问候或寒暄" in llm_messages[0]["content"]
 
 @pytest.mark.asyncio
 async def test_retrieval_node_rejects_other_users_kb(db_session, patch_session_factory, mock_llm):

@@ -181,6 +181,7 @@ const DEFAULT_CONFIGS: Record<CanvasNodeType, Record<string, unknown>> = {
     kb_query_template: "{input}",
     kb_top_k: 5,
     kb_rerank: true,
+    kb_min_relevance: 0.35,
   },
   retrieval: { kb_id: "", query_template: "{input}", top_k: 5 },
   condition: { cases: [{ id: "case1", name: "条件1", expression: "{input} == ''" }], default_name: "默认" },
