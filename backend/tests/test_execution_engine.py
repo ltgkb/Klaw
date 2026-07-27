@@ -87,6 +87,36 @@ def _notify_node(channel_ids):
     }
 
 
+def test_kb_query_expansion_matches_triggers_and_deduplicates():
+    expanded = execution_service._expand_kb_query(
+        "供应商如何申请入驻",
+        {
+            "入驻": "申请成为 KAI 容量供应商 合作流程",
+            "供应商申请": "申请成为 KAI 容量供应商 合作流程",
+        },
+    )
+    assert expanded.startswith("供应商如何申请入驻 ")
+    assert expanded.count("申请成为 KAI 容量供应商") == 1
+
+
+def test_kb_query_expansion_leaves_unrelated_queries_unchanged():
+    query = "关闸后如何处理订单"
+    assert execution_service._expand_kb_query(query, {"入驻": "申请 准入"}) == query
+
+
+def test_llm_output_can_strip_markdown_asterisks():
+    content = "**重点**\n* 第一项\n普通文本"
+    result = execution_service._format_llm_output(
+        content, {"strip_markdown_asterisks": True}
+    )
+    assert "*" not in result
+    assert result == "重点\n 第一项\n普通文本"
+
+
+def test_llm_output_preserves_markdown_by_default():
+    assert execution_service._format_llm_output("**重点**", {}) == "**重点**"
+
+
 @pytest.mark.asyncio
 async def test_notify_node_resolves_owner_channel(
     db_session, patch_session_factory, monkeypatch

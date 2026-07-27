@@ -661,6 +661,30 @@ def _execute_end_node(config: dict, context: dict, node_outputs: dict | None) ->
     return context.get("input", "")
 
 
+def _expand_kb_query(query: str, expansions) -> str:
+    """按配置的关键词触发关联检索词扩展，并对扩展文本去重。"""
+    if not isinstance(expansions, dict):
+        return query
+    additions = []
+    seen = set()
+    for trigger, related in expansions.items():
+        if not isinstance(trigger, str) or trigger not in query:
+            continue
+        values = related if isinstance(related, list) else [related]
+        for value in values:
+            if isinstance(value, str) and value.strip() and value.strip() not in seen:
+                additions.append(value.strip())
+                seen.add(value.strip())
+    return " ".join([query, *additions]) if additions else query
+
+
+def _format_llm_output(content: str, config: dict) -> str:
+    """按节点配置清理最终展示文本。"""
+    if config.get("strip_markdown_asterisks"):
+        content = content.replace("*", "")
+    return content.strip()
+
+
 async def _execute_llm_node(config: dict, context: dict, user=None) -> str:
     """LLM 对话节点。
 
@@ -673,6 +697,8 @@ async def _execute_llm_node(config: dict, context: dict, user=None) -> str:
       - kb_top_k: 检索条数
       - kb_rerank: 是否启用 Cross-Encoder 重排
       - kb_min_relevance: 重排最低相关度，低于该值的结果不注入模型
+      - kb_query_expansions: {触发词: 关联检索词}，仅命中触发词时扩展查询
+      - strip_markdown_asterisks: 最终输出移除 Markdown 星号
     """
     model = config.get("model", "default")
     system_prompt = config.get("system_prompt", "")
@@ -692,6 +718,7 @@ async def _execute_llm_node(config: dict, context: dict, user=None) -> str:
         query = _render_template(query_template, context).strip()
         if not query:
             query = str(context.get("input") or context.get("sys.query") or user_content)
+        query = _expand_kb_query(query, config.get("kb_query_expansions"))
 
         request = SearchRequest(
             query=query,
@@ -736,7 +763,8 @@ async def _execute_llm_node(config: dict, context: dict, user=None) -> str:
         messages.append({"role": "system", "content": effective_system_prompt})
     messages.append({"role": "user", "content": user_content})
 
-    return await llm_chat(messages, model=model, user=user)
+    answer = await llm_chat(messages, model=model, user=user)
+    return _format_llm_output(answer, config)
 
 
 async def _search_owned_knowledge_base(
