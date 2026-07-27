@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 720  # 12 小时
     refresh_token_expire_days: int = 7
+    # Public supplier customer-service API. Keep the key in .env, never in source.
+    supplier_api_key: str = ""
+    supplier_flow_id: str = ""
+    supplier_api_timeout_seconds: int = 120
     # AES-256-GCM 主密钥 (32 bytes, hex 编码 64 字符)
     encryption_key: str = "0" * 64  # 生产环境必须替换
 
@@ -92,7 +96,7 @@ class Settings(BaseSettings):
     kaiweb_model: str = "glm-4.5-air"
 
     # ── CORS ──
-    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
+    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000", "*"]
 
     @model_validator(mode="after")
     def _reject_default_secrets_in_prod(self) -> "Settings":

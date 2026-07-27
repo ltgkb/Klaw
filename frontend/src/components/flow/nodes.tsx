@@ -321,6 +321,7 @@ function DeletableEdge({
         <button
           className="nodrag nopan flex h-5 w-5 items-center justify-center rounded-full border border-gray-300 bg-white text-xs text-gray-500 shadow hover:bg-red-50 hover:text-red-600"
           style={{
+            position: "absolute",
             transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
             pointerEvents: "all",
           }}

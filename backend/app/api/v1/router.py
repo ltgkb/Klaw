@@ -15,6 +15,7 @@ from app.api.v1.endpoints import (
     providers,
     push_channels,
     schedules,
+    supplier_api,
     system_settings,
     users,
 )
@@ -25,6 +26,7 @@ api_router.include_router(users.router)
 api_router.include_router(kb.router)
 api_router.include_router(agent_flows.router)
 api_router.include_router(agent_chat.router)
+api_router.include_router(supplier_api.router)
 api_router.include_router(providers.router)
 api_router.include_router(memories.router)
 api_router.include_router(schedules.router)
