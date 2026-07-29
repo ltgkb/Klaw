@@ -254,9 +254,9 @@ export const kbApi = {
     api.post<DocumentRead>(`/knowledge-bases/${kbId}/documents/${docId}/reparse`),
 
   // Chunk 查询 (契约4)
-  listChunks: (kbId: string, page = 1, pageSize = 10) =>
+  listChunks: (kbId: string, page = 1, pageSize = 10, docId?: string) =>
     api.get<PageResponse<ChunkRead>>(`/knowledge-bases/${kbId}/chunks`, {
-      params: { page, page_size: pageSize },
+      params: { page, page_size: pageSize, ...(docId ? { doc_id: docId } : {}) },
     }),
 
   updateChunk: (kbId: string, chunkId: string, content: string) =>

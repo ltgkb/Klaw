@@ -64,6 +64,7 @@ export function KBDetail() {
   const [savingChunkId, setSavingChunkId] = useState<string | null>(null)
   const [selectedChunkIds, setSelectedChunkIds] = useState<Set<string>>(new Set())
   const [deletingChunks, setDeletingChunks] = useState(false)
+  const [chunkDocId, setChunkDocId] = useState("")
   const CHUNK_PAGE_SIZE = 10
 
   const fetchAll = async () => {
@@ -93,7 +94,7 @@ export function KBDetail() {
     if (!kbId) return
     setChunksLoading(true)
     try {
-      const resp = await kbApi.listChunks(kbId, page, CHUNK_PAGE_SIZE)
+      const resp = await kbApi.listChunks(kbId, page, CHUNK_PAGE_SIZE, chunkDocId || undefined)
       setChunks(resp.data.items)
       setChunkTotal(resp.data.total)
       setChunkPage(resp.data.page)
@@ -109,7 +110,7 @@ export function KBDetail() {
   useEffect(() => {
     fetchChunks(1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kbId])
+  }, [kbId, chunkDocId])
 
   // 如果有文档正在解析，轮询状态
   useEffect(() => {
@@ -440,22 +441,39 @@ export function KBDetail() {
               <CardTitle className="text-base">Chunk 浏览</CardTitle>
               <CardDescription>共 {chunkTotal} 个分块 · 每页 {CHUNK_PAGE_SIZE} 条</CardDescription>
             </div>
-            {chunks.length > 0 && (
+            {(docs.length > 0 || chunks.length > 0) && (
               <div className="flex flex-wrap items-center gap-2">
-                <Button variant="outline" size="sm" onClick={toggleCurrentPage} disabled={deletingChunks}>
-                  {chunks.every((chunk) => selectedChunkIds.has(chunk.id)) ? "取消全选" : "全选当前页"}
-                </Button>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={() => deleteSelectedChunks(Array.from(selectedChunkIds))}
-                  disabled={selectedChunkIds.size === 0 || deletingChunks}
+                <Label htmlFor="chunk-document" className="sr-only">选择来源文件</Label>
+                <select
+                  id="chunk-document"
+                  value={chunkDocId}
+                  onChange={(event) => setChunkDocId(event.target.value)}
+                  disabled={chunksLoading || deletingChunks}
+                  className="h-8 max-w-full border border-input bg-background px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring sm:max-w-72"
                 >
-                  {deletingChunks
-                    ? <Loader2 className="h-4 w-4 animate-spin" />
-                    : <Trash2 className="h-4 w-4" />}
-                  删除所选{selectedChunkIds.size > 0 ? ` (${selectedChunkIds.size})` : ""}
-                </Button>
+                  <option value="">全部文件</option>
+                  {docs.map((doc) => (
+                    <option key={doc.id} value={doc.id}>{doc.filename}</option>
+                  ))}
+                </select>
+                {chunks.length > 0 && (
+                  <>
+                    <Button variant="outline" size="sm" onClick={toggleCurrentPage} disabled={deletingChunks}>
+                      {chunks.every((chunk) => selectedChunkIds.has(chunk.id)) ? "取消全选" : "全选当前页"}
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={() => deleteSelectedChunks(Array.from(selectedChunkIds))}
+                      disabled={selectedChunkIds.size === 0 || deletingChunks}
+                    >
+                      {deletingChunks
+                        ? <Loader2 className="h-4 w-4 animate-spin" />
+                        : <Trash2 className="h-4 w-4" />}
+                      删除所选{selectedChunkIds.size > 0 ? ` (${selectedChunkIds.size})` : ""}
+                    </Button>
+                  </>
+                )}
               </div>
             )}
           </div>
