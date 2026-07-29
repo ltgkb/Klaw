@@ -9,11 +9,13 @@ from app.api.v1.endpoints import (
     files,
     health,
     kb,
+    kai_knowledge_api,
     local_agent,
     memories,
     notifications,
     providers,
     push_channels,
+    public_chat,
     schedules,
     supplier_api,
     system_settings,
@@ -26,7 +28,9 @@ api_router.include_router(users.router)
 api_router.include_router(kb.router)
 api_router.include_router(agent_flows.router)
 api_router.include_router(agent_chat.router)
+api_router.include_router(public_chat.router)
 api_router.include_router(supplier_api.router)
+api_router.include_router(kai_knowledge_api.router)
 api_router.include_router(providers.router)
 api_router.include_router(memories.router)
 api_router.include_router(schedules.router)

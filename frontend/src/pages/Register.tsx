@@ -30,7 +30,7 @@ export function Register() {
     setLoading(true)
     try {
       await register(email, name, password)
-      navigate("/")
+      navigate("/kb")
     } catch {
       setError("注册失败，该邮箱可能已注册")
     } finally {
@@ -43,7 +43,7 @@ export function Register() {
       <Card className="w-[400px]">
         <CardHeader>
           <CardTitle className="text-2xl">注册</CardTitle>
-          <CardDescription>创建 Klaw期算平台账号</CardDescription>
+          <CardDescription>创建 KAI知识账号</CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit}>
           <CardContent className="space-y-4">

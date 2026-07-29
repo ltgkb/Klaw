@@ -293,7 +293,7 @@ export function Settings() {
     try {
       const resp = await notifyApi.send({
         title: "测试推送",
-        content: `来自 Klaw期算平台的渠道连通性测试 (${c.name})`,
+        content: `来自 KAI知识的渠道连通性测试 (${c.name})`,
         channels: [],
         channel_ids: [c.id],
       })

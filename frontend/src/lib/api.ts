@@ -556,33 +556,6 @@ export const memoryApi = {
     api.get<MemoryRead[]>("/memories/search", { params: { q, ...params } }),
 }
 
-// ── 定时任务 API (M4) ──
-
-export type ScheduleStatus = "active" | "paused"
-
-export interface ScheduleRead {
-  id: string
-  flow_id: string
-  name: string
-  cron: string
-  input: Record<string, unknown> | null
-  status: ScheduleStatus
-  next_run_time: string | null
-  apscheduler_job_id: string | null
-  created_at: string
-  updated_at: string
-}
-
-export const scheduleApi = {
-  list: () => api.get<ScheduleRead[]>("/schedules"),
-  get: (id: string) => api.get<ScheduleRead>(`/schedules/${id}`),
-  create: (data: { flow_id: string; name: string; cron: string; input?: Record<string, unknown> | null }) =>
-    api.post<ScheduleRead>("/schedules", data),
-  update: (id: string, data: { name?: string; cron?: string; status?: ScheduleStatus; input?: Record<string, unknown> | null }) =>
-    api.put<ScheduleRead>(`/schedules/${id}`, data),
-  delete: (id: string) => api.delete(`/schedules/${id}`),
-}
-
 // ── 推送通知 API (M4) ──
 
 export interface NotifyChannelConfig {
@@ -770,4 +743,46 @@ export const chatApi = {
       `/agent-flows/${flowId}/chat`,
       { message, conversation_id: conversationId },
     ),
+}
+
+export interface PublicChatResponse {
+  answer: string
+  conversation_id: string
+  execution_id: string
+  created_at: string
+}
+
+export const publicChatApi = {
+  send: (message: string, conversationId?: string | null, language: "zh-TW" | "en" | "zh-CN" = "zh-TW") =>
+    api.post<PublicChatResponse>("/public-chat", {
+      message,
+      conversation_id: conversationId || null,
+      language,
+    }),
+}
+
+export interface PublicKnowledgeBaseItem {
+  id: string
+  name: string
+  description: string | null
+  embedding_model: string
+  chunk_strategy: string
+  document_count: number
+  status: string
+}
+
+export interface PublicFlowItem {
+  id: string
+  name: string
+  description: string | null
+  node_count: number
+  status: string
+}
+
+export const publicCatalogApi = {
+  get: () =>
+    api.get<{
+      knowledge_bases: PublicKnowledgeBaseItem[]
+      flows: PublicFlowItem[]
+    }>("/public-chat/catalog"),
 }

@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react"
-import { useNavigate, Link } from "react-router-dom"
+import { useNavigate, Link, useSearchParams } from "react-router-dom"
 import { useAuthStore } from "@/store/auth"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 
 export function Login() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const { login } = useAuthStore()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
@@ -20,7 +21,8 @@ export function Login() {
     setLoading(true)
     try {
       await login(email, password)
-      navigate("/")
+      const next = searchParams.get("next")
+      navigate(next?.startsWith("/") && !next.startsWith("//") ? next : "/kb")
     } catch (err) {
       // 区分错误类型 (P2-12): 凭据错误 / 账号禁用 / 网络故障
       const status = (err as { response?: { status?: number } }).response?.status
@@ -43,7 +45,7 @@ export function Login() {
       <Card className="w-[400px]">
         <CardHeader>
           <CardTitle className="text-2xl">登录</CardTitle>
-          <CardDescription>登录到 Klaw期算平台</CardDescription>
+          <CardDescription>登录到 KAI知识</CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit}>
           <CardContent className="space-y-4">

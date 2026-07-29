@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { Plus, Trash2, BookOpen, Loader2, Upload, FolderOpen, X } from "lucide-react"
-import { kbApi, type KBRead } from "@/lib/api"
+import { kbApi, publicCatalogApi, type KBRead } from "@/lib/api"
+import { useAuthStore } from "@/store/auth"
 import { toast } from "@/lib/toast"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -10,6 +11,7 @@ import { Label } from "@/components/ui/label"
 
 export function KnowledgeBase() {
   const navigate = useNavigate()
+  const { isAuthenticated } = useAuthStore()
   const [kbs, setKbs] = useState<KBRead[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
@@ -34,8 +36,20 @@ export function KnowledgeBase() {
   const fetchKbs = async () => {
     setLoading(true)
     try {
-      const resp = await kbApi.list()
-      setKbs(resp.data.items)
+      if (isAuthenticated) {
+        const resp = await kbApi.list()
+        setKbs(resp.data.items)
+      } else {
+        const resp = await publicCatalogApi.get()
+        setKbs(resp.data.knowledge_bases.map((kb) => ({
+          ...kb,
+          owner_id: "",
+          chunk_size: 0,
+          chunk_overlap: 0,
+          created_at: "",
+          updated_at: "",
+        } as KBRead)))
+      }
     } catch {
       // 错误由拦截器处理
     } finally {
@@ -45,7 +59,13 @@ export function KnowledgeBase() {
 
   useEffect(() => {
     fetchKbs()
-  }, [])
+  }, [isAuthenticated])
+
+  const requireAuth = (next = "/kb") => {
+    if (isAuthenticated) return true
+    navigate(`/login?next=${encodeURIComponent(next)}`)
+    return false
+  }
 
   useEffect(() => {
     folderInputRef.current?.setAttribute("webkitdirectory", "")
@@ -53,6 +73,7 @@ export function KnowledgeBase() {
   }, [showImport])
 
   const handleCreate = async () => {
+    if (!requireAuth()) return
     if (!name.trim()) return
     setCreating(true)
     try {
@@ -78,6 +99,7 @@ export function KnowledgeBase() {
   }
 
   const handleDelete = async (kbId: string) => {
+    if (!requireAuth()) return
     if (!confirm("确认删除此知识库？所有文档和索引将一并删除。")) return
     try {
       await kbApi.delete(kbId)
@@ -111,6 +133,7 @@ export function KnowledgeBase() {
   }
 
   const handleImport = async () => {
+    if (!requireAuth()) return
     if (!importName.trim() || importFiles.length === 0 || importing) return
     setImporting(true)
     try {
@@ -137,19 +160,27 @@ export function KnowledgeBase() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold">知识库</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             DeepDoc 解析 · BGE-M3 向量化 · ES 混合检索
           </p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => { setShowImport(!showImport); setShowCreate(false) }}>
+        <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto">
+          <Button className="w-full sm:w-auto" variant="outline" onClick={() => {
+            if (!requireAuth()) return
+            setShowImport(!showImport)
+            setShowCreate(false)
+          }}>
             <Upload className="h-4 w-4" />
             导入知识库
           </Button>
-          <Button onClick={() => { setShowCreate(!showCreate); setShowImport(false) }}>
+          <Button className="w-full sm:w-auto" onClick={() => {
+            if (!requireAuth()) return
+            setShowCreate(!showCreate)
+            setShowImport(false)
+          }}>
             <Plus className="h-4 w-4" />
             新建知识库
           </Button>
@@ -159,7 +190,7 @@ export function KnowledgeBase() {
       {showImport && (
         <Card>
           <CardHeader>
-            <div className="flex items-center justify-between">
+            <div className="flex items-start justify-between gap-3">
               <div>
                 <CardTitle className="text-base">导入知识库</CardTitle>
                 <CardDescription>选择文件或文件夹，自动创建知识库并开始解析</CardDescription>
@@ -311,13 +342,16 @@ export function KnowledgeBase() {
             <Card
               key={kb.id}
               className="cursor-pointer transition-shadow hover:shadow-md"
-              onClick={() => navigate(`/kb/${kb.id}`)}
+              onClick={() => {
+                if (!requireAuth(`/kb/${kb.id}`)) return
+                navigate(`/kb/${kb.id}`)
+              }}
             >
               <CardHeader>
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-2">
+                  <div className="flex min-w-0 items-start justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
                     <BookOpen className="h-5 w-5 text-muted-foreground" />
-                    <CardTitle className="text-base">{kb.name}</CardTitle>
+                    <CardTitle className="truncate text-base">{kb.name}</CardTitle>
                   </div>
                   <Button
                     variant="ghost"
@@ -333,7 +367,7 @@ export function KnowledgeBase() {
                 <CardDescription>{kb.description || "无描述"}</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
                   <span>{kb.document_count} 文档</span>
                   <span>{kb.embedding_model}</span>
                   <span>{kb.chunk_strategy}</span>

@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     supplier_api_key: str = ""
     supplier_flow_id: str = ""
     supplier_api_timeout_seconds: int = 120
+    # Anonymous homepage chat. May be overridden in the service env.
+    public_chat_flow_id: str = "8a1fff7b-ac60-4539-a6e2-d867c61b3ed1"
+    public_chat_timeout_seconds: int = 120
+    # API-key protected KAI knowledge customer-service endpoints.
+    kai_knowledge_api_key: str = ""
+    kai_knowledge_flow_id: str = "8a1fff7b-ac60-4539-a6e2-d867c61b3ed1"
+    kai_knowledge_api_timeout_seconds: int = 120
     # AES-256-GCM 主密钥 (32 bytes, hex 编码 64 字符)
     encryption_key: str = "0" * 64  # 生产环境必须替换
 

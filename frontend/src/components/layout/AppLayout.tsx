@@ -1,15 +1,14 @@
-import { NavLink, useNavigate } from "react-router-dom"
-import { LayoutDashboard, BookOpen, Workflow, Settings, Clock, Brain, LogOut, Bot, FolderOpen, Users } from "lucide-react"
+import { Link, NavLink, useLocation, useNavigate } from "react-router-dom"
+import { LayoutDashboard, BookOpen, Workflow, Settings, Brain, LogIn, LogOut, Bot, FolderOpen, Users, House } from "lucide-react"
 import { useAuthStore } from "@/store/auth"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
 const navItems = [
-  { to: "/", label: "仪表盘", icon: LayoutDashboard },
   { to: "/kb", label: "知识库", icon: BookOpen },
   { to: "/flows", label: "Agent 画布", icon: Workflow },
   { to: "/agents", label: "对话 Agent", icon: Bot },
-  { to: "/schedules", label: "定时任务", icon: Clock },
+  { to: "/dashboard", label: "仪表盘", icon: LayoutDashboard },
   { to: "/memories", label: "记忆系统", icon: Brain },
   { to: "/files", label: "文件", icon: FolderOpen },
   { to: "/users", label: "用户管理", icon: Users, adminOnly: true },
@@ -17,8 +16,14 @@ const navItems = [
 ]
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
-  const { user, logout } = useAuthStore()
+  const { user, logout, isAuthenticated } = useAuthStore()
   const navigate = useNavigate()
+  const location = useLocation()
+  const visibleNavItems = navItems.filter(
+    (item) =>
+      (!("adminOnly" in item) || user?.role === "admin") &&
+      (isAuthenticated || item.to === "/kb" || item.to === "/flows"),
+  )
 
   const handleLogout = () => {
     logout()
@@ -29,13 +34,16 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     <div className="flex h-screen min-w-0">
       {/* 侧边栏 */}
       <aside className="hidden w-60 shrink-0 flex-col border-r bg-secondary/30 md:flex">
-        <div className="flex h-14 items-center border-b px-4 font-semibold">
-          Klaw期算平台
-        </div>
+        <Link
+          to="/"
+          title="返回问答首屏"
+          className="flex h-14 items-center gap-2 border-b px-4 font-semibold transition-colors hover:bg-accent"
+        >
+          <House className="h-4 w-4" />
+          KAI知识
+        </Link>
         <nav className="flex-1 space-y-1 p-2">
-          {navItems
-            .filter((item) => !("adminOnly" in item) || user?.role === "admin")
-            .map((item) => (
+          {visibleNavItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -57,27 +65,39 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       <div className="flex min-w-0 flex-1 flex-col">
         {/* 顶栏 */}
         <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b px-3 sm:px-6">
-          <div className="min-w-0 truncate text-sm text-muted-foreground">
-            Klaw期算平台
-          </div>
+          <Link
+            to="/"
+            title="返回问答首屏"
+            className="flex min-w-0 items-center gap-2 truncate text-sm text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <House className="h-4 w-4 shrink-0" />
+            KAI知识
+          </Link>
           <div className="flex shrink-0 items-center gap-2 sm:gap-4">
-            <span className="hidden text-sm sm:inline">
-              {user?.name}{" "}
-              <span className="rounded bg-secondary px-1.5 py-0.5 text-xs text-secondary-foreground">
-                {user?.role}
-              </span>
-            </span>
-            <Button variant="ghost" size="sm" onClick={handleLogout}>
-              <LogOut className="h-4 w-4" />
-              <span className="hidden sm:inline">退出</span>
-            </Button>
+            {isAuthenticated ? (
+              <>
+                <span className="hidden text-sm sm:inline">
+                  {user?.name}{" "}
+                  <span className="rounded bg-secondary px-1.5 py-0.5 text-xs text-secondary-foreground">
+                    {user?.role}
+                  </span>
+                </span>
+                <Button variant="ghost" size="sm" onClick={handleLogout}>
+                  <LogOut className="h-4 w-4" />
+                  <span className="hidden sm:inline">退出</span>
+                </Button>
+              </>
+            ) : (
+              <Button variant="outline" size="sm" onClick={() => navigate(`/login?next=${encodeURIComponent(location.pathname)}`)}>
+                <LogIn className="h-4 w-4" />
+                登录
+              </Button>
+            )}
           </div>
         </header>
 
         <nav className="flex shrink-0 gap-1 overflow-x-auto border-b p-2 md:hidden">
-          {navItems
-            .filter((item) => !("adminOnly" in item) || user?.role === "admin")
-            .map((item) => (
+          {visibleNavItems.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}

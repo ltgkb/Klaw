@@ -1,14 +1,13 @@
 import { useEffect, useState } from "react"
-import { Brain, Clock, Bell, Database, Workflow, FileText, Loader2 } from "lucide-react"
+import { Brain, Bell, Database, Workflow, FileText, Loader2 } from "lucide-react"
 import { Link } from "react-router-dom"
 import { useAuthStore } from "@/store/auth"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { kbApi, flowApi, scheduleApi, memoryApi } from "@/lib/api"
+import { kbApi, flowApi, memoryApi } from "@/lib/api"
 
 type Stats = {
   kb: number
   flows: number
-  schedules: number
   memories: number
 }
 
@@ -21,16 +20,14 @@ export function Dashboard() {
     const fetchStats = async () => {
       setLoading(true)
       try {
-        const [kb, flows, schedules, memories] = await Promise.all([
+        const [kb, flows, memories] = await Promise.all([
           kbApi.list(1, 1),
           flowApi.list(1, 1),
-          scheduleApi.list(),
           memoryApi.list(),
         ])
         setStats({
           kb: kb.data.total,
           flows: flows.data.total,
-          schedules: schedules.data.length,
           memories: memories.data.length,
         })
       } catch {
@@ -45,7 +42,6 @@ export function Dashboard() {
   const cards = [
     { icon: Database, label: "知识库", value: stats?.kb, to: "/kb" },
     { icon: Workflow, label: "工作流", value: stats?.flows, to: "/flows" },
-    { icon: Clock, label: "定时任务", value: stats?.schedules, to: "/schedules" },
     { icon: Brain, label: "记忆条目", value: stats?.memories, to: "/memories" },
   ]
 
@@ -54,11 +50,6 @@ export function Dashboard() {
       icon: Workflow,
       title: "OpenClaw / Hermes",
       description: "本地 Skills 调用 · 数据不出域 · 统一 chat API · 工具发现",
-    },
-    {
-      icon: Clock,
-      title: "定时任务",
-      description: "APScheduler 调度 · PostgreSQL JobStore · Cron 触发",
     },
     {
       icon: Bell,
@@ -77,12 +68,12 @@ export function Dashboard() {
       <div>
         <h1 className="text-2xl font-semibold">欢迎，{user?.name} 👋</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Klaw期算平台 — 本地 OpenClaw/Hermes 驱动的知识库与 Agent 工作流
+          KAI知识 — 本地 OpenClaw/Hermes 驱动的知识库与 Agent 工作流
         </p>
       </div>
 
       {/* 实时统计 */}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         {cards.map((c) => (
           <Link key={c.label} to={c.to}>
             <Card className="transition-colors hover:bg-muted/40">
