@@ -95,6 +95,21 @@ class ChunkRead(BaseModel):
     created_at: datetime
 
 
+class ChunkUpdate(BaseModel):
+    """手动更新 Chunk 内容。"""
+    content: str = Field(..., min_length=1, max_length=100_000)
+
+
+class ChunkBatchDelete(BaseModel):
+    """批量删除 Chunk 请求。"""
+    chunk_ids: list[uuid.UUID] = Field(..., min_length=1, max_length=100)
+
+
+class ChunkDeleteResponse(BaseModel):
+    """Chunk 删除结果。"""
+    deleted: int
+
+
 # ── 检索 ──
 
 class SearchRequest(BaseModel):

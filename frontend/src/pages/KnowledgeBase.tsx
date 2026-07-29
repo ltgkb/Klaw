@@ -159,7 +159,7 @@ export function KnowledgeBase() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="kai-kb-page space-y-6">
       <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold">知识库</h1>

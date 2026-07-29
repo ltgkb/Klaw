@@ -12,7 +12,10 @@ from app.core.config import settings
 from app.core.deps import CurrentUser, DBSession
 from app.schemas.common import APIResponse, PageResponse
 from app.schemas.knowledge_base import (
+    ChunkBatchDelete,
+    ChunkDeleteResponse,
     ChunkRead,
+    ChunkUpdate,
     DocumentRead,
     DocumentUploadResponse,
     KBCreate,
@@ -219,6 +222,58 @@ async def list_chunks(
         page=page,
         page_size=page_size,
     )
+
+
+@router.delete("/{kb_id}/chunks", response_model=ChunkDeleteResponse)
+async def delete_chunks(
+    kb_id: uuid.UUID,
+    data: ChunkBatchDelete,
+    current_user: CurrentUser,
+    db: DBSession,
+):
+    """单个或批量删除 Chunk，并同步清理检索索引。"""
+    kb = await kb_service.get_kb(db, kb_id, current_user.id)
+    if kb is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识库不存在")
+    try:
+        deleted = await document_service.delete_chunks(db, kb_id, data.chunk_ids)
+    except HTTPException:
+        raise
+    except Exception:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Chunk 删除失败，请稍后重试",
+        )
+    return ChunkDeleteResponse(deleted=deleted)
+
+
+@router.put("/{kb_id}/chunks/{chunk_id}", response_model=ChunkRead)
+async def update_chunk(
+    kb_id: uuid.UUID,
+    chunk_id: uuid.UUID,
+    data: ChunkUpdate,
+    current_user: CurrentUser,
+    db: DBSession,
+):
+    """手动修改已切分的 Chunk，并同步更新向量与检索索引。"""
+    kb = await kb_service.get_kb(db, kb_id, current_user.id)
+    if kb is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识库不存在")
+    chunk = await document_service.get_chunk(db, chunk_id)
+    if chunk is None or chunk.kb_id != kb_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chunk 不存在")
+    try:
+        updated = await document_service.update_chunk_content(db, chunk, data.content)
+    except HTTPException:
+        raise
+    except Exception:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Chunk 更新失败，请稍后重试",
+        )
+    return ChunkRead.model_validate(updated)
 
 
 # ── 混合检索 ──

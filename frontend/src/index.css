@@ -6,20 +6,20 @@
   --color-foreground: oklch(0.145 0 0);
   --color-card: oklch(1 0 0);
   --color-card-foreground: oklch(0.145 0 0);
-  --color-primary: oklch(0.205 0 0);
+  --color-primary: #177777;
   --color-primary-foreground: oklch(0.985 0 0);
-  --color-secondary: oklch(0.97 0 0);
-  --color-secondary-foreground: oklch(0.205 0 0);
-  --color-muted: oklch(0.97 0 0);
-  --color-muted-foreground: oklch(0.556 0 0);
-  --color-accent: oklch(0.97 0 0);
-  --color-accent-foreground: oklch(0.205 0 0);
+  --color-secondary: #e9f0f0;
+  --color-secondary-foreground: #294446;
+  --color-muted: #e9f0f0;
+  --color-muted-foreground: #647b7d;
+  --color-accent: #dceeee;
+  --color-accent-foreground: #0c2628;
   --color-destructive: oklch(0.577 0.245 27.325);
   --color-destructive-foreground: oklch(0.985 0 0);
-  --color-border: oklch(0.922 0 0);
-  --color-input: oklch(0.922 0 0);
-  --color-ring: oklch(0.708 0 0);
-  --radius: 0.625rem;
+  --color-border: #cfdddd;
+  --color-input: #9ab2b4;
+  --color-ring: #177777;
+  --radius: 0px;
 }
 
 * {
@@ -28,9 +28,243 @@
 
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: "Work Sans Variable", "Work Sans", "Noto Sans SC Variable", "Noto Sans SC",
+    -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   background-color: var(--color-background);
   color: var(--color-foreground);
+}
+
+html[data-color-mode="dark"] {
+  --color-background: #0b1416;
+  --color-foreground: #cad7d8;
+  --color-card: #111f21;
+  --color-card-foreground: #cad7d8;
+  --color-primary: #177777;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #17282a;
+  --color-secondary-foreground: #cad7d8;
+  --color-muted: #17282a;
+  --color-muted-foreground: #809597;
+  --color-accent: #153536;
+  --color-accent-foreground: #eef7f7;
+  --color-border: #263b3d;
+  --color-input: #426164;
+  --color-ring: #62cccc;
+}
+
+.kai-admin-shell {
+  color: var(--color-foreground);
+  background: var(--color-background);
+}
+
+.kai-admin-sidebar {
+  background: var(--color-card);
+}
+
+.kai-admin-shell main {
+  background:
+    linear-gradient(90deg, transparent 0, transparent calc(50% - 0.5px), color-mix(in srgb, var(--color-border) 32%, transparent) calc(50% - 0.5px), color-mix(in srgb, var(--color-border) 32%, transparent) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
+    var(--color-background);
+}
+
+.kai-kb-page > div:first-child h1::before {
+  display: block;
+  margin-bottom: 0.6rem;
+  color: var(--color-primary);
+  content: "KAI / KNOWLEDGE BASE";
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+}
+
+.kai-public-shell {
+  --kai-brand: #177777;
+  --kai-brand-hover: #126868;
+  --kai-accent: #177777;
+  --kai-accent-soft: #dceeee;
+  --kai-canvas: #f3f7f7;
+  --kai-layer-01: #ffffff;
+  --kai-layer-02: #e9f0f0;
+  --kai-layer-hover-01: #e5eeee;
+  --kai-field-01: #ffffff;
+  --kai-ink: #0c2628;
+  --kai-foreground: #294446;
+  --kai-muted-foreground: #647b7d;
+  --kai-border-subtle: #cfdddd;
+  --kai-border-strong: #9ab2b4;
+  --kai-focus: #177777;
+  --kai-text-on-color: #ffffff;
+  color: var(--kai-foreground);
+  background:
+    linear-gradient(90deg, transparent 0, transparent calc(50% - 0.5px), color-mix(in srgb, var(--kai-border-subtle) 35%, transparent) calc(50% - 0.5px), color-mix(in srgb, var(--kai-border-subtle) 35%, transparent) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
+    var(--kai-canvas);
+  transition: color 180ms ease, background-color 180ms ease;
+}
+
+.kai-public-shell.is-dark {
+  --kai-brand: #177777;
+  --kai-brand-hover: #229090;
+  --kai-accent: #62cccc;
+  --kai-accent-soft: #153536;
+  --kai-canvas: #0b1416;
+  --kai-layer-01: #111f21;
+  --kai-layer-02: #17282a;
+  --kai-layer-hover-01: #1b3032;
+  --kai-field-01: #111f21;
+  --kai-ink: #eef7f7;
+  --kai-foreground: #cad7d8;
+  --kai-muted-foreground: #809597;
+  --kai-border-subtle: #263b3d;
+  --kai-border-strong: #426164;
+  --kai-focus: #62cccc;
+  --kai-text-on-color: #ffffff;
+}
+
+.kai-public-header {
+  color: var(--kai-ink);
+  border-bottom: 1px solid var(--kai-border-subtle);
+  background: color-mix(in srgb, var(--kai-canvas) 92%, transparent);
+  backdrop-filter: blur(16px);
+}
+
+.kai-brand-mark {
+  color: var(--kai-text-on-color);
+  background: var(--kai-brand);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.kai-muted {
+  color: var(--kai-muted-foreground);
+}
+
+.kai-accent {
+  color: var(--kai-accent);
+}
+
+.kai-section-rule {
+  background: var(--kai-accent);
+}
+
+.kai-hero-title {
+  color: var(--kai-ink);
+  font-size: clamp(3.25rem, 10vw, 6.5rem);
+  font-weight: 650;
+  line-height: 0.95;
+  letter-spacing: -0.07em;
+}
+
+.kai-control {
+  color: var(--kai-muted-foreground);
+  border-radius: 0;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.kai-control:hover {
+  color: var(--kai-ink);
+  background: var(--kai-layer-hover-01);
+}
+
+.kai-control:focus-visible,
+.kai-query-field:focus-within,
+.kai-suggestion:focus-visible,
+.kai-kb-link:focus-visible {
+  outline: 2px solid var(--kai-focus);
+  outline-offset: 2px;
+}
+
+.kai-query-field {
+  color: var(--kai-ink);
+  border: 1px solid var(--kai-border-strong);
+  background: var(--kai-field-01);
+  box-shadow: 8px 8px 0 var(--kai-accent-soft);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.kai-query-field:focus-within {
+  border-color: var(--kai-focus);
+  box-shadow: 4px 4px 0 var(--kai-accent-soft);
+}
+
+.kai-query-field textarea::placeholder {
+  color: var(--kai-muted-foreground);
+}
+
+.kai-primary-action {
+  color: var(--kai-text-on-color);
+  border-radius: 0;
+  background: var(--kai-brand);
+  box-shadow: none;
+  transition: background-color 120ms ease;
+}
+
+.kai-primary-action:hover {
+  background: var(--kai-brand-hover);
+}
+
+.kai-primary-action:disabled {
+  color: var(--kai-muted-foreground);
+  background: var(--kai-layer-02);
+}
+
+.kai-suggestion-swap {
+  background: transparent;
+}
+
+.kai-suggestion {
+  color: var(--kai-muted-foreground);
+  width: fit-content;
+  border: 1px solid var(--kai-border-subtle);
+  background: var(--kai-layer-01);
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.kai-suggestion:hover {
+  color: var(--kai-ink);
+  background: var(--kai-layer-hover-01);
+}
+
+.kai-announcement {
+  color: var(--kai-muted-foreground);
+}
+
+.kai-status-dot {
+  background: var(--kai-accent);
+}
+
+.kai-message {
+  border: 1px solid var(--kai-border-subtle);
+}
+
+.kai-message-user {
+  color: var(--kai-text-on-color);
+  border-color: var(--kai-brand);
+  background: var(--kai-brand);
+}
+
+.kai-message-assistant {
+  color: var(--kai-foreground);
+  background: var(--kai-layer-01);
+}
+
+.kai-message-meta {
+  color: var(--kai-muted-foreground);
+  border-color: var(--kai-border-subtle);
+}
+
+.kai-kb-link {
+  color: var(--kai-foreground);
+  border: 1px solid var(--kai-border-strong);
+  background: color-mix(in srgb, var(--kai-layer-01) 92%, transparent);
+  backdrop-filter: blur(12px);
+  transition: color 120ms ease, border-color 120ms ease, background-color 120ms ease;
+}
+
+.kai-kb-link:hover {
+  color: var(--kai-ink);
+  border-color: var(--kai-accent);
+  background: var(--kai-layer-01);
 }
 
 @keyframes kai-ticker {

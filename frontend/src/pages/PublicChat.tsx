@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState } from "react"
 import { Link } from "react-router-dom"
-import { ArrowUp, BookOpen, Loader2, Moon, RotateCcw, Sparkles, Sun } from "lucide-react"
+import { ArrowUp, BookOpen, Loader2, Moon, RotateCcw, Search, Sun } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { publicChatApi } from "@/lib/api"
-import { PixelBrand } from "@/components/PixelBrand"
 import { cn } from "@/lib/utils"
 
 type ChatMessage = {
@@ -188,6 +187,7 @@ export function PublicChat() {
 
   useEffect(() => {
     localStorage.setItem("kai_public_theme", darkMode ? "dark" : "light")
+    document.documentElement.dataset.colorMode = darkMode ? "dark" : "light"
   }, [darkMode])
 
   useEffect(() => {
@@ -289,36 +289,18 @@ export function PublicChat() {
   return (
     <div
       className={cn(
-        "relative flex min-h-[100dvh] flex-col overflow-hidden transition-colors duration-500",
-        darkMode ? "bg-[#0a0c11] text-slate-100" : "bg-[#f7f8fb] text-slate-900",
+        "kai-public-shell relative flex min-h-[100dvh] flex-col overflow-hidden",
+        darkMode && "is-dark",
       )}
     >
-      <div className={cn("kai-tech-grid pointer-events-none absolute inset-0", darkMode && "kai-tech-grid-dark")} />
-      <div
-        className={cn(
-          "pointer-events-none absolute left-1/2 top-1/3 h-[32rem] w-[32rem] -translate-x-1/2 rounded-full blur-3xl transition-colors duration-500",
-          darkMode ? "bg-indigo-500/[0.07]" : "bg-blue-300/15",
-        )}
-      />
-
-      <header
-        className={cn(
-          "relative z-10 flex h-16 shrink-0 items-center justify-between px-5 backdrop-blur-xl transition-colors sm:px-8",
-          darkMode ? "bg-[#0a0c11]/75" : "border-b border-white/80 bg-white/70",
-        )}
-      >
+      <header className="kai-public-header relative z-10 flex h-16 shrink-0 items-center justify-between px-4 sm:px-6">
         <div className="flex items-center gap-3">
-          <div className={cn(
-            "flex h-9 w-9 items-center justify-center rounded-xl text-white shadow-sm",
-            darkMode ? "bg-white/[0.06] text-blue-300" : "bg-slate-950",
-          )}>
-            <Sparkles className="h-4 w-4" />
+          <div className="kai-brand-mark flex h-8 w-8 items-center justify-center" aria-hidden="true">
+            K
           </div>
           <div>
-            <div className="text-sm font-semibold tracking-tight">{copy.brand}</div>
-            <div className={cn("text-[11px]", darkMode ? "text-slate-500" : "text-slate-500")}>
-              Knowledge Intelligence
-            </div>
+            <div className="text-sm font-semibold tracking-[-0.01em]">{copy.brand}</div>
+            <div className="kai-muted text-[10px] uppercase tracking-[0.16em]">Knowledge Intelligence</div>
           </div>
         </div>
         <div className="flex items-center gap-1">
@@ -327,7 +309,7 @@ export function PublicChat() {
               variant="ghost"
               size="sm"
               onClick={reset}
-              className={darkMode ? "text-slate-400 hover:bg-white/5 hover:text-white" : "text-slate-500"}
+              className="kai-control"
             >
               <RotateCcw className="h-4 w-4" />
               {copy.newChat}
@@ -338,12 +320,7 @@ export function PublicChat() {
             onChange={(event) => setLocale(event.target.value as Locale)}
             aria-label={copy.language}
             title={copy.language}
-            className={cn(
-              "h-9 rounded-xl bg-transparent px-2 text-xs outline-none",
-              darkMode
-                ? "text-slate-400 hover:bg-white/[0.06] hover:text-white"
-                : "text-slate-500 hover:bg-slate-100",
-            )}
+            className="kai-control h-9 bg-transparent px-2 text-xs outline-none"
           >
             <option value="zh-TW">繁體中文</option>
             <option value="en">English</option>
@@ -353,10 +330,7 @@ export function PublicChat() {
             variant="ghost"
             size="icon"
             onClick={() => setDarkMode((current) => !current)}
-            className={cn(
-              "rounded-xl",
-              darkMode ? "text-slate-400 hover:bg-white/[0.06] hover:text-white" : "text-slate-500",
-            )}
+            className="kai-control"
             aria-label={darkMode ? copy.switchToLight : copy.switchToDark}
             title={darkMode ? copy.lightMode : copy.darkMode}
           >
@@ -367,19 +341,18 @@ export function PublicChat() {
 
       <main className="relative z-10 flex min-h-0 flex-1 flex-col">
         {messages.length === 0 ? (
-          <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col items-center justify-start px-4 pb-4 pt-6 text-center sm:justify-center sm:px-5 sm:pb-20 sm:pt-10">
-            <h1 className="order-2 w-full sm:order-1">
-              <span className="sr-only">{copy.brand}</span>
-              <PixelBrand text={copy.brand} darkMode={darkMode} />
-            </h1>
+          <div className="mx-auto flex min-h-0 w-full max-w-[760px] flex-1 flex-col justify-start px-4 pb-4 pt-5 sm:justify-center sm:px-6 sm:pb-20 sm:pt-10">
+            <div className="order-2 sm:order-1">
+              <div className="mb-3 flex items-center gap-2">
+                <span className="kai-section-rule h-px w-8" />
+                <span className="kai-accent text-[11px] font-semibold uppercase tracking-[0.18em]">KAI / KNOWLEDGE</span>
+              </div>
+              <h1 className="kai-hero-title">{copy.brand}</h1>
+            </div>
 
-            <div className="order-4 mt-4 w-full max-w-2xl sm:order-2 sm:mt-10">
-              <div className={cn(
-                "flex items-end gap-2 rounded-2xl p-2 backdrop-blur-xl transition-colors",
-                darkMode
-                  ? "bg-[#141821]/90 shadow-[0_18px_70px_rgba(0,0,0,0.38)]"
-                  : "border border-slate-200/80 bg-white/80 shadow-[0_16px_50px_rgba(15,23,42,0.08)]",
-              )}>
+            <div className="order-4 mt-4 w-full sm:order-2 sm:mt-8">
+              <div className="kai-query-field flex items-end">
+                <Search className="kai-muted mb-[15px] ml-4 h-4 w-4 shrink-0" aria-hidden="true" />
                 <textarea
                   value={input}
                   onChange={(event) => setInput(event.target.value)}
@@ -392,19 +365,13 @@ export function PublicChat() {
                   rows={1}
                   placeholder={copy.placeholder}
                   disabled={thinking}
-                  className={cn(
-                    "max-h-32 min-h-11 flex-1 resize-none bg-transparent px-3 py-3 text-left text-sm outline-none",
-                    darkMode ? "text-slate-100 placeholder:text-slate-600" : "placeholder:text-slate-400",
-                  )}
+                  className="max-h-32 min-h-12 flex-1 resize-none bg-transparent px-3 py-[14px] text-left text-sm outline-none"
                 />
                 <Button
                   size="icon"
                   onClick={() => void send()}
                   disabled={thinking || !input.trim()}
-                  className={cn(
-                    "h-11 w-11 shrink-0 rounded-xl",
-                    darkMode ? "bg-white text-slate-950 hover:bg-slate-200" : "bg-slate-950 hover:bg-slate-800",
-                  )}
+                  className="kai-primary-action h-12 w-12 shrink-0"
                   aria-label={copy.send}
                 >
                   {thinking ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
@@ -412,34 +379,26 @@ export function PublicChat() {
               </div>
             </div>
 
-            <div className="order-3 mt-auto w-full max-w-2xl pt-4 sm:mt-4 sm:pt-0">
+            <div className="order-3 mt-auto w-full pt-4 sm:mt-4 sm:pt-0">
               <div key={suggestionPage} className="kai-suggestion-swap flex flex-col items-start gap-2">
               {copy.suggestions.slice(suggestionPage * 4, suggestionPage * 4 + 4).map((suggestion) => (
                 <button
                   key={suggestion}
                   onClick={() => void send(suggestion)}
-                  style={{ width: "fit-content", maxWidth: "100%" }}
-                  className={cn(
-                    "rounded-xl px-4 py-2.5 text-left text-xs backdrop-blur transition",
-                    darkMode
-                      ? "bg-[#121620]/90 text-slate-300 hover:bg-[#191e2a] hover:text-white"
-                      : "border border-slate-200/80 bg-white/55 text-slate-500 hover:border-slate-300 hover:bg-white hover:text-slate-900",
-                  )}
+                  className="kai-suggestion flex min-h-10 max-w-full items-center justify-between gap-3 px-3 py-2 text-left text-xs"
                 >
-                  {suggestion}
+                  <span>{suggestion}</span>
+                  <ArrowUp className="h-3 w-3 rotate-45 opacity-50" aria-hidden="true" />
                 </button>
               ))}
               </div>
             </div>
 
-            <div className={cn(
-              "order-1 mb-3 h-6 w-full max-w-2xl overflow-hidden text-xs sm:order-4 sm:mb-0 sm:mt-10 sm:h-9",
-              darkMode ? "text-slate-500" : "text-slate-400",
-            )}>
+            <div className="kai-announcement order-1 mb-3 h-6 w-full overflow-hidden text-xs sm:order-4 sm:mb-0 sm:mt-8 sm:h-8">
               <div className="kai-ticker">
                 {[...copy.announcements, ...copy.announcements].map((announcement, index) => (
-                  <span key={`${announcement}-${index}`} className="flex h-6 items-center justify-start px-1 sm:h-9">
-                    <span className={cn("mr-2 h-1 w-1 rounded-full", darkMode ? "bg-indigo-400/70" : "bg-slate-300")} />
+                  <span key={`${announcement}-${index}`} className="flex h-6 items-center justify-start sm:h-8">
+                    <span className="kai-status-dot mr-2 h-1.5 w-1.5" />
                     {announcement}
                   </span>
                 ))}
@@ -447,33 +406,28 @@ export function PublicChat() {
             </div>
           </div>
         ) : (
-          <div ref={scrollRef} className="mx-auto w-full max-w-4xl flex-1 space-y-6 overflow-y-auto px-5 py-8">
+          <div ref={scrollRef} className="mx-auto w-full max-w-[760px] flex-1 space-y-6 overflow-y-auto px-4 py-6 sm:px-6 sm:py-8">
             {messages.map((message) => (
               <div
                 key={message.id}
                 className={cn("flex gap-3", message.role === "user" && "justify-end")}
               >
                 {message.role === "assistant" && (
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-950 text-white">
-                    <Sparkles className="h-4 w-4" />
+                  <div className="kai-brand-mark flex h-8 w-8 shrink-0 items-center justify-center" aria-hidden="true">
+                    K
                   </div>
                 )}
                 <div
                   className={cn(
-                    "max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-6 shadow-sm sm:max-w-[75%]",
+                    "kai-message max-w-[85%] whitespace-pre-wrap px-4 py-3 text-sm leading-6 sm:max-w-[75%]",
                     message.role === "user"
-                      ? darkMode ? "bg-white text-slate-950" : "bg-slate-950 text-white"
-                      : darkMode
-                        ? "bg-[#141821]/90 text-slate-200"
-                        : "border border-white bg-white/85 text-slate-700",
+                      ? "kai-message-user"
+                      : "kai-message-assistant",
                   )}
                 >
                   {message.content}
                   {message.role === "assistant" && message.elapsedMs != null && (
-                    <div className={cn(
-                      "mt-2 border-t pt-1.5 text-[11px]",
-                      darkMode ? "border-white/[0.06] text-slate-500" : "border-slate-100 text-slate-400",
-                    )}>
+                    <div className="kai-message-meta mt-3 border-t pt-2 text-[11px]">
                       {copy.queryTime}：{(message.elapsedMs / 1000).toFixed(2)}s
                       {message.estimatedMs != null && (
                         <div>
@@ -489,20 +443,15 @@ export function PublicChat() {
             ))}
             {thinking && !streaming && (
               <div className="flex items-center gap-3">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-950 text-white">
-                  <Sparkles className="h-4 w-4" />
+                <div className="kai-brand-mark flex h-8 w-8 items-center justify-center" aria-hidden="true">
+                  K
                 </div>
-                <div className={cn(
-                  "rounded-2xl px-4 py-3 text-sm shadow-sm",
-                  darkMode
-                    ? "bg-[#141821]/90 text-slate-400"
-                    : "border border-white bg-white/85 text-slate-500",
-                )}>
+                <div className="kai-message kai-message-assistant px-4 py-3 text-sm">
                   <div className="flex items-center gap-2">
                     <Loader2 className="h-4 w-4 animate-spin" />
                     {copy.thinking}
                   </div>
-                  <div className={cn("mt-1 text-[11px]", darkMode ? "text-slate-600" : "text-slate-400")}>
+                  <div className="kai-muted mt-1 text-[11px]">
                     {copy.queryTime}：{(liveElapsedMs / 1000).toFixed(1)}s
                     <div>{copy.estimatedTime} {`${(estimatedMs / 1000).toFixed(2)}s`}</div>
                   </div>
@@ -512,13 +461,9 @@ export function PublicChat() {
           </div>
         )}
 
-        {messages.length > 0 && <div className="relative mx-auto w-full max-w-4xl shrink-0 px-5 pb-5">
-          <div className={cn(
-            "flex items-end gap-2 rounded-2xl p-2 backdrop-blur-xl",
-            darkMode
-              ? "bg-[#141821]/90 shadow-[0_18px_70px_rgba(0,0,0,0.38)]"
-              : "border border-white bg-white/90 shadow-[0_16px_50px_rgba(15,23,42,0.12)]",
-          )}>
+        {messages.length > 0 && <div className="relative mx-auto w-full max-w-[760px] shrink-0 px-4 pb-4 sm:px-6 sm:pb-5">
+          <div className="kai-query-field flex items-end">
+            <Search className="kai-muted mb-[15px] ml-4 h-4 w-4 shrink-0" aria-hidden="true" />
             <textarea
               value={input}
               onChange={(event) => setInput(event.target.value)}
@@ -531,25 +476,19 @@ export function PublicChat() {
               rows={1}
               placeholder={copy.placeholder}
               disabled={thinking}
-                className={cn(
-                  "max-h-32 min-h-11 flex-1 resize-none bg-transparent px-3 py-3 text-sm outline-none",
-                  darkMode ? "text-slate-100 placeholder:text-slate-600" : "placeholder:text-slate-400",
-                )}
+                className="max-h-32 min-h-12 flex-1 resize-none bg-transparent px-3 py-[14px] text-sm outline-none"
             />
             <Button
               size="icon"
               onClick={() => void send()}
               disabled={thinking || !input.trim()}
-                className={cn(
-                  "h-11 w-11 shrink-0 rounded-xl",
-                  darkMode ? "bg-white text-slate-950 hover:bg-slate-200" : "bg-slate-950 hover:bg-slate-800",
-                )}
+                className="kai-primary-action h-12 w-12 shrink-0"
               aria-label={copy.send}
             >
               {thinking ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
             </Button>
           </div>
-          <p className={cn("mt-2 text-center text-[11px]", darkMode ? "text-slate-600" : "text-slate-400")}>
+          <p className="kai-muted mt-2 text-center text-[11px]">
             {copy.disclaimer}
           </p>
         </div>}
@@ -558,11 +497,8 @@ export function PublicChat() {
       <Link
         to="/kb"
         className={cn(
-          "fixed left-4 top-20 z-20 items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium shadow-lg backdrop-blur transition hover:-translate-y-0.5 sm:bottom-5 sm:left-5 sm:top-auto sm:px-4 sm:py-2.5 sm:text-sm",
+          "kai-kb-link fixed left-4 top-20 z-20 items-center gap-2 px-3 py-2 text-xs font-medium sm:bottom-5 sm:left-5 sm:top-auto sm:px-4 sm:py-2.5 sm:text-sm",
           hasAssistantReply ? "flex" : "hidden sm:flex",
-          darkMode
-            ? "bg-[#141821]/85 text-slate-300 hover:bg-[#1a1f2a] hover:text-white"
-            : "border border-slate-200 bg-white/90 text-slate-700 hover:bg-white",
         )}
       >
         <BookOpen className="h-4 w-4" />

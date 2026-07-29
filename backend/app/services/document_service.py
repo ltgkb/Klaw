@@ -11,7 +11,12 @@ from fastapi import HTTPException
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.es_client import delete_doc_chunks, hybrid_search as es_hybrid_search, index_chunks_bulk
+from app.core.es_client import (
+    delete_chunks_by_ids,
+    delete_doc_chunks,
+    hybrid_search as es_hybrid_search,
+    index_chunks_bulk,
+)
 from app.core.minio_client import delete_file, download_file, upload_file
 from app.core.tei_client import embed_query, embed_texts
 from app.models.chunk import Chunk, ContentType
@@ -334,6 +339,64 @@ async def list_chunks(db: AsyncSession, kb_id, doc_id=None, page: int = 1, page_
         base_query.order_by(Chunk.created_at).offset((page - 1) * page_size).limit(page_size)
     )
     return list(result.scalars().all()), total
+
+
+async def get_chunk(db: AsyncSession, chunk_id: uuid.UUID) -> Chunk | None:
+    """按 ID 获取单个 Chunk。"""
+    result = await db.execute(select(Chunk).where(Chunk.id == chunk_id))
+    return result.scalar_one_or_none()
+
+
+async def update_chunk_content(db: AsyncSession, chunk: Chunk, content: str) -> Chunk:
+    """更新 Chunk 正文并同步重建向量与 Elasticsearch 索引。"""
+    normalized = content.strip()
+    if not normalized:
+        raise HTTPException(status_code=422, detail="Chunk 内容不能为空")
+
+    embeddings = await embed_texts([normalized])
+    if len(embeddings) != 1:
+        raise RuntimeError("Chunk 向量化结果数量不符")
+
+    await index_chunks_bulk([{
+        "chunk_id": str(chunk.id),
+        "kb_id": str(chunk.kb_id),
+        "doc_id": str(chunk.doc_id),
+        "content": normalized,
+        "content_type": chunk.content_type.value,
+        "page": chunk.page,
+        "embedding": embeddings[0],
+        "metadata": chunk.chunk_metadata or {},
+    }])
+
+    chunk.content = normalized
+    chunk.embedding_stored = True
+    await db.commit()
+    await db.refresh(chunk)
+    logger.info("Chunk 手动更新并重新索引: %s", chunk.id)
+    return chunk
+
+
+async def delete_chunks(
+    db: AsyncSession,
+    kb_id: uuid.UUID,
+    chunk_ids: list[uuid.UUID],
+) -> int:
+    """批量删除指定知识库下的 Chunk，并同步清理 ES 索引。"""
+    unique_ids = list(dict.fromkeys(chunk_ids))
+    result = await db.execute(
+        select(Chunk).where(Chunk.kb_id == kb_id, Chunk.id.in_(unique_ids))
+    )
+    chunks = list(result.scalars().all())
+    if len(chunks) != len(unique_ids):
+        raise HTTPException(status_code=404, detail="部分 Chunk 不存在")
+
+    await delete_chunks_by_ids([str(chunk.id) for chunk in chunks])
+    await db.execute(
+        delete(Chunk).where(Chunk.kb_id == kb_id, Chunk.id.in_(unique_ids))
+    )
+    await db.commit()
+    logger.info("Chunk 批量删除: kb=%s count=%d", kb_id, len(chunks))
+    return len(chunks)
 
 
 # ── 检索 ──

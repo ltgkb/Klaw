@@ -31,9 +31,9 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex h-screen min-w-0">
+    <div className="kai-admin-shell flex h-screen min-w-0">
       {/* 侧边栏 */}
-      <aside className="hidden w-60 shrink-0 flex-col border-r bg-secondary/30 md:flex">
+      <aside className="kai-admin-sidebar hidden w-60 shrink-0 flex-col border-r md:flex">
         <Link
           to="/"
           title="返回问答首屏"
@@ -49,8 +49,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               to={item.to}
               className={({ isActive }) =>
                 cn(
-                  "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                  isActive ? "bg-accent text-accent-foreground" : "hover:bg-accent",
+                  "flex items-center gap-3 border-l-2 border-transparent px-3 py-2 text-sm font-medium transition-colors",
+                  isActive ? "border-primary bg-accent text-accent-foreground" : "hover:bg-accent",
                 )
               }
             >
@@ -102,8 +102,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                 key={item.to}
                 to={item.to}
                 className={({ isActive }) => cn(
-                  "flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-sm",
-                  isActive ? "bg-accent text-accent-foreground" : "text-muted-foreground",
+                  "flex shrink-0 items-center gap-2 border-b-2 border-transparent px-3 py-2 text-sm",
+                  isActive ? "border-primary bg-accent text-accent-foreground" : "text-muted-foreground",
                 )}
               >
                 <item.icon className="h-4 w-4" />

@@ -259,6 +259,14 @@ export const kbApi = {
       params: { page, page_size: pageSize },
     }),
 
+  updateChunk: (kbId: string, chunkId: string, content: string) =>
+    api.put<ChunkRead>(`/knowledge-bases/${kbId}/chunks/${chunkId}`, { content }),
+
+  deleteChunks: (kbId: string, chunkIds: string[]) =>
+    api.delete<{ deleted: number }>(`/knowledge-bases/${kbId}/chunks`, {
+      data: { chunk_ids: chunkIds },
+    }),
+
   // 检索
   search: (kbId: string, data: { query: string; top_k?: number; threshold?: number; rerank?: boolean }) =>
     api.post<SearchResponse>(`/knowledge-bases/${kbId}/search`, data),

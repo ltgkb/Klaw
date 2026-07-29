@@ -82,12 +82,15 @@ def mock_infra(monkeypatch, db_engine):
         }]
     async def mock_delete_doc_chunks(doc_id):
         return 1
+    async def mock_delete_chunks_by_ids(chunk_ids):
+        return len(chunk_ids)
     # kb_service 导入了 delete_kb_chunks
     async def mock_delete_kb_chunks(kb_id):
         return 1
     monkeypatch.setattr("app.services.document_service.index_chunks_bulk", mock_index_chunks_bulk)
     monkeypatch.setattr("app.services.document_service.es_hybrid_search", mock_hybrid_search)
     monkeypatch.setattr("app.services.document_service.delete_doc_chunks", mock_delete_doc_chunks)
+    monkeypatch.setattr("app.services.document_service.delete_chunks_by_ids", mock_delete_chunks_by_ids)
     monkeypatch.setattr("app.services.kb_service.delete_kb_chunks", mock_delete_kb_chunks)
 
     # Mock DeepDoc parse (document_service 导入 deepdoc_service 模块)
@@ -597,3 +600,101 @@ async def test_document_background_parse_does_not_block_event_loop(
 
     upload = await asyncio.wait_for(upload_task, timeout=2)
     assert upload.status_code == 201
+
+
+@pytest.mark.asyncio
+async def test_update_chunk_reindexes_content(client, mock_infra):
+    """手动更新 Chunk 后返回新正文，并保持已向量化状态。"""
+    token = await _register_and_login(client, "chunk-editor@test.com")
+    headers = _auth_headers(token)
+    kb = (await client.post(
+        "/api/v1/knowledge-bases",
+        json={"name": "Chunk Editor"},
+        headers=headers,
+    )).json()
+
+    await client.post(
+        f"/api/v1/knowledge-bases/{kb['id']}/documents",
+        headers=headers,
+        files={"file": ("edit.txt", io.BytesIO(b"original"), "text/plain")},
+    )
+    chunks = (await client.get(
+        f"/api/v1/knowledge-bases/{kb['id']}/chunks",
+        headers=headers,
+    )).json()["items"]
+
+    response = await client.put(
+        f"/api/v1/knowledge-bases/{kb['id']}/chunks/{chunks[0]['id']}",
+        headers=headers,
+        json={"content": "  手动修订后的有效内容  "},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["content"] == "手动修订后的有效内容"
+    assert response.json()["embedding_stored"] is True
+
+
+@pytest.mark.asyncio
+async def test_update_chunk_rejects_empty_content(client, mock_infra):
+    """空白正文不能覆盖已有 Chunk。"""
+    token = await _register_and_login(client, "chunk-empty@test.com")
+    headers = _auth_headers(token)
+    kb = (await client.post(
+        "/api/v1/knowledge-bases",
+        json={"name": "Chunk Empty Guard"},
+        headers=headers,
+    )).json()
+    await client.post(
+        f"/api/v1/knowledge-bases/{kb['id']}/documents",
+        headers=headers,
+        files={"file": ("empty.txt", io.BytesIO(b"original"), "text/plain")},
+    )
+    chunks = (await client.get(
+        f"/api/v1/knowledge-bases/{kb['id']}/chunks",
+        headers=headers,
+    )).json()["items"]
+
+    response = await client.put(
+        f"/api/v1/knowledge-bases/{kb['id']}/chunks/{chunks[0]['id']}",
+        headers=headers,
+        json={"content": "   "},
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_batch_delete_chunks(client, mock_infra):
+    """支持选择多个 Chunk 一次删除。"""
+    token = await _register_and_login(client, "chunk-delete@test.com")
+    headers = _auth_headers(token)
+    kb = (await client.post(
+        "/api/v1/knowledge-bases",
+        json={"name": "Chunk Batch Delete"},
+        headers=headers,
+    )).json()
+    await client.post(
+        f"/api/v1/knowledge-bases/{kb['id']}/documents",
+        headers=headers,
+        files={"file": ("delete.txt", io.BytesIO(b"content"), "text/plain")},
+    )
+    before = (await client.get(
+        f"/api/v1/knowledge-bases/{kb['id']}/chunks",
+        headers=headers,
+    )).json()
+    selected = [chunk["id"] for chunk in before["items"][:2]]
+
+    response = await client.request(
+        "DELETE",
+        f"/api/v1/knowledge-bases/{kb['id']}/chunks",
+        headers=headers,
+        json={"chunk_ids": selected},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["deleted"] == len(selected)
+    after = (await client.get(
+        f"/api/v1/knowledge-bases/{kb['id']}/chunks",
+        headers=headers,
+    )).json()
+    assert after["total"] == before["total"] - len(selected)
