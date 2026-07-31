@@ -354,6 +354,9 @@
           this.draw(true);
         }
         draw(iter) {
+          if (this.hasDragonHead && this.spine?.length > 2) {
+            this.drawDragonBody();
+          }
           if (this.hasDragonHead) {
             this.drawDragonHead(this.headSize || 4);
           } else {
@@ -385,6 +388,43 @@
               this.children[i].draw(true);
             }
           }
+        }
+        drawDragonBody() {
+          var nodes = this.spine;
+          var left = [];
+          var right = [];
+          var scale = this.bodyScale || 4;
+          for (var i = 0; i < nodes.length; i++) {
+            var progress = i / (nodes.length - 1);
+            var previous = nodes[Math.max(0, i - 1)];
+            var next = nodes[Math.min(nodes.length - 1, i + 1)];
+            var angle = Math.atan2(next.y - previous.y, next.x - previous.x);
+            var width;
+            if (progress < 0.12) {
+              width = scale * (1.8 + (progress / 0.12) * 2.6);
+            } else if (progress < 0.5) {
+              width = scale * (4.4 + Math.sin(((progress - 0.12) / 0.38) * Math.PI) * 0.9);
+            } else {
+              width = scale * 4.4 * Math.pow(Math.max(0, 1 - (progress - 0.5) / 0.5), 0.72) + 0.8;
+            }
+            var offsetX = Math.cos(angle + Math.PI / 2) * width;
+            var offsetY = Math.sin(angle + Math.PI / 2) * width;
+            left.push({ x: nodes[i].x + offsetX, y: nodes[i].y + offsetY });
+            right.push({ x: nodes[i].x - offsetX, y: nodes[i].y - offsetY });
+          }
+          ctx.save();
+          ctx.beginPath();
+          ctx.moveTo(left[0].x, left[0].y);
+          for (var i = 1; i < left.length; i++) ctx.lineTo(left[i].x, left[i].y);
+          for (var i = right.length - 1; i >= 0; i--) ctx.lineTo(right[i].x, right[i].y);
+          ctx.closePath();
+          ctx.fillStyle = "rgba(23, 119, 119, 0.42)";
+          ctx.strokeStyle = "rgba(23, 119, 119, 0.82)";
+          ctx.lineWidth = 2;
+          ctx.lineJoin = "round";
+          ctx.fill();
+          ctx.stroke();
+          ctx.restore();
         }
         drawDragonHead(r) {
           /* Top-down dragon head. Local coords: f = forward, l = lateral, */
@@ -418,7 +458,11 @@
             curveTo(2.45, 0.44 * side, 2.75, 0.44 * side); /* Snout */
             curveTo(3.25, 0.38 * side, 3.3, 0); /* Blunt tip */
           }
+          ctx.save();
+          ctx.fillStyle = "rgba(23, 119, 119, 0.42)";
+          ctx.fill();
           ctx.stroke();
+          ctx.restore();
           /* Horns, jaw spikes and fangs */
           ctx.beginPath();
           for (var side = -1; side <= 1; side += 2) {
@@ -614,11 +658,14 @@
         );
         dragon.hasDragonHead = true;
         dragon.headSize = s * 3;
+        dragon.bodyScale = s;
+        dragon.spine = [dragon];
         var spinal = dragon;
         /* (parent,size,angle,range,stiffness) */
         /* Neck */
         for (var i = 0; i < 6; i++) {
           spinal = new Segment(spinal, s * 4, 0, (3.1415 * 2) / 3, 1.1);
+          dragon.spine.push(spinal);
           for (var ii = -1; ii <= 1; ii += 2) {
             var node = new Segment(spinal, s * 3, ii, 0.1, 2);
             for (var iii = 0; iii < 3; iii++) {
@@ -632,6 +679,7 @@
             /* Vertebrae and ribs */
             for (var ii = 0; ii < 6; ii++) {
               spinal = new Segment(spinal, s * 4, 0, 1.571, 1.5);
+              dragon.spine.push(spinal);
               for (var iii = -1; iii <= 1; iii += 2) {
                 var node = new Segment(spinal, s * 3, iii * 1.571, 0.1, 1.5);
                 for (var iv = 0; iv < 3; iv++) {
@@ -674,6 +722,7 @@
         /* Tail */
         for (var i = 0; i < tail; i++) {
           spinal = new Segment(spinal, s * 4, 0, (3.1415 * 2) / 3, 1.1);
+          dragon.spine.push(spinal);
           for (var ii = -1; ii <= 1; ii += 2) {
             var node = new Segment(spinal, s * 3, ii, 0.1, 2);
             for (var iii = 0; iii < 3; iii++) {
