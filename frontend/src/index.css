@@ -64,17 +64,17 @@ html[data-color-mode="dark"] {
 .kai-admin-shell main {
   background:
     linear-gradient(90deg, transparent 0, transparent calc(50% - 0.5px), color-mix(in srgb, var(--color-border) 32%, transparent) calc(50% - 0.5px), color-mix(in srgb, var(--color-border) 32%, transparent) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
-    color-mix(in srgb, var(--color-background) 91%, transparent);
+    var(--color-background);
 }
 
 .kai-dragon-overlay {
   position: absolute;
-  z-index: 0;
+  z-index: 20;
   inset: 0;
   width: 100%;
   height: 100%;
   border: 0;
-  opacity: 0.28;
+  opacity: 0.38;
   pointer-events: none;
   filter: saturate(0.85);
 }
