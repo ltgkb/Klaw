@@ -131,18 +131,36 @@
           if (!this.hiddenDetail) {
             ctx.save();
             if (this.isClaw) {
-              ctx.lineWidth = 6;
-              ctx.lineCap = "round";
-              ctx.strokeStyle = "rgba(23, 119, 119, 0.95)";
-            } else if (this.isLimb) {
-              ctx.lineWidth = 8;
-              ctx.lineCap = "round";
-              ctx.strokeStyle = "rgba(23, 119, 119, 0.78)";
+              var clawAngle = Math.atan2(this.y - this.parent.y, this.x - this.parent.x);
+              var clawBase = 3.2;
+              ctx.beginPath();
+              ctx.moveTo(
+                this.parent.x + Math.cos(clawAngle + Math.PI / 2) * clawBase,
+                this.parent.y + Math.sin(clawAngle + Math.PI / 2) * clawBase,
+              );
+              ctx.lineTo(this.x, this.y);
+              ctx.lineTo(
+                this.parent.x + Math.cos(clawAngle - Math.PI / 2) * clawBase,
+                this.parent.y + Math.sin(clawAngle - Math.PI / 2) * clawBase,
+              );
+              ctx.closePath();
+              ctx.fillStyle = "rgba(23, 119, 119, 0.95)";
+              ctx.fill();
+            } else {
+              if (this.isPaw) {
+                ctx.lineWidth = 10;
+                ctx.lineCap = "round";
+                ctx.strokeStyle = "rgba(23, 119, 119, 0.82)";
+              } else if (this.isLimb) {
+                ctx.lineWidth = 8;
+                ctx.lineCap = "round";
+                ctx.strokeStyle = "rgba(23, 119, 119, 0.78)";
+              }
+              ctx.beginPath();
+              ctx.moveTo(this.parent.x, this.parent.y);
+              ctx.lineTo(this.x, this.y);
+              ctx.stroke();
             }
-            ctx.beginPath();
-            ctx.moveTo(this.parent.x, this.parent.y);
-            ctx.lineTo(this.x, this.y);
-            ctx.stroke();
             ctx.restore();
           }
           if (iter) {
@@ -741,8 +759,10 @@
                 2,
               ); /* Forearm */
               node.isLimb = true;
-              for (var iii = 0; iii < 4; iii++ /* fingers */) {
-                var claw = new Segment(node, s * 4, (iii / 3 - 0.5) * 1.571, 0.1, 4);
+              var paw = new Segment(node, s * 3.2, 0, 0.35, 3);
+              paw.isPaw = true;
+              for (var iii = 0; iii < 3; iii++ /* talons */) {
+                var claw = new Segment(paw, s * 3.4, (iii - 1) * 0.42, 0.12, 4);
                 claw.isClaw = true;
               }
               new LegSystem(node, 3, s * 12, dragon, 4);
