@@ -651,11 +651,41 @@ export interface LocalAgentHealth {
   hermes_url: string
 }
 
+export interface McpServerRead {
+  id: string
+  name: string
+  url: string
+  has_token: boolean
+  enabled: boolean
+  tools: Array<{
+    name: string
+    description?: string | null
+    inputSchema?: Record<string, unknown>
+  }>
+}
+
+export interface McpServerTestResponse {
+  success: boolean
+  protocol_version: string
+  server_info: Record<string, unknown>
+  server: McpServerRead
+}
+
 export const localAgentApi = {
   listTools: () => api.get<ToolInfo[]>("/local-agent/tools"),
   callTool: (toolId: string, parameters: Record<string, unknown>) =>
     api.post<ToolCallResponse>(`/local-agent/tools/${toolId}/call`, { parameters }),
   health: () => api.get<LocalAgentHealth>("/local-agent/health"),
+}
+
+export const mcpApi = {
+  list: () => api.get<McpServerRead[]>("/local-agent/mcp/servers"),
+  create: (data: { name: string; url: string; bearer_token?: string }) =>
+    api.post<McpServerRead>("/local-agent/mcp/servers", data),
+  test: (serverId: string) =>
+    api.post<McpServerTestResponse>(`/local-agent/mcp/servers/${serverId}/test`),
+  delete: (serverId: string) =>
+    api.delete(`/local-agent/mcp/servers/${serverId}`),
 }
 
 // ── 文件工作区 API (PRD 6.7) ──

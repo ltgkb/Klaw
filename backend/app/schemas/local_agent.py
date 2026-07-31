@@ -1,5 +1,6 @@
 """本地 Agent (OpenClaw / Hermes) 工具发现 Pydantic 模型。对齐 PRD 6.4。"""
 
+import uuid
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -39,3 +40,27 @@ class LocalAgentHealth(BaseModel):
     hermes: bool
     openclaw_url: str
     hermes_url: str
+
+
+class McpServerCreate(BaseModel):
+    """Create and verify a remote Streamable HTTP MCP connection."""
+
+    name: str = Field(..., min_length=1, max_length=200)
+    url: str = Field(..., min_length=8, max_length=2048)
+    bearer_token: str | None = Field(None, max_length=4096)
+
+
+class McpServerRead(BaseModel):
+    id: uuid.UUID
+    name: str
+    url: str
+    has_token: bool
+    enabled: bool
+    tools: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class McpServerTestResponse(BaseModel):
+    success: bool = True
+    protocol_version: str
+    server_info: dict[str, Any] = Field(default_factory=dict)
+    server: McpServerRead

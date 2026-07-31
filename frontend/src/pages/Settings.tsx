@@ -6,6 +6,7 @@ import {
   pushChannelApi,
   systemApi,
   notifyApi,
+  mcpApi,
   type ProviderInfo,
   type ModelInfo,
   type ChatResponse,
@@ -15,6 +16,7 @@ import {
   type PushChannelType,
   type EmbeddingConfig,
   type LocalAgentHealth,
+  type McpServerRead,
 } from "@/lib/api"
 import { toast } from "@/lib/toast"
 import { useAuthStore } from "@/store/auth"
@@ -23,7 +25,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Loader2, Send, Cpu, Cloud, Server, KeyRound, Trash2, Wrench, Plus, Zap, Play, Pencil, X, RefreshCw } from "lucide-react"
+import { Cable, Loader2, Send, Cpu, Cloud, Server, KeyRound, Trash2, Wrench, Plus, Zap, Play, Pencil, X, RefreshCw } from "lucide-react"
 
 type StatusMeta = { label: string; dotClass: string }
 
@@ -100,6 +102,14 @@ export function Settings() {
   // 本地 Agent 健康 (openclaw / hermes 连通性)
   const [agentHealth, setAgentHealth] = useState<LocalAgentHealth | null>(null)
 
+  // 远程 MCP 连接
+  const [mcpServers, setMcpServers] = useState<McpServerRead[]>([])
+  const [mcpName, setMcpName] = useState("")
+  const [mcpUrl, setMcpUrl] = useState("")
+  const [mcpToken, setMcpToken] = useState("")
+  const [mcpSaving, setMcpSaving] = useState(false)
+  const [mcpTestingId, setMcpTestingId] = useState<string | null>(null)
+
   // Embedding 模型 API
   const [emb, setEmb] = useState<EmbeddingConfig | null>(null)
   const [embBase, setEmbBase] = useState("")
@@ -117,7 +127,7 @@ export function Settings() {
     setLoading(true)
     setModelsLoadFailed(false)
     // 各区块独立加载, 单个接口失败不影响其它区块展示 (Promise.allSettled)
-    const [providersR, modelsR, toolsR, channelsR, embR, llmR, healthR] = await Promise.allSettled([
+    const [providersR, modelsR, toolsR, channelsR, embR, llmR, healthR, mcpR] = await Promise.allSettled([
       providerApi.list(),
       providerApi.listModels(),
       localAgentApi.listTools(),
@@ -125,6 +135,7 @@ export function Settings() {
       systemApi.getEmbedding(),
       systemApi.getLlmDefault(),
       localAgentApi.health(),
+      mcpApi.list(),
     ])
     if (providersR.status === "fulfilled") setProviders(providersR.value.data)
     if (modelsR.status === "fulfilled") setModels(uniqueModels(modelsR.value.data))
@@ -146,6 +157,7 @@ export function Settings() {
     }
     if (llmR.status === "fulfilled") setLlmDefault(llmR.value.data.default_model || "default")
     if (healthR.status === "fulfilled") setAgentHealth(healthR.value.data)
+    if (mcpR.status === "fulfilled") setMcpServers(mcpR.value.data)
     setLoading(false)
   }
 
@@ -343,6 +355,56 @@ export function Settings() {
       setLlmDefaultMsg("保存失败")
     } finally {
       setLlmDefaultSaving(false)
+    }
+  }
+
+  const handleAddMcp = async () => {
+    if (!mcpName.trim() || !mcpUrl.trim() || mcpSaving) return
+    setMcpSaving(true)
+    try {
+      const response = await mcpApi.create({
+        name: mcpName.trim(),
+        url: mcpUrl.trim(),
+        ...(mcpToken.trim() ? { bearer_token: mcpToken.trim() } : {}),
+      })
+      setMcpServers((current) => [response.data, ...current])
+      setMcpName("")
+      setMcpUrl("")
+      setMcpToken("")
+      toast.success(`MCP 已连接，发现 ${response.data.tools.length} 个工具`)
+      await loadAll()
+    } catch {
+      // 拦截器展示连接错误
+    } finally {
+      setMcpSaving(false)
+    }
+  }
+
+  const handleTestMcp = async (server: McpServerRead) => {
+    setMcpTestingId(server.id)
+    try {
+      const response = await mcpApi.test(server.id)
+      setMcpServers((current) =>
+        current.map((item) => item.id === server.id ? response.data.server : item),
+      )
+      toast.success(`连接正常，发现 ${response.data.server.tools.length} 个工具`)
+      await loadAll()
+    } catch {
+      // 拦截器展示连接错误
+    } finally {
+      setMcpTestingId(null)
+    }
+  }
+
+  const handleDeleteMcp = async (server: McpServerRead) => {
+    if (!confirm(`确认删除 MCP 连接「${server.name}」？工作流中的相关工具节点将不可用。`)) return
+    try {
+      await mcpApi.delete(server.id)
+      setMcpServers((current) => current.filter((item) => item.id !== server.id))
+      toast.success("MCP 连接已删除")
+      await loadAll()
+    } catch {
+      // 拦截器展示删除错误
     }
   }
 
@@ -664,15 +726,112 @@ export function Settings() {
             </CardContent>
           </Card>
 
-          {/* 本地工具 */}
+          {/* MCP 连接 */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Cable className="h-5 w-5 text-muted-foreground" />
+                <div>
+                  <CardTitle className="text-base">MCP 连接</CardTitle>
+                  <CardDescription>
+                    连接远程 Streamable HTTP MCP；Bearer Token 加密保存，工具自动加入工作流工具节点
+                  </CardDescription>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {mcpServers.length === 0 ? (
+                <p className="text-sm text-muted-foreground">暂无 MCP 连接</p>
+              ) : (
+                <div className="space-y-2">
+                  {mcpServers.map((server) => (
+                    <div key={server.id} className="flex flex-col gap-3 border p-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-medium">{server.name}</span>
+                          <span className="bg-secondary px-1.5 py-0.5 text-xs text-muted-foreground">
+                            {server.tools.length} 工具
+                          </span>
+                          {server.has_token && (
+                            <span className="bg-secondary px-1.5 py-0.5 text-xs text-muted-foreground">Token</span>
+                          )}
+                        </div>
+                        <p className="mt-1 truncate text-xs text-muted-foreground" title={server.url}>{server.url}</p>
+                        {server.tools.length > 0 && (
+                          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                            {server.tools.map((tool) => tool.name).join(" · ")}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex shrink-0 gap-1">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleTestMcp(server)}
+                          disabled={mcpTestingId === server.id}
+                        >
+                          {mcpTestingId === server.id
+                            ? <Loader2 className="h-4 w-4 animate-spin" />
+                            : <Zap className="h-4 w-4" />}
+                          测试连接
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          title="删除 MCP 连接"
+                          aria-label={`删除 MCP 连接 ${server.name}`}
+                          onClick={() => handleDeleteMcp(server)}
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="grid gap-2 sm:grid-cols-[minmax(0,180px)_minmax(0,1fr)_minmax(0,220px)_auto]">
+                <Input
+                  value={mcpName}
+                  onChange={(event) => setMcpName(event.target.value)}
+                  placeholder="连接名称"
+                  disabled={mcpSaving}
+                />
+                <Input
+                  value={mcpUrl}
+                  onChange={(event) => setMcpUrl(event.target.value)}
+                  placeholder="https://mcp.example.com/mcp"
+                  disabled={mcpSaving}
+                />
+                <Input
+                  type="password"
+                  value={mcpToken}
+                  onChange={(event) => setMcpToken(event.target.value)}
+                  placeholder="Bearer Token（可选）"
+                  disabled={mcpSaving}
+                />
+                <Button
+                  onClick={handleAddMcp}
+                  disabled={mcpSaving || !mcpName.trim() || !mcpUrl.trim()}
+                >
+                  {mcpSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                  连接 MCP
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                出于安全限制，仅允许连接可公开访问的 HTTP/HTTPS 地址；不在浏览器中执行本地 stdio 命令。
+              </p>
+            </CardContent>
+          </Card>
+
+          {/* 本地与 MCP 工具 */}
           <Card>
             <CardHeader>
               <div className="flex items-center gap-2">
                 <Wrench className="h-5 w-5 text-muted-foreground" />
                 <div>
-                  <CardTitle className="text-base">本地工具 (Skills)</CardTitle>
+                  <CardTitle className="text-base">工具 (Skills / MCP)</CardTitle>
                   <CardDescription>
-                    扫描 deploy/openclaw/skills 与 deploy/hermes/skills · OpenClaw 在线工具自动合并
+                    本地 Skills、OpenClaw 与已连接 MCP 工具统一发现，可在这里测试并用于工作流
                   </CardDescription>
                 </div>
               </div>

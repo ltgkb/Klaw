@@ -516,7 +516,7 @@ async def _execute_node(
     elif node_type == "http":
         return await _execute_http_node(config, context)
     elif node_type == "tool":
-        return await _execute_tool_node(config, context)
+        return await _execute_tool_node(config, context, user)
     elif node_type == "condition":
         return await _execute_condition_node(config, context)
     elif node_type == "text":
@@ -978,8 +978,8 @@ async def _execute_http_node(config: dict, context: dict) -> str:
 
 # ── 本地工具节点 ──
 
-async def _execute_tool_node(config: dict, context: dict) -> Any:
-    """Invoke an allowlisted OpenClaw tool with rendered JSON parameters."""
+async def _execute_tool_node(config: dict, context: dict, user=None) -> Any:
+    """Invoke an allowlisted OpenClaw or user-scoped MCP tool."""
     from app.services import local_agent_service
 
     tool_id = str(config.get("tool_id") or "").strip()
@@ -998,7 +998,10 @@ async def _execute_tool_node(config: dict, context: dict) -> Any:
     if not isinstance(parameters, dict):
         raise ValueError("本地工具参数必须是 JSON 对象")
 
-    response = await local_agent_service.call_tool(tool_id, parameters)
+    if tool_id.startswith("mcp:"):
+        response = await local_agent_service.call_tool(tool_id, parameters, user)
+    else:
+        response = await local_agent_service.call_tool(tool_id, parameters)
     if not response.get("success"):
         raise RuntimeError(response.get("error") or f"本地工具调用失败: {tool_id}")
     return response.get("result")

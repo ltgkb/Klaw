@@ -16,6 +16,7 @@ import httpx
 
 from common.ssrf_guard import assert_url_is_safe
 from app.core.config import settings
+from app.models.user import User
 from app.schemas.local_agent import ToolInfo
 
 logger = logging.getLogger("claw.local_agent")
@@ -71,7 +72,7 @@ def _scan_skills_dir(source: str, skills_dir: Path) -> list[ToolInfo]:
     return tools
 
 
-async def discover_tools() -> list[ToolInfo]:
+async def discover_tools(user: User | None = None) -> list[ToolInfo]:
     """发现本地工具清单。"""
     root = _project_root()
     tools: list[ToolInfo] = []
@@ -79,6 +80,10 @@ async def discover_tools() -> list[ToolInfo]:
     # 1. 扫描本地 Skills 目录
     tools += _scan_skills_dir("openclaw", root / "deploy" / "openclaw" / "skills")
     tools += _scan_skills_dir("hermes", root / "deploy" / "hermes" / "skills")
+    if user is not None:
+        from app.services import mcp_service
+
+        tools += [ToolInfo(**tool) for tool in mcp_service.cached_tools(user)]
 
     # 去重 (按 id, 保留首个)
     seen: set[str] = set()
@@ -93,7 +98,7 @@ async def discover_tools() -> list[ToolInfo]:
     return unique
 
 
-async def call_tool(tool_id: str, parameters: dict) -> dict:
+async def call_tool(tool_id: str, parameters: dict, user: User | None = None) -> dict:
     """调用本地工具。OpenClaw 网关为权威来源; 网关不可达/报错时明确失败 (不伪装成功)。
 
     语义:
@@ -102,7 +107,26 @@ async def call_tool(tool_id: str, parameters: dict) -> dict:
       - 网关返回无效响应 / HTTP 错误 → success=False + error (source=mock)
       - 连接级失败 (网关不可达) → success=False，明确报告网关不可用
     """
-    tools_by_id = {tool.id: tool for tool in await discover_tools()}
+    if tool_id.startswith("mcp:"):
+        if user is None:
+            return _tool_failure(tool_id, parameters, "MCP 工具缺少用户连接上下文")
+        from app.services import mcp_service
+
+        try:
+            result = await mcp_service.call_server_tool(user, tool_id, parameters)
+        except Exception as exc:
+            logger.warning("MCP 工具调用失败: tool=%s error=%s", tool_id, exc)
+            return _tool_failure(tool_id, parameters, str(exc))
+        return {
+            "tool_id": tool_id,
+            "success": True,
+            "result": result,
+            "error": None,
+            "source": "mcp",
+        }
+
+    discovered = await discover_tools(user) if user is not None else await discover_tools()
+    tools_by_id = {tool.id: tool for tool in discovered}
     tool = tools_by_id.get(tool_id)
     if tool is None:
         return {
