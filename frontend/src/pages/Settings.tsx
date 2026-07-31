@@ -25,7 +25,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Cable, Loader2, Send, Cpu, Cloud, Server, KeyRound, Trash2, Wrench, Plus, Zap, Play, Pencil, X, RefreshCw, Sparkles, Eye, EyeOff } from "lucide-react"
+import { Cable, Loader2, Send, Cpu, Cloud, Server, KeyRound, Trash2, Wrench, Plus, Zap, Play, Pencil, X, RefreshCw } from "lucide-react"
 
 type StatusMeta = { label: string; dotClass: string }
 
@@ -68,7 +68,6 @@ function uniqueModels(models: ModelInfo[]) {
 
 export function Settings() {
   const { user, fetchMe } = useAuthStore()
-  const [dragonVisible, setDragonVisible] = useState(() => localStorage.getItem("kai-dragon-visible") !== "false")
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [models, setModels] = useState<ModelInfo[]>([])
   const [modelsLoadFailed, setModelsLoadFailed] = useState(false)
@@ -123,10 +122,6 @@ export function Settings() {
   const [llmDefault, setLlmDefault] = useState("default")
   const [llmDefaultSaving, setLlmDefaultSaving] = useState(false)
   const [llmDefaultMsg, setLlmDefaultMsg] = useState<string | null>(null)
-
-  useEffect(() => {
-    localStorage.setItem("kai-dragon-visible", String(dragonVisible))
-  }, [dragonVisible])
 
   const loadAll = async () => {
     setLoading(true)
@@ -425,41 +420,6 @@ export function Settings() {
           模型供应商 · API Key · 推送渠道 · 本地工具 · 在线测试对话
         </p>
       </div>
-
-      <Card className="overflow-hidden border-[#263b3d] bg-[#0b1416] text-[#cad7d8]">
-        <CardHeader className="border-b border-[#263b3d] py-3">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-2">
-              <Sparkles className="h-5 w-5 shrink-0 text-[#62cccc]" />
-              <div className="min-w-0">
-                <CardTitle className="text-base text-[#eef7f7]">KAI 龙形动效</CardTitle>
-                <CardDescription className="text-[#809597]">移动鼠标，让线框龙跟随指针运动</CardDescription>
-              </div>
-            </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="shrink-0 text-[#809597] hover:bg-[#17282a] hover:text-[#eef7f7]"
-              onClick={() => setDragonVisible((visible) => !visible)}
-              aria-expanded={dragonVisible}
-            >
-              {dragonVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              {dragonVisible ? "收起" : "展开"}
-            </Button>
-          </div>
-        </CardHeader>
-        {dragonVisible && (
-          <CardContent className="p-0">
-            <iframe
-              title="KAI 龙形动效"
-              src="/dragon-kinematics.html"
-              className="block h-[220px] w-full border-0 sm:h-[320px]"
-              sandbox="allow-scripts allow-same-origin"
-            />
-          </CardContent>
-        )}
-      </Card>
 
       {loading ? (
         <div className="flex items-center justify-center py-12">

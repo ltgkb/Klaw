@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <title>KAI Dragon Kinematics</title>
-    <style>html,body{width:100%;height:100%;margin:0;background:#0b1416;overflow:hidden}canvas{display:block}</style>
+    <style>html,body{width:100%;height:100%;margin:0;background:transparent;overflow:hidden}canvas{display:block}</style>
   </head>
 
   <body>
@@ -18,6 +18,11 @@
           y: 0,
         },
       };
+      window.addEventListener("message", function (event) {
+        if (event.origin !== window.location.origin || event.data?.type !== "kai-dragon-pointer") return;
+        Input.mouse.x = Number(event.data.x) || 0;
+        Input.mouse.y = Number(event.data.y) || 0;
+      });
       for (var i = 0; i < 230; i++) {
         Input.keys.push(false);
       }
@@ -66,7 +71,7 @@
       window.addEventListener("resize", function () {
         canvas.width = window.innerWidth;
         canvas.height = window.innerHeight;
-        ctx.strokeStyle = "#cad7d8";
+        ctx.strokeStyle = "#177777";
         ctx.lineWidth = 1.15;
       });
       /* Necessary classes */
@@ -687,8 +692,8 @@
           dragon.follow(Input.mouse.x, Input.mouse.y);
         }, 33);
       }
-      canvas.style.backgroundColor = "#0b1416";
-      ctx.strokeStyle = "#cad7d8";
+      canvas.style.backgroundColor = "transparent";
+      ctx.strokeStyle = "#177777";
       ctx.lineWidth = 1.15;
       /* setupSimple(); */ /* Just the very basic string */
       /* setupTentacle(); */ /* Tentacle that reaches for mouse */
@@ -700,5 +705,3 @@
       setupDragon(4.5, 5, 30);
     </script>
   </body>
-
-
