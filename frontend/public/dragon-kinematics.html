@@ -128,10 +128,23 @@
           }
         }
         draw(iter) {
-          ctx.beginPath();
-          ctx.moveTo(this.parent.x, this.parent.y);
-          ctx.lineTo(this.x, this.y);
-          ctx.stroke();
+          if (!this.hiddenDetail) {
+            ctx.save();
+            if (this.isClaw) {
+              ctx.lineWidth = 6;
+              ctx.lineCap = "round";
+              ctx.strokeStyle = "rgba(23, 119, 119, 0.95)";
+            } else if (this.isLimb) {
+              ctx.lineWidth = 8;
+              ctx.lineCap = "round";
+              ctx.strokeStyle = "rgba(23, 119, 119, 0.78)";
+            }
+            ctx.beginPath();
+            ctx.moveTo(this.parent.x, this.parent.y);
+            ctx.lineTo(this.x, this.y);
+            ctx.stroke();
+            ctx.restore();
+          }
           if (iter) {
             for (var i = 0; i < this.children.length; i++) {
               this.children[i].draw(true);
@@ -413,10 +426,19 @@
             right.push({ x: nodes[i].x - offsetX, y: nodes[i].y - offsetY });
           }
           ctx.save();
+          var outline = left.concat(right.reverse());
           ctx.beginPath();
-          ctx.moveTo(left[0].x, left[0].y);
-          for (var i = 1; i < left.length; i++) ctx.lineTo(left[i].x, left[i].y);
-          for (var i = right.length - 1; i >= 0; i--) ctx.lineTo(right[i].x, right[i].y);
+          ctx.moveTo(outline[0].x, outline[0].y);
+          for (var i = 1; i < outline.length; i++) {
+            var point = outline[i];
+            var nextPoint = outline[(i + 1) % outline.length];
+            ctx.quadraticCurveTo(
+              point.x,
+              point.y,
+              (point.x + nextPoint.x) / 2,
+              (point.y + nextPoint.y) / 2,
+            );
+          }
           ctx.closePath();
           ctx.fillStyle = "rgba(23, 119, 119, 0.42)";
           ctx.strokeStyle = "rgba(23, 119, 119, 0.82)";
@@ -668,8 +690,10 @@
           dragon.spine.push(spinal);
           for (var ii = -1; ii <= 1; ii += 2) {
             var node = new Segment(spinal, s * 3, ii, 0.1, 2);
+            node.hiddenDetail = true;
             for (var iii = 0; iii < 3; iii++) {
               node = new Segment(node, s * 0.1, -ii * 0.1, 0.1, 2);
+              node.hiddenDetail = true;
             }
           }
         }
@@ -682,8 +706,10 @@
               dragon.spine.push(spinal);
               for (var iii = -1; iii <= 1; iii += 2) {
                 var node = new Segment(spinal, s * 3, iii * 1.571, 0.1, 1.5);
+                node.hiddenDetail = true;
                 for (var iv = 0; iv < 3; iv++) {
                   node = new Segment(node, s * 3, -iii * 0.3, 0.1, 2);
+                  node.hiddenDetail = true;
                 }
               }
             }
@@ -698,6 +724,7 @@
                 0,
                 8,
               ); /* Hip */
+              node.isLimb = true;
               node = new Segment(
                 node,
                 s * 16,
@@ -705,6 +732,7 @@
                 6.28,
                 1,
               ); /* Humerus */
+              node.isLimb = true;
               node = new Segment(
                 node,
                 s * 16,
@@ -712,8 +740,10 @@
                 3.1415,
                 2,
               ); /* Forearm */
+              node.isLimb = true;
               for (var iii = 0; iii < 4; iii++ /* fingers */) {
-                new Segment(node, s * 4, (iii / 3 - 0.5) * 1.571, 0.1, 4);
+                var claw = new Segment(node, s * 4, (iii / 3 - 0.5) * 1.571, 0.1, 4);
+                claw.isClaw = true;
               }
               new LegSystem(node, 3, s * 12, dragon, 4);
             }
@@ -725,6 +755,7 @@
           dragon.spine.push(spinal);
           for (var ii = -1; ii <= 1; ii += 2) {
             var node = new Segment(spinal, s * 3, ii, 0.1, 2);
+            node.hiddenDetail = true;
             for (var iii = 0; iii < 3; iii++) {
               node = new Segment(
                 node,
@@ -733,6 +764,7 @@
                 0.1,
                 2,
               );
+              node.hiddenDetail = true;
             }
           }
         }
