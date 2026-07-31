@@ -3,7 +3,6 @@ import { LayoutDashboard, BookOpen, Workflow, Settings, Brain, LogIn, LogOut, Bo
 import { useAuthStore } from "@/store/auth"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { DragonOverlay } from "@/components/DragonOverlay"
 
 const navItems = [
   { to: "/kb", label: "知识库", icon: BookOpen },
@@ -32,10 +31,9 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="kai-admin-shell relative flex h-screen min-w-0 overflow-hidden">
-      <DragonOverlay />
+    <div className="kai-admin-shell flex h-screen min-w-0">
       {/* 侧边栏 */}
-      <aside className="kai-admin-sidebar relative z-10 hidden w-60 shrink-0 flex-col border-r md:flex">
+      <aside className="kai-admin-sidebar hidden w-60 shrink-0 flex-col border-r md:flex">
         <Link
           to="/"
           title="返回问答首屏"
@@ -64,7 +62,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       </aside>
 
       {/* 主区域 */}
-      <div className="relative z-10 flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col">
         {/* 顶栏 */}
         <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b px-3 sm:px-6">
           <Link
