@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 # 测试用 SQLite 内存数据库 (无需 PostgreSQL 依赖)
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 
-os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-for-pytest-only")
+os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-for-pytest-only!")
 os.environ.setdefault("ENCRYPTION_KEY", "a" * 64)  # 32 bytes hex
 
 from app.core.database import get_db  # noqa: E402
