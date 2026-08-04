@@ -39,14 +39,16 @@ export function Register() {
   }
 
   return (
-    <div className="flex min-h-[100dvh] items-center justify-center bg-secondary/30">
-      <Card className="w-[400px]">
-        <CardHeader>
-          <CardTitle className="text-2xl">注册</CardTitle>
-          <CardDescription>创建 KAI知识账号</CardDescription>
+    <div className="flex min-h-[100dvh] flex-col bg-background p-4 sm:p-6">
+      <Link to="/" className="w-fit text-sm font-semibold tracking-[-0.02em]">KAI知识</Link>
+      <main className="flex flex-1 items-center justify-center py-8">
+      <Card className="w-full max-w-[420px] shadow-xl shadow-primary/5">
+        <CardHeader className="space-y-2 p-6 sm:p-8 sm:pb-6">
+          <CardTitle className="text-2xl tracking-tight">创建账号</CardTitle>
+          <CardDescription>注册后进入 KAI知识管理平台</CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit}>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-5 px-6 sm:px-8">
             {error && (
               <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
                 {error}
@@ -96,19 +98,20 @@ export function Register() {
               />
             </div>
           </CardContent>
-          <CardFooter className="flex flex-col gap-3">
-            <Button type="submit" className="w-full" disabled={loading}>
+          <CardFooter className="flex flex-col gap-4 px-6 pb-6 pt-6 sm:px-8 sm:pb-8">
+            <Button type="submit" className="h-10 w-full" disabled={loading}>
               {loading ? "注册中..." : "注册"}
             </Button>
             <p className="text-sm text-muted-foreground">
               已有账号？{" "}
-              <Link to="/login" className="text-primary underline">
+              <Link to="/login" className="font-medium text-primary underline underline-offset-4">
                 登录
               </Link>
             </p>
           </CardFooter>
         </form>
       </Card>
+      </main>
     </div>
   )
 }

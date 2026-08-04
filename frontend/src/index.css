@@ -67,6 +67,11 @@ html[data-color-mode="dark"] {
   background: var(--color-background);
 }
 
+.kai-admin-shell main > div {
+  margin-inline: auto;
+  width: min(100%, 1280px);
+}
+
 .kai-admin-header,
 .kai-admin-brand,
 .kai-mobile-nav {
@@ -303,6 +308,11 @@ html[data-color-mode="dark"] {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .kai-admin-shell .animate-pulse,
+  .kai-flow-page .animate-spin {
+    animation: none !important;
+  }
+
   .kai-ticker {
     animation-play-state: paused;
   }
