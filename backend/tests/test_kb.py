@@ -698,3 +698,29 @@ async def test_batch_delete_chunks(client, mock_infra):
         headers=headers,
     )).json()
     assert after["total"] == before["total"] - len(selected)
+
+
+@pytest.mark.asyncio
+async def test_document_parsing_has_bounded_concurrency(monkeypatch):
+    """大型文档后台任务不得无上限并行占用 CPU 和内存。"""
+    from app.core.config import settings
+
+    active = 0
+    peak = 0
+
+    async def fake_parse(doc_id, kb_id):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.02)
+        active -= 1
+
+    monkeypatch.setattr(settings, "document_parse_max_concurrency", 2)
+    monkeypatch.setattr(document_service, "_parse_semaphore", None)
+    monkeypatch.setattr(document_service, "_parse_semaphore_limit", None)
+    monkeypatch.setattr(document_service, "_parse_and_index_unbounded", fake_parse)
+
+    await asyncio.gather(
+        *(document_service.parse_and_index(uuid.uuid4(), uuid.uuid4()) for _ in range(6))
+    )
+    assert peak == 2

@@ -72,6 +72,7 @@ class Settings(BaseSettings):
 
     # ── 文件上传限制 ──
     max_upload_size: int = 100 * 1024 * 1024  # 100 MB
+    document_parse_max_concurrency: int = 2
 
     # ── 本地 Agent: OpenClaw ──
     openclaw_url: str = "http://localhost:8080"

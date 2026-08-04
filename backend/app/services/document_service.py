@@ -27,6 +27,21 @@ from app.services import deepdoc_service, kb_service
 
 logger = logging.getLogger("claw.doc_service")
 
+_parse_semaphore: asyncio.Semaphore | None = None
+_parse_semaphore_limit: int | None = None
+
+
+def _get_parse_semaphore() -> asyncio.Semaphore:
+    """Lazily create the per-process parser bound used by background tasks."""
+    global _parse_semaphore, _parse_semaphore_limit
+    from app.core.config import settings
+
+    limit = max(1, int(settings.document_parse_max_concurrency))
+    if _parse_semaphore is None or _parse_semaphore_limit != limit:
+        _parse_semaphore = asyncio.Semaphore(limit)
+        _parse_semaphore_limit = limit
+    return _parse_semaphore
+
 
 # ── 上传 ──
 
@@ -63,6 +78,13 @@ async def upload_document(
 # ── 异步解析+索引管线 ──
 
 async def parse_and_index(doc_id: uuid.UUID, kb_id: uuid.UUID) -> None:
+    """Queue CPU/memory-heavy parsing behind a small per-process bound."""
+    semaphore = _get_parse_semaphore()
+    async with semaphore:
+        await _parse_and_index_unbounded(doc_id, kb_id)
+
+
+async def _parse_and_index_unbounded(doc_id: uuid.UUID, kb_id: uuid.UUID) -> None:
     """后台任务: 解析文档 → 分块 → 向量化 → ES 索引。
 
     使用独立的 DB session (不在请求上下文内)。
