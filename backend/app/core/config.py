@@ -102,8 +102,17 @@ class Settings(BaseSettings):
     kaiweb_api_key: str = ""
     kaiweb_model: str = "glm-4.5-air"
 
-    # ── CORS ──
-    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000", "*"]
+    # ── CORS / 公网接口保护 ──
+    # 第三方 API 自身使用 API Key，并在对应端点返回无凭证的通配 CORS；
+    # 管理端和匿名首页只允许这里明确列出的站点。
+    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
+    rate_limit_enabled: bool = True
+    public_chat_rate_per_minute: int = 12
+    public_chat_max_concurrency: int = 4
+    auth_login_rate_per_minute: int = 10
+    auth_register_rate_per_minute: int = 5
+    api_key_rate_per_minute: int = 60
+    api_key_max_concurrency: int = 8
 
     @model_validator(mode="after")
     def _reject_default_secrets_in_prod(self) -> "Settings":
@@ -121,6 +130,8 @@ class Settings(BaseSettings):
                     "prod 环境必须通过 ENCRYPTION_KEY 设置真实加密密钥 "
                     "(python -c \"import secrets; print(secrets.token_hex(32))\")"
                 )
+            if "*" in self.cors_origins:
+                raise ValueError("prod 环境禁止 CORS_ORIGINS 使用通配符 *")
         return self
 
     @property

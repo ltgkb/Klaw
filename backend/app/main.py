@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.v1.router import api_router
 from app.core.config import settings
+from app.core.rate_limit import RateLimitMiddleware, SecurityHeadersMiddleware
 
 # 结构化日志 (JSON 格式, 按 task_id 关联 — PRD 8.3)
 logging.basicConfig(
@@ -112,6 +113,8 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
 
     # 全局异常处理
     @app.exception_handler(Exception)
