@@ -44,6 +44,29 @@ async def _reap_stale_executions(db: AsyncSession, executions: list[Execution]) 
         logger.info("惰性回收过期执行记录 %d 条", len(reaped))
 
 
+async def reap_interrupted_executions(db: AsyncSession) -> int:
+    """Mark all in-process executions left by a previous backend process as failed."""
+    result = await db.execute(
+        select(Execution).where(
+            Execution.status.in_(
+                (
+                    ExecutionStatus.pending,
+                    ExecutionStatus.running,
+                    ExecutionStatus.paused,
+                )
+            )
+        )
+    )
+    interrupted = list(result.scalars().all())
+    for execution in interrupted:
+        execution.status = ExecutionStatus.failed
+        execution.error_message = "服务重启中断"
+    if interrupted:
+        await db.commit()
+        logger.warning("启动时回收中断执行记录 %d 条", len(interrupted))
+    return len(interrupted)
+
+
 async def create_flow(db: AsyncSession, owner_id, data: FlowCreate) -> AgentFlow:
     """创建工作流。"""
     flow = AgentFlow(

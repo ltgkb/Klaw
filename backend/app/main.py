@@ -48,6 +48,17 @@ async def lifespan(app: FastAPI):
 
     logger.info("基础设施资源初始化完成")
 
+    # 所有工作流任务都在本进程内运行；进程重启后遗留的非终态任务不可能恢复。
+    try:
+        from app.core.database import async_session_factory
+        from app.services.agent_flow_service import reap_interrupted_executions
+        async with async_session_factory() as db:
+            reaped = await reap_interrupted_executions(db)
+        if reaped:
+            logger.warning("已回收服务重启中断的执行记录: %d", reaped)
+    except Exception as e:
+        logger.warning("中断执行记录回收失败: %s", e)
+
     # APScheduler 定时调度器
     try:
         from app.core.scheduler import init_scheduler

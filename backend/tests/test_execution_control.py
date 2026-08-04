@@ -265,6 +265,33 @@ async def test_sse_rejects_disabled_user_and_malformed_subject(client, db_sessio
 # ── 惰性 reaper (P1-2) ──
 
 @pytest.mark.asyncio
+async def test_startup_reaper_marks_all_nonterminal_executions_failed(
+    client, db_session
+):
+    """进程重启后，旧进程留下的 pending/running/paused 均不能继续执行。"""
+    from app.services.agent_flow_service import reap_interrupted_executions
+
+    token = await _register_and_login(client, "startup_reaper@test.com")
+    flow_id = await _create_flow(client, token)
+    targets = [
+        await _insert_execution(db_session, flow_id, status)
+        for status in (
+            ExecutionStatus.pending,
+            ExecutionStatus.running,
+            ExecutionStatus.paused,
+        )
+    ]
+    finished = await _insert_execution(db_session, flow_id, ExecutionStatus.success)
+
+    assert await reap_interrupted_executions(db_session) == 3
+    for execution in targets:
+        await db_session.refresh(execution)
+        assert execution.status == ExecutionStatus.failed
+        assert execution.error_message == "服务重启中断"
+    await db_session.refresh(finished)
+    assert finished.status == ExecutionStatus.success
+
+@pytest.mark.asyncio
 async def test_reaper_on_list_executions(client, db_session):
     """list 执行时, running 且 updated_at 超 30 分钟的记录被置 failed「服务重启中断」。"""
     token = await _register_and_login(client, "reaper_list@test.com")
