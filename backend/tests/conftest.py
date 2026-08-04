@@ -14,6 +14,7 @@ TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-for-pytest-only!")
 os.environ.setdefault("ENCRYPTION_KEY", "a" * 64)  # 32 bytes hex
 
+import app.models  # noqa: E402,F401 - register all ORM tables before create_all
 from app.core.database import get_db  # noqa: E402
 from app.models.base import Base  # noqa: E402
 

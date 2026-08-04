@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -55,10 +56,12 @@ def password_needs_rehash(hashed: str) -> bool:
 
 def create_access_token(subject: str, extra: dict[str, Any] | None = None) -> str:
     """生成短时效 access token。"""
-    expire = datetime.now(UTC) + timedelta(minutes=settings.access_token_expire_minutes)
+    issued_at = datetime.now(UTC)
+    expire = issued_at + timedelta(minutes=settings.access_token_expire_minutes)
     payload: dict[str, Any] = {
         "sub": subject,
         "exp": expire,
+        "iat": issued_at,
         "type": "access",
     }
     if extra:
@@ -66,13 +69,16 @@ def create_access_token(subject: str, extra: dict[str, Any] | None = None) -> st
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
-def create_refresh_token(subject: str) -> str:
+def create_refresh_token(subject: str, jti: str | None = None) -> str:
     """生成长时效 refresh token。"""
-    expire = datetime.now(UTC) + timedelta(days=settings.refresh_token_expire_days)
+    issued_at = datetime.now(UTC)
+    expire = issued_at + timedelta(days=settings.refresh_token_expire_days)
     payload = {
         "sub": subject,
         "exp": expire,
+        "iat": issued_at,
         "type": "refresh",
+        "jti": jti or uuid.uuid4().hex,
     }
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 

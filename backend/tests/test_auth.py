@@ -154,6 +154,47 @@ async def test_refresh_token(client):
     resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": refresh})
     assert resp.status_code == 200
     assert "access_token" in resp.json()
+    replacement = resp.json()["refresh_token"]
+
+    replay = await client.post("/api/v1/auth/refresh", json={"refresh_token": refresh})
+    assert replay.status_code == 401
+    assert "已使用或失效" in replay.json()["detail"]
+
+    rotated = await client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": replacement}
+    )
+    assert rotated.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_logout_revokes_refresh_token(client):
+    await client.post("/api/v1/auth/register", json={
+        "email": "logout@test.com", "name": "Logout", "password": "secret123",
+    })
+    login_resp = await client.post("/api/v1/auth/login", json={
+        "email": "logout@test.com", "password": "secret123",
+    })
+    refresh = login_resp.json()["refresh_token"]
+    logout = await client.post("/api/v1/auth/logout", json={"refresh_token": refresh})
+    assert logout.status_code == 204
+    assert (await client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": refresh}
+    )).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_access_token_lifetime_is_30_minutes(client):
+    from app.core.security import decode_token
+
+    await client.post("/api/v1/auth/register", json={
+        "email": "expiry@test.com", "name": "Expiry", "password": "secret123",
+    })
+    login_resp = await client.post("/api/v1/auth/login", json={
+        "email": "expiry@test.com", "password": "secret123",
+    })
+    payload = decode_token(login_resp.json()["access_token"])
+    assert payload is not None
+    assert payload["exp"] - payload["iat"] == 30 * 60
 
 
 @pytest.mark.asyncio

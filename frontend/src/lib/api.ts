@@ -138,6 +138,9 @@ export const authApi = {
 
   refresh: (refreshToken: string) =>
     api.post<TokenResponse>("/auth/refresh", { refresh_token: refreshToken }),
+
+  logout: (refreshToken: string) =>
+    api.post<void>("/auth/logout", { refresh_token: refreshToken }),
 }
 
 // ── 知识库 API ──
