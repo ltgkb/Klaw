@@ -7,7 +7,7 @@ import io
 import logging
 from collections.abc import Callable
 from datetime import timedelta
-from typing import TypeVar
+from typing import BinaryIO, TypeVar
 from urllib.parse import urlsplit, urlunsplit
 
 from minio import Minio
@@ -103,6 +103,31 @@ def upload_file(object_name: str, data: bytes, content_type: str = "application/
 
     _with_bucket_retry(_put)
     logger.info("MinIO 上传成功: %s (%d bytes)", object_name, len(data))
+    return object_name
+
+
+def upload_stream(
+    object_name: str,
+    data: BinaryIO,
+    length: int,
+    content_type: str = "application/octet-stream",
+) -> str:
+    """Stream an already-spooled upload to MinIO without copying it into RAM."""
+
+    def _put() -> None:
+        # MinIO may retry after a storage error; each attempt must start at byte 0.
+        data.seek(0)
+        client = get_minio_client()
+        client.put_object(
+            bucket_name=settings.minio_bucket,
+            object_name=object_name,
+            data=data,
+            length=length,
+            content_type=content_type,
+        )
+
+    _with_bucket_retry(_put)
+    logger.info("MinIO 流式上传成功: %s (%d bytes)", object_name, length)
     return object_name
 
 

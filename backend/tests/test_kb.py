@@ -49,11 +49,15 @@ def mock_infra(monkeypatch, db_engine):
     # Mock MinIO (document_service 导入: upload_file, download_file, delete_file — 都是同步函数)
     def mock_upload_file(object_name, data, content_type="application/octet-stream"):
         return object_name
+    def mock_upload_stream(object_name, data, length, content_type="application/octet-stream"):
+        assert length >= 0
+        return object_name
     def mock_download_file(object_name):
         return b"mock file content"
     def mock_delete_file(object_name):
         pass
     monkeypatch.setattr("app.services.document_service.upload_file", mock_upload_file)
+    monkeypatch.setattr("app.services.document_service.upload_stream", mock_upload_stream)
     monkeypatch.setattr("app.services.document_service.download_file", mock_download_file)
     monkeypatch.setattr("app.services.document_service.delete_file", mock_delete_file)
     # kb_service 也导入了 delete_file

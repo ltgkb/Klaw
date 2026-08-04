@@ -199,6 +199,11 @@ def mock_minio(monkeypatch):
         store[object_name] = (data, content_type)
         return object_name
 
+    def fake_upload_stream(object_name, data, length, content_type="application/octet-stream"):
+        data.seek(0)
+        store[object_name] = (data.read(length), content_type)
+        return object_name
+
     def fake_download(object_name):
         return store[object_name][0]
 
@@ -208,8 +213,9 @@ def mock_minio(monkeypatch):
     def fake_delete(object_name):
         store.pop(object_name, None)
 
+    monkeypatch.setattr(minio_client, "upload_file", fake_upload)
     for mod in (minio_client, files_ep):
-        monkeypatch.setattr(mod, "upload_file", fake_upload)
+        monkeypatch.setattr(mod, "upload_stream", fake_upload_stream)
         monkeypatch.setattr(mod, "download_file", fake_download)
         monkeypatch.setattr(mod, "get_presigned_url", fake_presigned)
         monkeypatch.setattr(mod, "delete_file", fake_delete)
@@ -265,7 +271,7 @@ async def test_file_workspace_rejects_oversized_upload_before_storage(client, mo
     def unexpected_upload(*args, **kwargs):
         raise AssertionError("oversized upload must be rejected before MinIO")
 
-    monkeypatch.setattr(files_ep, "upload_file", unexpected_upload)
+    monkeypatch.setattr(files_ep, "upload_stream", unexpected_upload)
     token = await _register_and_login(client, "filelarge@test.com")
     resp = await client.post(
         "/api/v1/files",
@@ -310,7 +316,7 @@ async def test_file_upload_minio_failure_503(client, monkeypatch):
     def boom(*args, **kwargs):
         raise S3Error(None, "NoSuchBucket", "bucket gone", "res", "req", "host")
 
-    monkeypatch.setattr(files_ep, "upload_file", boom)
+    monkeypatch.setattr(files_ep, "upload_stream", boom)
 
     token = await _register_and_login(client, "s3fail@test.com")
     resp = await client.post(

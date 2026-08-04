@@ -6,6 +6,7 @@
 import asyncio
 import logging
 import uuid
+from typing import BinaryIO
 
 from fastapi import HTTPException
 from sqlalchemy import delete, select
@@ -17,7 +18,7 @@ from app.core.es_client import (
     hybrid_search as es_hybrid_search,
     index_chunks_bulk,
 )
-from app.core.minio_client import delete_file, download_file, upload_file
+from app.core.minio_client import delete_file, download_file, upload_file, upload_stream
 from app.core.tei_client import embed_query, embed_texts
 from app.models.chunk import Chunk, ContentType
 from app.models.document import Document, ParseStatus
@@ -72,6 +73,37 @@ async def upload_document(
     await db.refresh(doc)
 
     logger.info("文档上传: %s → %s (%d bytes)", filename, doc.id, len(file_data))
+    return doc
+
+
+async def upload_document_stream(
+    db: AsyncSession,
+    kb: KnowledgeBase,
+    filename: str,
+    file_stream: BinaryIO,
+    file_size: int,
+    content_type: str,
+) -> Document:
+    """Stream an UploadFile spool to MinIO and create its pending document row."""
+    doc_id = uuid.uuid4()
+    object_name = f"{kb.id}/{doc_id}/{filename}"
+    await asyncio.to_thread(
+        upload_stream, object_name, file_stream, file_size, content_type
+    )
+
+    doc = Document(
+        id=doc_id,
+        kb_id=kb.id,
+        filename=filename,
+        file_path=object_name,
+        file_size=file_size,
+        parse_status=ParseStatus.pending,
+    )
+    db.add(doc)
+    await kb_service.increment_doc_count(db, kb.id, delta=1)
+    await db.commit()
+    await db.refresh(doc)
+    logger.info("文档流式上传: %s → %s (%d bytes)", filename, doc.id, file_size)
     return doc
 
 

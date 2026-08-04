@@ -20,8 +20,9 @@ from app.core.minio_client import (
     delete_file,
     download_file,
     get_presigned_url,
-    upload_file,
+    upload_stream,
 )
+from app.core.upload import get_upload_size
 from app.models.workspace_file import WorkspaceFile
 from app.schemas.file import FileRead, FileShareResponse
 
@@ -51,13 +52,13 @@ async def upload_workspace_file(
     file: UploadFile = File(...),
 ):
     """上传文件到个人工作区。"""
-    file_data = await file.read()
-    if len(file_data) > settings.max_upload_size:
+    file_size = await get_upload_size(file)
+    if file_size > settings.max_upload_size:
         raise HTTPException(
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"文件超过大小限制 ({settings.max_upload_size // 1024 // 1024}MB)",
         )
-    if not file_data:
+    if not file_size:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="文件为空")
 
     file_id = uuid.uuid4()
@@ -66,7 +67,11 @@ async def upload_workspace_file(
 
     try:
         await asyncio.to_thread(
-            upload_file, object_name, file_data, file.content_type or "application/octet-stream"
+            upload_stream,
+            object_name,
+            file.file,
+            file_size,
+            file.content_type or "application/octet-stream",
         )
     except S3Error as e:
         raise _storage_unavailable(e) from e
@@ -76,7 +81,7 @@ async def upload_workspace_file(
         owner_id=current_user.id,
         filename=filename,
         object_name=object_name,
-        file_size=len(file_data),
+        file_size=file_size,
         content_type=file.content_type or "application/octet-stream",
     )
     db.add(wf)

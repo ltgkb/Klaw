@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.deps import CurrentUser, DBSession
+from app.core.upload import get_upload_size
 from app.schemas.common import APIResponse, PageResponse
 from app.schemas.knowledge_base import (
     ChunkBatchDelete,
@@ -121,19 +122,24 @@ async def upload_document(
             detail=f"不支持的文件类型: {filename}",
         )
 
-    # 读取文件内容
-    file_data = await file.read()
-    if len(file_data) > settings.max_upload_size:
+    # UploadFile 已由 Starlette spool 到内存/临时文件；只读取长度，不复制全部内容。
+    file_size = await get_upload_size(file)
+    if file_size > settings.max_upload_size:
         raise HTTPException(
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"文件超过大小限制 ({settings.max_upload_size // 1024 // 1024}MB)",
         )
-    if not file_data:
+    if not file_size:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="文件为空")
 
     # 上传到 MinIO + 创建 DB 记录
-    doc = await document_service.upload_document(
-        db, kb, file.filename or "untitled", file_data, file.content_type or "application/octet-stream"
+    doc = await document_service.upload_document_stream(
+        db,
+        kb,
+        file.filename or "untitled",
+        file.file,
+        file_size,
+        file.content_type or "application/octet-stream",
     )
 
     # 后台异步解析+索引
