@@ -162,7 +162,7 @@ export function PublicChat() {
   const [thinking, setThinking] = useState(false)
   const [streaming, setStreaming] = useState(false)
   const [liveElapsedMs, setLiveElapsedMs] = useState(0)
-  const [estimatedMs, setEstimatedMs] = useState(50000)
+  const [estimatedMs, setEstimatedMs] = useState(32000)
   const [suggestionPage, setSuggestionPage] = useState(0)
   const [locale, setLocale] = useState<Locale>(() => {
     const saved = localStorage.getItem(LOCALE_KEY)
@@ -223,7 +223,7 @@ export function PublicChat() {
       { id: `user-${Date.now()}`, role: "user", content: text },
     ])
     const startedAt = performance.now()
-    const currentEstimatedMs = 50000 + Math.floor(Math.random() * 100) * 10
+    const currentEstimatedMs = 32000 + Math.floor(Math.random() * 100) * 10
     queryStartedAtRef.current = startedAt
     setLiveElapsedMs(0)
     setEstimatedMs(currentEstimatedMs)
