@@ -326,8 +326,10 @@ export function KnowledgeBase() {
       )}
 
       {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3" aria-label="正在加载知识库">
+          {Array.from({ length: 6 }).map((_, index) => (
+            <div key={index} className="kai-kb-skeleton h-44 animate-pulse rounded-xl border" />
+          ))}
         </div>
       ) : kbs.length === 0 ? (
         <Card>
@@ -337,40 +339,55 @@ export function KnowledgeBase() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {kbs.map((kb) => (
             <Card
               key={kb.id}
-              className="cursor-pointer transition-shadow hover:shadow-md"
-              onClick={() => {
-                if (!requireAuth(`/kb/${kb.id}`)) return
-                navigate(`/kb/${kb.id}`)
-              }}
+              className="kai-kb-card group relative overflow-hidden transition-[border-color,box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:border-primary/35 hover:shadow-lg hover:shadow-primary/5"
             >
-              <CardHeader>
-                  <div className="flex min-w-0 items-start justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <BookOpen className="h-5 w-5 text-muted-foreground" />
-                    <CardTitle className="truncate text-base">{kb.name}</CardTitle>
+              <button
+                type="button"
+                aria-label={`打开 ${kb.name}`}
+                className="absolute inset-0 z-0 cursor-pointer rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                onClick={() => {
+                  if (!requireAuth(`/kb/${kb.id}`)) return
+                  navigate(`/kb/${kb.id}`)
+                }}
+              />
+              <CardHeader className="pointer-events-none relative z-[1] min-h-32 p-5">
+                <div className="flex min-w-0 items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-start gap-3">
+                    <span className="kai-kb-icon flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent text-primary">
+                      <BookOpen className="h-4 w-4" />
+                    </span>
+                    <div className="min-w-0 pt-1.5">
+                      <CardTitle className="line-clamp-2 text-base leading-5">{kb.name}</CardTitle>
+                    </div>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      handleDelete(kb.id)
-                    }}
-                  >
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
+                  {isAuthenticated && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="pointer-events-auto relative z-[2] h-8 w-8 shrink-0 text-muted-foreground opacity-70 hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+                      title={`删除 ${kb.name}`}
+                      aria-label={`删除 ${kb.name}`}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleDelete(kb.id)
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  )}
                 </div>
-                <CardDescription>{kb.description || "无描述"}</CardDescription>
+                <CardDescription className="line-clamp-2 pl-12 leading-5">
+                  {kb.description || "暂无描述"}
+                </CardDescription>
               </CardHeader>
-              <CardContent>
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                  <span>{kb.document_count} 文档</span>
-                  <span>{kb.embedding_model}</span>
-                  <span>{kb.chunk_strategy}</span>
+              <CardContent className="pointer-events-none relative z-[1] border-t bg-muted/25 px-5 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                  <span><strong className="font-semibold text-foreground">{kb.document_count}</strong> 文档</span>
+                  <span>{kb.embedding_model} / {kb.chunk_strategy}</span>
                 </div>
               </CardContent>
             </Card>

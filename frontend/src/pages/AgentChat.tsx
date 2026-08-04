@@ -348,7 +348,7 @@ export function AgentChat() {
   }
 
   return (
-    <div className="flex h-screen min-w-0 flex-col sm:flex-row">
+    <div className="flex h-[100dvh] min-w-0 flex-col sm:flex-row">
       {/* 左侧: Agent 列表 */}
       <div className="max-h-40 w-full shrink-0 overflow-auto border-b bg-secondary/20 sm:max-h-none sm:h-full sm:w-60 sm:border-b-0 sm:border-r">
         <div className="border-b p-3">

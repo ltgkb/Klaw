@@ -39,7 +39,7 @@ export function Register() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-secondary/30">
+    <div className="flex min-h-[100dvh] items-center justify-center bg-secondary/30">
       <Card className="w-[400px]">
         <CardHeader>
           <CardTitle className="text-2xl">注册</CardTitle>

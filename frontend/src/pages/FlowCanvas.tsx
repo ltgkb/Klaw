@@ -742,7 +742,7 @@ function FlowCanvasInner() {
   }
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-[100dvh] flex-col">
       {/* 顶部工具栏 */}
       <div className="flex items-center gap-3 overflow-x-auto border-b px-4 py-2">
         <Button
@@ -833,7 +833,7 @@ function FlowCanvasInner() {
         )}>
           <span className="font-medium">执行状态: {execution.status}</span>
           {execution.error_message && (
-            <span className="truncate">— {execution.error_message}</span>
+            <span className="truncate">错误：{execution.error_message}</span>
           )}
         </div>
       )}

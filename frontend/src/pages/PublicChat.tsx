@@ -294,15 +294,7 @@ export function PublicChat() {
       )}
     >
       <header className="kai-public-header relative z-10 flex h-16 shrink-0 items-center justify-between px-4 sm:px-6">
-        <div className="flex items-center gap-3">
-          <div className="kai-brand-mark flex h-8 w-8 items-center justify-center" aria-hidden="true">
-            K
-          </div>
-          <div>
-            <div className="text-sm font-semibold tracking-[-0.01em]">{copy.brand}</div>
-            <div className="kai-muted text-[10px] uppercase tracking-[0.16em]">Knowledge Intelligence</div>
-          </div>
-        </div>
+        <div className="text-sm font-semibold tracking-[-0.02em]">{copy.brand}</div>
         <div className="flex items-center gap-1">
           {messages.length > 0 && (
             <Button
@@ -343,15 +335,11 @@ export function PublicChat() {
         {messages.length === 0 ? (
           <div className="mx-auto flex min-h-0 w-full max-w-[760px] flex-1 flex-col justify-start px-4 pb-4 pt-5 sm:justify-center sm:px-6 sm:pb-20 sm:pt-10">
             <div className="order-2 sm:order-1">
-              <div className="mb-3 flex items-center gap-2">
-                <span className="kai-section-rule h-px w-8" />
-                <span className="kai-accent text-[11px] font-semibold uppercase tracking-[0.18em]">KAI / KNOWLEDGE</span>
-              </div>
               <h1 className="kai-hero-title">{copy.brand}</h1>
             </div>
 
             <div className="order-4 mt-4 w-full sm:order-2 sm:mt-8">
-              <div className="kai-query-field flex items-end">
+              <div className="kai-query-field flex items-end rounded-xl">
                 <Search className="kai-muted mb-[15px] ml-4 h-4 w-4 shrink-0" aria-hidden="true" />
                 <textarea
                   value={input}
@@ -371,7 +359,7 @@ export function PublicChat() {
                   size="icon"
                   onClick={() => void send()}
                   disabled={thinking || !input.trim()}
-                  className="kai-primary-action h-12 w-12 shrink-0"
+                  className="kai-primary-action m-1 h-10 w-10 shrink-0 rounded-lg"
                   aria-label={copy.send}
                 >
                   {thinking ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
@@ -385,7 +373,7 @@ export function PublicChat() {
                 <button
                   key={suggestion}
                   onClick={() => void send(suggestion)}
-                  className="kai-suggestion flex min-h-10 max-w-full items-center justify-between gap-3 px-3 py-2 text-left text-xs"
+                  className="kai-suggestion flex min-h-10 max-w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-xs"
                 >
                   <span>{suggestion}</span>
                   <ArrowUp className="h-3 w-3 rotate-45 opacity-50" aria-hidden="true" />
@@ -398,7 +386,6 @@ export function PublicChat() {
               <div className="kai-ticker">
                 {[...copy.announcements, ...copy.announcements].map((announcement, index) => (
                   <span key={`${announcement}-${index}`} className="flex h-6 items-center justify-start sm:h-8">
-                    <span className="kai-status-dot mr-2 h-1.5 w-1.5" />
                     {announcement}
                   </span>
                 ))}
@@ -462,7 +449,7 @@ export function PublicChat() {
         )}
 
         {messages.length > 0 && <div className="relative mx-auto w-full max-w-[760px] shrink-0 px-4 pb-4 sm:px-6 sm:pb-5">
-          <div className="kai-query-field flex items-end">
+          <div className="kai-query-field flex items-end rounded-xl">
             <Search className="kai-muted mb-[15px] ml-4 h-4 w-4 shrink-0" aria-hidden="true" />
             <textarea
               value={input}
@@ -482,7 +469,7 @@ export function PublicChat() {
               size="icon"
               onClick={() => void send()}
               disabled={thinking || !input.trim()}
-                className="kai-primary-action h-12 w-12 shrink-0"
+                className="kai-primary-action m-1 h-10 w-10 shrink-0 rounded-lg"
               aria-label={copy.send}
             >
               {thinking ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
@@ -497,7 +484,7 @@ export function PublicChat() {
       <Link
         to="/kb"
         className={cn(
-          "kai-kb-link fixed left-4 top-20 z-20 items-center gap-2 px-3 py-2 text-xs font-medium sm:bottom-5 sm:left-5 sm:top-auto sm:px-4 sm:py-2.5 sm:text-sm",
+          "kai-kb-link fixed left-4 top-20 z-20 items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium sm:bottom-5 sm:left-5 sm:top-auto sm:px-4 sm:py-2.5 sm:text-sm",
           hasAssistantReply ? "flex" : "hidden sm:flex",
         )}
       >

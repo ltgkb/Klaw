@@ -31,26 +31,26 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="kai-admin-shell flex h-screen min-w-0">
+    <div className="kai-admin-shell flex h-[100dvh] min-w-0">
       {/* 侧边栏 */}
       <aside className="kai-admin-sidebar hidden w-60 shrink-0 flex-col border-r md:flex">
         <Link
           to="/"
           title="返回问答首屏"
-          className="flex h-14 items-center gap-2 border-b px-4 font-semibold transition-colors hover:bg-accent"
+          className="kai-admin-brand flex h-16 items-center gap-2.5 border-b px-4 font-semibold transition-colors hover:bg-accent"
         >
           <House className="h-4 w-4" />
           KAI知识
         </Link>
-        <nav className="flex-1 space-y-1 p-2">
+        <nav className="flex-1 space-y-1.5 p-3">
           {visibleNavItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
               className={({ isActive }) =>
                 cn(
-                  "flex items-center gap-3 border-l-2 border-transparent px-3 py-2 text-sm font-medium transition-colors",
-                  isActive ? "border-primary bg-accent text-accent-foreground" : "hover:bg-accent",
+                  "flex items-center gap-3 rounded-lg border border-transparent px-3 py-2.5 text-sm font-medium transition-[color,background-color,border-color,transform] active:translate-y-px",
+                  isActive ? "border-primary/15 bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/70 hover:text-foreground",
                 )
               }
             >
@@ -64,7 +64,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       {/* 主区域 */}
       <div className="flex min-w-0 flex-1 flex-col">
         {/* 顶栏 */}
-        <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b px-3 sm:px-6">
+        <header className="kai-admin-header flex h-16 shrink-0 items-center justify-between gap-2 border-b px-3 sm:px-6">
           <Link
             to="/"
             title="返回问答首屏"
@@ -96,14 +96,14 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
-        <nav className="flex shrink-0 gap-1 overflow-x-auto border-b p-2 md:hidden">
+        <nav className="kai-mobile-nav flex shrink-0 gap-1 overflow-x-auto border-b px-2 py-2 md:hidden">
           {visibleNavItems.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
                 className={({ isActive }) => cn(
-                  "flex shrink-0 items-center gap-2 border-b-2 border-transparent px-3 py-2 text-sm",
-                  isActive ? "border-primary bg-accent text-accent-foreground" : "text-muted-foreground",
+                  "flex shrink-0 items-center gap-2 rounded-lg border border-transparent px-3 py-2 text-sm",
+                  isActive ? "border-primary/15 bg-accent text-accent-foreground" : "text-muted-foreground",
                 )}
               >
                 <item.icon className="h-4 w-4" />
@@ -113,7 +113,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         </nav>
 
         {/* 内容区 */}
-        <main className="min-w-0 flex-1 overflow-auto p-4 sm:p-6">{children}</main>
+        <main className="min-w-0 flex-1 overflow-auto p-4 sm:p-6 lg:p-8">{children}</main>
       </div>
     </div>
   )
