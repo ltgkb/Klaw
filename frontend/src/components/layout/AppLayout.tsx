@@ -49,8 +49,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               to={item.to}
               className={({ isActive }) =>
                 cn(
-                  "flex items-center gap-3 rounded-lg border border-transparent px-3 py-2.5 text-sm font-medium transition-[color,background-color,border-color,transform] active:translate-y-px",
-                  isActive ? "border-primary/15 bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/70 hover:text-foreground",
+                  "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-[color,background-color,transform] active:translate-y-px",
+                  isActive ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/70 hover:text-foreground",
                 )
               }
             >
@@ -102,8 +102,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                 key={item.to}
                 to={item.to}
                 className={({ isActive }) => cn(
-                  "flex shrink-0 items-center gap-2 rounded-lg border border-transparent px-3 py-2 text-sm",
-                  isActive ? "border-primary/15 bg-accent text-accent-foreground" : "text-muted-foreground",
+                  "flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm",
+                  isActive ? "bg-accent text-accent-foreground" : "text-muted-foreground",
                 )}
               >
                 <item.icon className="h-4 w-4" />
