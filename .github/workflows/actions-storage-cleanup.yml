@@ -1,0 +1,62 @@
+name: Actions storage cleanup
+
+on:
+  push:
+    paths:
+      - .github/workflows/actions-storage-cleanup.yml
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Cancel competing runs and clear Actions storage
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          sleep 5
+          for state in queued in_progress; do
+            while IFS= read -r id; do
+              [[ -z "${id}" || "${id}" == "${CURRENT_RUN_ID}" ]] && continue
+              echo "Cancelling ${state} run ${id}"
+              gh api -X POST "repos/${REPO}/actions/runs/${id}/cancel" >/dev/null 2>&1 || true
+            done < <(gh api --paginate "repos/${REPO}/actions/runs?branch=${BRANCH}&status=${state}&per_page=100" --jq '.workflow_runs[].id')
+          done
+
+          artifact_count=0
+          artifact_bytes=0
+          while IFS=$'\t' read -r id size name; do
+            [[ -z "${id}" ]] && continue
+            echo "Deleting artifact ${name} (${size} bytes)"
+            if gh api -X DELETE "repos/${REPO}/actions/artifacts/${id}" >/dev/null 2>&1; then
+              artifact_count=$((artifact_count + 1))
+              artifact_bytes=$((artifact_bytes + size))
+            fi
+          done < <(gh api --paginate "repos/${REPO}/actions/artifacts?per_page=100" --jq '.artifacts[] | [.id, .size_in_bytes, .name] | @tsv')
+
+          cache_count=0
+          cache_bytes=0
+          while IFS=$'\t' read -r id size key; do
+            [[ -z "${id}" ]] && continue
+            echo "Deleting cache ${key} (${size} bytes)"
+            if gh api -X DELETE "repos/${REPO}/actions/caches/${id}" >/dev/null 2>&1; then
+              cache_count=$((cache_count + 1))
+              cache_bytes=$((cache_bytes + size))
+            fi
+          done < <(gh api --paginate "repos/${REPO}/actions/caches?per_page=100" --jq '.actions_caches[] | [.id, .size_in_bytes, .key] | @tsv')
+
+          echo "Deleted ${artifact_count} artifacts totaling ${artifact_bytes} bytes"
+          echo "Deleted ${cache_count} caches totaling ${cache_bytes} bytes"
+          echo "Remaining artifacts: $(gh api "repos/${REPO}/actions/artifacts?per_page=1" --jq '.total_count')"
+          echo "Remaining caches: $(gh api "repos/${REPO}/actions/caches?per_page=1" --jq '.total_count')"
