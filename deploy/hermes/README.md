@@ -19,10 +19,13 @@ Hermes 是智能体框架，支持自定义 Skill 开发，本地部署。
 ```
 HERMES_IMAGE=nousresearch/hermes-agent:latest
 HERMES_API_SERVER_KEY=replace-with-a-random-secret-at-least-16-characters
+HERMES_CHAT_ENABLED=true
 ```
 
 Compose 会启用 Hermes API Server，在容器内监听 8642，并映射到宿主机 8081。
 Hermes 的上游模型和消息渠道仍需通过其配置向导或对应环境变量配置。
+Klaw 默认保持 `HERMES_CHAT_ENABLED=false`；只有 Hermes 已配置真实推理供应商后才应启用，
+否则 provider 状态显示为“未配置”，不会给每次默认对话增加失败等待。
 
 ## 验证
 

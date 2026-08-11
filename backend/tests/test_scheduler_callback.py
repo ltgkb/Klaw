@@ -52,6 +52,7 @@ def mock_scheduler(monkeypatch):
 
     def mock_pause(job_id):
         calls["pause"].append(job_id)
+        return True
 
     monkeypatch.setattr(sched_module, "schedule_flow", mock_schedule_flow)
     monkeypatch.setattr(sched_module, "unschedule_flow", mock_unschedule_flow)
@@ -119,6 +120,34 @@ async def test_create_schedule_scheduler_unavailable_503(client, monkeypatch):
 
     resp = await client.get("/api/v1/schedules", headers=h)
     assert resp.json() == []
+
+
+@pytest.mark.asyncio
+async def test_pause_failure_returns_503_without_committing_paused_state(
+    client, mock_scheduler, monkeypatch
+):
+    from app.core import scheduler as sched_module
+
+    token = await _register_and_login(client, "pausefail@test.com")
+    headers = _auth_headers(token)
+    flow_id = await _create_flow(client, headers)
+    created = await client.post(
+        "/api/v1/schedules",
+        json={"flow_id": flow_id, "name": "Pause failure", "cron": "0 9 * * *"},
+        headers=headers,
+    )
+    schedule_id = created.json()["id"]
+    monkeypatch.setattr(sched_module, "pause_scheduled_job", lambda _job_id: False)
+
+    response = await client.put(
+        f"/api/v1/schedules/{schedule_id}",
+        json={"status": "paused"},
+        headers=headers,
+    )
+
+    assert response.status_code == 503
+    current = await client.get(f"/api/v1/schedules/{schedule_id}", headers=headers)
+    assert current.json()["status"] == "active"
 
 
 # ── Cron P1-2: 改 input 生效 (触发重注册) ──

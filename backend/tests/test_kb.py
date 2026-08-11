@@ -49,11 +49,15 @@ def mock_infra(monkeypatch, db_engine):
     # Mock MinIO (document_service 导入: upload_file, download_file, delete_file — 都是同步函数)
     def mock_upload_file(object_name, data, content_type="application/octet-stream"):
         return object_name
+    def mock_upload_stream(object_name, data, length, content_type="application/octet-stream"):
+        assert length >= 0
+        return object_name
     def mock_download_file(object_name):
         return b"mock file content"
     def mock_delete_file(object_name):
         pass
     monkeypatch.setattr("app.services.document_service.upload_file", mock_upload_file)
+    monkeypatch.setattr("app.services.document_service.upload_stream", mock_upload_stream)
     monkeypatch.setattr("app.services.document_service.download_file", mock_download_file)
     monkeypatch.setattr("app.services.document_service.delete_file", mock_delete_file)
     # kb_service 也导入了 delete_file
@@ -82,12 +86,15 @@ def mock_infra(monkeypatch, db_engine):
         }]
     async def mock_delete_doc_chunks(doc_id):
         return 1
+    async def mock_delete_chunks_by_ids(chunk_ids):
+        return len(chunk_ids)
     # kb_service 导入了 delete_kb_chunks
     async def mock_delete_kb_chunks(kb_id):
         return 1
     monkeypatch.setattr("app.services.document_service.index_chunks_bulk", mock_index_chunks_bulk)
     monkeypatch.setattr("app.services.document_service.es_hybrid_search", mock_hybrid_search)
     monkeypatch.setattr("app.services.document_service.delete_doc_chunks", mock_delete_doc_chunks)
+    monkeypatch.setattr("app.services.document_service.delete_chunks_by_ids", mock_delete_chunks_by_ids)
     monkeypatch.setattr("app.services.kb_service.delete_kb_chunks", mock_delete_kb_chunks)
 
     # Mock DeepDoc parse (document_service 导入 deepdoc_service 模块)
@@ -117,6 +124,20 @@ async def test_create_kb(client):
     assert data["document_count"] == 0
     assert data["status"] == "active"
     assert "id" in data
+
+
+@pytest.mark.asyncio
+async def test_create_kb_rejects_overlap_not_smaller_than_chunk_size(client):
+    token = await _register_and_login(client)
+
+    resp = await client.post(
+        "/api/v1/knowledge-bases",
+        json={"name": "Invalid chunks", "chunk_size": 100, "chunk_overlap": 100},
+        headers=_auth_headers(token),
+    )
+
+    assert resp.status_code == 422
+    assert "chunk_overlap" in resp.text
 
 
 @pytest.mark.asyncio
@@ -410,6 +431,28 @@ async def test_upload_unsupported_extension_415(client, mock_infra):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("filename", ["legacy.doc", "legacy.xls", "legacy.ppt"])
+async def test_upload_legacy_office_formats_rejected_before_background_parse(
+    client, mock_infra, filename
+):
+    token = await _register_and_login(client)
+    create_resp = await client.post(
+        "/api/v1/knowledge-bases",
+        json={"name": f"Reject {filename}"},
+        headers=_auth_headers(token),
+    )
+    kb_id = create_resp.json()["id"]
+
+    resp = await client.post(
+        f"/api/v1/knowledge-bases/{kb_id}/documents",
+        headers=_auth_headers(token),
+        files={"file": (filename, io.BytesIO(b"legacy binary"), "application/octet-stream")},
+    )
+
+    assert resp.status_code == 415
+
+
+@pytest.mark.asyncio
 async def test_reparse_document(client, mock_infra):
     """reparse 端点: 重置状态并后台重新解析, 最终回到 parsed。"""
     token = await _register_and_login(client)
@@ -482,8 +525,9 @@ async def test_parse_failure_marks_failed_with_error(client, mock_infra, monkeyp
 
     docs_resp = await client.get(f"/api/v1/knowledge-bases/{kb_id}/documents", headers=_auth_headers(token))
     assert docs_resp.json()[0]["parse_status"] == "failed"
+    assert "维度不符" in docs_resp.json()[0]["parse_error"]
 
-    # parse_result 含失败原因 (DocumentRead 不暴露该字段, 直接查 DB)
+    # parse_result 仍在 DB 保留结构化失败原因。
     from sqlalchemy import select
     from sqlalchemy.ext.asyncio import async_sessionmaker
     from app.models.document import Document
@@ -560,3 +604,127 @@ async def test_document_background_parse_does_not_block_event_loop(
 
     upload = await asyncio.wait_for(upload_task, timeout=2)
     assert upload.status_code == 201
+
+
+@pytest.mark.asyncio
+async def test_update_chunk_reindexes_content(client, mock_infra):
+    """手动更新 Chunk 后返回新正文，并保持已向量化状态。"""
+    token = await _register_and_login(client, "chunk-editor@test.com")
+    headers = _auth_headers(token)
+    kb = (await client.post(
+        "/api/v1/knowledge-bases",
+        json={"name": "Chunk Editor"},
+        headers=headers,
+    )).json()
+
+    await client.post(
+        f"/api/v1/knowledge-bases/{kb['id']}/documents",
+        headers=headers,
+        files={"file": ("edit.txt", io.BytesIO(b"original"), "text/plain")},
+    )
+    chunks = (await client.get(
+        f"/api/v1/knowledge-bases/{kb['id']}/chunks",
+        headers=headers,
+    )).json()["items"]
+
+    response = await client.put(
+        f"/api/v1/knowledge-bases/{kb['id']}/chunks/{chunks[0]['id']}",
+        headers=headers,
+        json={"content": "  手动修订后的有效内容  "},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["content"] == "手动修订后的有效内容"
+    assert response.json()["embedding_stored"] is True
+
+
+@pytest.mark.asyncio
+async def test_update_chunk_rejects_empty_content(client, mock_infra):
+    """空白正文不能覆盖已有 Chunk。"""
+    token = await _register_and_login(client, "chunk-empty@test.com")
+    headers = _auth_headers(token)
+    kb = (await client.post(
+        "/api/v1/knowledge-bases",
+        json={"name": "Chunk Empty Guard"},
+        headers=headers,
+    )).json()
+    await client.post(
+        f"/api/v1/knowledge-bases/{kb['id']}/documents",
+        headers=headers,
+        files={"file": ("empty.txt", io.BytesIO(b"original"), "text/plain")},
+    )
+    chunks = (await client.get(
+        f"/api/v1/knowledge-bases/{kb['id']}/chunks",
+        headers=headers,
+    )).json()["items"]
+
+    response = await client.put(
+        f"/api/v1/knowledge-bases/{kb['id']}/chunks/{chunks[0]['id']}",
+        headers=headers,
+        json={"content": "   "},
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_batch_delete_chunks(client, mock_infra):
+    """支持选择多个 Chunk 一次删除。"""
+    token = await _register_and_login(client, "chunk-delete@test.com")
+    headers = _auth_headers(token)
+    kb = (await client.post(
+        "/api/v1/knowledge-bases",
+        json={"name": "Chunk Batch Delete"},
+        headers=headers,
+    )).json()
+    await client.post(
+        f"/api/v1/knowledge-bases/{kb['id']}/documents",
+        headers=headers,
+        files={"file": ("delete.txt", io.BytesIO(b"content"), "text/plain")},
+    )
+    before = (await client.get(
+        f"/api/v1/knowledge-bases/{kb['id']}/chunks",
+        headers=headers,
+    )).json()
+    selected = [chunk["id"] for chunk in before["items"][:2]]
+
+    response = await client.request(
+        "DELETE",
+        f"/api/v1/knowledge-bases/{kb['id']}/chunks",
+        headers=headers,
+        json={"chunk_ids": selected},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["deleted"] == len(selected)
+    after = (await client.get(
+        f"/api/v1/knowledge-bases/{kb['id']}/chunks",
+        headers=headers,
+    )).json()
+    assert after["total"] == before["total"] - len(selected)
+
+
+@pytest.mark.asyncio
+async def test_document_parsing_has_bounded_concurrency(monkeypatch):
+    """大型文档后台任务不得无上限并行占用 CPU 和内存。"""
+    from app.core.config import settings
+
+    active = 0
+    peak = 0
+
+    async def fake_parse(doc_id, kb_id):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.02)
+        active -= 1
+
+    monkeypatch.setattr(settings, "document_parse_max_concurrency", 2)
+    monkeypatch.setattr(document_service, "_parse_semaphore", None)
+    monkeypatch.setattr(document_service, "_parse_semaphore_limit", None)
+    monkeypatch.setattr(document_service, "_parse_and_index_unbounded", fake_parse)
+
+    await asyncio.gather(
+        *(document_service.parse_and_index(uuid.uuid4(), uuid.uuid4()) for _ in range(6))
+    )
+    assert peak == 2

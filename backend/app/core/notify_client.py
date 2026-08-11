@@ -10,7 +10,7 @@ import re
 import httpx
 
 from app.core.config import settings
-from common.ssrf_guard import assert_url_is_safe
+from common.ssrf_guard import assert_url_is_safe, pin_dns_global
 
 logger = logging.getLogger("claw.notify")
 
@@ -92,7 +92,7 @@ async def send_telegram(bot_token: str, chat_id: str, text: str) -> bool:
                 logger.warning("Telegram 纯文本重发仍失败: HTTP %s", resp2.status_code)
                 return False
             return "ok" in data2 and data2["ok"] is True
-        resp.raise_for_status()
+        logger.warning("Telegram API 请求失败: HTTP %s", resp.status_code)
         return False
 
 
@@ -131,11 +131,13 @@ async def notify(channels: list[dict], title: str, content: str) -> list[dict]:
         error = None
         try:
             if ch_type == "feishu":
-                assert_url_is_safe(ch["webhook_url"])
-                success = await send_feishu(ch["webhook_url"], title, content)
+                hostname, resolved_ip = assert_url_is_safe(ch["webhook_url"])
+                with pin_dns_global(hostname, resolved_ip):
+                    success = await send_feishu(ch["webhook_url"], title, content)
             elif ch_type == "wechat":
-                assert_url_is_safe(ch["webhook_url"])
-                success = await send_wechat(ch["webhook_url"], title, content)
+                hostname, resolved_ip = assert_url_is_safe(ch["webhook_url"])
+                with pin_dns_global(hostname, resolved_ip):
+                    success = await send_wechat(ch["webhook_url"], title, content)
             elif ch_type == "telegram":
                 full_text = f"*{title}*\n\n{content}"
                 success = await send_telegram(ch["bot_token"], ch["chat_id"], full_text)

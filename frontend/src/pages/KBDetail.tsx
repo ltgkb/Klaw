@@ -10,12 +10,17 @@ import {
   CheckCircle2,
   Clock,
   AlertCircle,
+  Pencil,
+  RotateCcw,
+  Save,
+  X,
 } from "lucide-react"
 import { kbApi, type KBRead, type DocumentRead, type SearchHit, type ChunkRead } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { toast } from "@/lib/toast"
 
 const STATUS_CONFIG = {
   pending: { icon: Clock, label: "等待中", color: "text-muted-foreground" },
@@ -39,6 +44,7 @@ export function KBDetail() {
   const [docs, setDocs] = useState<DocumentRead[]>([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
+  const [reparsingId, setReparsingId] = useState<string | null>(null)
 
   // 检索
   const [query, setQuery] = useState("")
@@ -53,6 +59,12 @@ export function KBDetail() {
   const [chunkTotal, setChunkTotal] = useState(0)
   const [chunkPage, setChunkPage] = useState(1)
   const [chunksLoading, setChunksLoading] = useState(false)
+  const [editingChunkId, setEditingChunkId] = useState<string | null>(null)
+  const [chunkDraft, setChunkDraft] = useState("")
+  const [savingChunkId, setSavingChunkId] = useState<string | null>(null)
+  const [selectedChunkIds, setSelectedChunkIds] = useState<Set<string>>(new Set())
+  const [deletingChunks, setDeletingChunks] = useState(false)
+  const [chunkDocId, setChunkDocId] = useState("")
   const CHUNK_PAGE_SIZE = 10
 
   const fetchAll = async () => {
@@ -82,10 +94,12 @@ export function KBDetail() {
     if (!kbId) return
     setChunksLoading(true)
     try {
-      const resp = await kbApi.listChunks(kbId, page, CHUNK_PAGE_SIZE)
+      const resp = await kbApi.listChunks(kbId, page, CHUNK_PAGE_SIZE, chunkDocId || undefined)
       setChunks(resp.data.items)
       setChunkTotal(resp.data.total)
       setChunkPage(resp.data.page)
+      setSelectedChunkIds(new Set())
+      cancelEditingChunk()
     } catch {
       // 错误由拦截器处理
     } finally {
@@ -96,7 +110,7 @@ export function KBDetail() {
   useEffect(() => {
     fetchChunks(1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kbId])
+  }, [kbId, chunkDocId])
 
   // 如果有文档正在解析，轮询状态
   useEffect(() => {
@@ -134,6 +148,19 @@ export function KBDetail() {
     }
   }
 
+  const handleReparseDoc = async (docId: string) => {
+    if (!kbId) return
+    setReparsingId(docId)
+    try {
+      await kbApi.reparseDocument(kbId, docId)
+      await fetchAll()
+    } catch {
+      // 错误由拦截器处理
+    } finally {
+      setReparsingId(null)
+    }
+  }
+
   const handleSearch = async () => {
     if (!kbId || !query.trim()) return
     setSearching(true)
@@ -145,6 +172,69 @@ export function KBDetail() {
       // 错误由拦截器处理
     } finally {
       setSearching(false)
+    }
+  }
+
+  const startEditingChunk = (chunk: ChunkRead) => {
+    setEditingChunkId(chunk.id)
+    setChunkDraft(chunk.content)
+  }
+
+  const cancelEditingChunk = () => {
+    setEditingChunkId(null)
+    setChunkDraft("")
+  }
+
+  const saveChunk = async (chunkId: string) => {
+    if (!kbId || !chunkDraft.trim()) return
+    setSavingChunkId(chunkId)
+    try {
+      const response = await kbApi.updateChunk(kbId, chunkId, chunkDraft)
+      setChunks((current) =>
+        current.map((chunk) => chunk.id === chunkId ? response.data : chunk),
+      )
+      setHits([])
+      setHasSearched(false)
+      cancelEditingChunk()
+      toast.success("Chunk 已保存并重新建立检索索引")
+    } catch {
+      // 错误由拦截器处理
+    } finally {
+      setSavingChunkId(null)
+    }
+  }
+
+  const toggleChunkSelection = (chunkId: string) => {
+    setSelectedChunkIds((current) => {
+      const next = new Set(current)
+      if (next.has(chunkId)) next.delete(chunkId)
+      else next.add(chunkId)
+      return next
+    })
+  }
+
+  const toggleCurrentPage = () => {
+    const allSelected = chunks.length > 0 && chunks.every((chunk) => selectedChunkIds.has(chunk.id))
+    setSelectedChunkIds(allSelected ? new Set() : new Set(chunks.map((chunk) => chunk.id)))
+  }
+
+  const deleteSelectedChunks = async (chunkIds: string[]) => {
+    if (!kbId || chunkIds.length === 0 || deletingChunks) return
+    const label = chunkIds.length === 1 ? "这个 Chunk" : `选中的 ${chunkIds.length} 个 Chunk`
+    if (!confirm(`确认删除${label}？删除后无法恢复。`)) return
+    setDeletingChunks(true)
+    try {
+      const response = await kbApi.deleteChunks(kbId, chunkIds)
+      const remainingOnPage = chunks.length - response.data.deleted
+      const targetPage = remainingOnPage === 0 && chunkPage > 1 ? chunkPage - 1 : chunkPage
+      setSelectedChunkIds(new Set())
+      if (chunkIds.includes(editingChunkId ?? "")) cancelEditingChunk()
+      await fetchChunks(targetPage)
+      toast.success(`已删除 ${response.data.deleted} 个 Chunk`)
+    } catch {
+      // 错误由拦截器处理
+    } finally {
+      setDeletingChunks(false)
     }
   }
 
@@ -169,7 +259,7 @@ export function KBDetail() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="kai-kb-page space-y-6">
       {/* 头部 */}
       <div className="flex items-center gap-4">
         <Button variant="ghost" size="sm" onClick={() => navigate("/kb")}>
@@ -188,7 +278,7 @@ export function KBDetail() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">文档管理</CardTitle>
-          <CardDescription>支持 PDF / DOCX / XLSX / PPTX / TXT / MD / HTML / JSON</CardDescription>
+          <CardDescription>支持 PDF / DOCX / XLSX / CSV / PPTX / TXT / MD / HTML / JSON / EPUB</CardDescription>
         </CardHeader>
         <CardContent>
           <div
@@ -245,15 +335,34 @@ export function KBDetail() {
                         {formatSize(doc.file_size)}
                         {doc.page_count > 0 && ` · ${doc.page_count} 页`}
                       </p>
+                      {doc.parse_status === "failed" && doc.parse_error && (
+                        <p className="mt-1 line-clamp-2 text-xs text-destructive" title={doc.parse_error}>
+                          {doc.parse_error}
+                        </p>
+                      )}
                     </div>
                     <div className={`flex items-center gap-1 text-xs ${status.color}`}>
                       <StatusIcon className={`h-3.5 w-3.5 ${doc.parse_status === "parsing" && "animate-spin"}`} />
                       {status.label}
                     </div>
+                    {doc.parse_status === "failed" && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleReparseDoc(doc.id)}
+                        disabled={reparsingId === doc.id}
+                        title="重新解析"
+                        aria-label={`重新解析 ${doc.filename}`}
+                      >
+                        <RotateCcw className={`h-4 w-4 ${reparsingId === doc.id ? "animate-spin" : ""}`} />
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
-                      size="sm"
+                      size="icon"
                       onClick={() => handleDeleteDoc(doc.id)}
+                      title="删除文档"
+                      aria-label={`删除 ${doc.filename}`}
                     >
                       <Trash2 className="h-4 w-4 text-destructive" />
                     </Button>
@@ -327,8 +436,47 @@ export function KBDetail() {
       {/* Chunk 浏览 (分页) */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Chunk 浏览</CardTitle>
-          <CardDescription>共 {chunkTotal} 个分块 · 每页 {CHUNK_PAGE_SIZE} 条</CardDescription>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <CardTitle className="text-base">Chunk 浏览</CardTitle>
+              <CardDescription>共 {chunkTotal} 个分块 · 每页 {CHUNK_PAGE_SIZE} 条</CardDescription>
+            </div>
+            {(docs.length > 0 || chunks.length > 0) && (
+              <div className="flex flex-wrap items-center gap-2">
+                <Label htmlFor="chunk-document" className="sr-only">选择来源文件</Label>
+                <select
+                  id="chunk-document"
+                  value={chunkDocId}
+                  onChange={(event) => setChunkDocId(event.target.value)}
+                  disabled={chunksLoading || deletingChunks}
+                  className="h-8 max-w-full border border-input bg-background px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring sm:max-w-72"
+                >
+                  <option value="">全部文件</option>
+                  {docs.map((doc) => (
+                    <option key={doc.id} value={doc.id}>{doc.filename}</option>
+                  ))}
+                </select>
+                {chunks.length > 0 && (
+                  <>
+                    <Button variant="outline" size="sm" onClick={toggleCurrentPage} disabled={deletingChunks}>
+                      {chunks.every((chunk) => selectedChunkIds.has(chunk.id)) ? "取消全选" : "全选当前页"}
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={() => deleteSelectedChunks(Array.from(selectedChunkIds))}
+                      disabled={selectedChunkIds.size === 0 || deletingChunks}
+                    >
+                      {deletingChunks
+                        ? <Loader2 className="h-4 w-4 animate-spin" />
+                        : <Trash2 className="h-4 w-4" />}
+                      删除所选{selectedChunkIds.size > 0 ? ` (${selectedChunkIds.size})` : ""}
+                    </Button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         </CardHeader>
         <CardContent className="space-y-3">
           {chunksLoading ? (
@@ -340,16 +488,94 @@ export function KBDetail() {
           ) : (
             <div className="space-y-2">
               {chunks.map((chunk) => (
-                <div key={chunk.id} className="rounded-md border p-3">
+                <div
+                  key={chunk.id}
+                  className={`rounded-md border p-3 ${selectedChunkIds.has(chunk.id) ? "border-primary bg-accent/40" : ""}`}
+                >
                   <div className="mb-1 flex items-center justify-between">
-                    <span className="rounded bg-secondary px-1.5 py-0.5 text-xs">
-                      {chunk.content_type}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      第 {chunk.page} 页{chunk.embedding_stored ? " · 已向量化" : ""}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={selectedChunkIds.has(chunk.id)}
+                        onChange={() => toggleChunkSelection(chunk.id)}
+                        aria-label={`选择第 ${chunk.page} 页 Chunk`}
+                        className="h-4 w-4 accent-primary"
+                      />
+                      <span className="rounded bg-secondary px-1.5 py-0.5 text-xs">
+                        {chunk.content_type}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">
+                        第 {chunk.page} 页{chunk.embedding_stored ? " · 已向量化" : ""}
+                      </span>
+                      {editingChunkId !== chunk.id && (
+                        <>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => startEditingChunk(chunk)}
+                            title="编辑 Chunk"
+                            aria-label={`编辑第 ${chunk.page} 页 Chunk`}
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => deleteSelectedChunks([chunk.id])}
+                            disabled={deletingChunks}
+                            title="删除 Chunk"
+                            aria-label={`删除第 ${chunk.page} 页 Chunk`}
+                          >
+                            <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                          </Button>
+                        </>
+                      )}
+                    </div>
                   </div>
-                  <p className="line-clamp-3 text-sm whitespace-pre-wrap">{chunk.content}</p>
+                  {editingChunkId === chunk.id ? (
+                    <div className="space-y-2">
+                      <Label htmlFor={`chunk-${chunk.id}`} className="sr-only">Chunk 内容</Label>
+                      <textarea
+                        id={`chunk-${chunk.id}`}
+                        value={chunkDraft}
+                        onChange={(event) => setChunkDraft(event.target.value)}
+                        rows={8}
+                        maxLength={100000}
+                        className="w-full resize-y rounded-md border bg-background px-3 py-2 text-sm leading-6 outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        autoFocus
+                      />
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <span className="text-xs text-muted-foreground">
+                          {chunkDraft.length.toLocaleString()} / 100,000 字符
+                        </span>
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={cancelEditingChunk}
+                            disabled={savingChunkId === chunk.id}
+                          >
+                            <X className="h-4 w-4" />
+                            取消
+                          </Button>
+                          <Button
+                            size="sm"
+                            onClick={() => saveChunk(chunk.id)}
+                            disabled={savingChunkId === chunk.id || !chunkDraft.trim()}
+                          >
+                            {savingChunkId === chunk.id
+                              ? <Loader2 className="h-4 w-4 animate-spin" />
+                              : <Save className="h-4 w-4" />}
+                            保存并重建索引
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="line-clamp-3 text-sm whitespace-pre-wrap">{chunk.content}</p>
+                  )}
                 </div>
               ))}
             </div>

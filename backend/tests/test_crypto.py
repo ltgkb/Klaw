@@ -44,11 +44,22 @@ def test_decrypt_tampered_ciphertext_raises():
 
 
 def test_long_password_over_72_bytes_roundtrip():
-    """超过 72 字节的密码应截断后正常哈希/校验，不抛 ValueError (P2-7)。"""
-    password = "长密码" * 40  # 360 字节，远超 72
+    """超过 72 字节后的差异也必须参与密码校验。"""
+    password = "a" * 72 + "first-suffix"
+    colliding_legacy_password = "a" * 72 + "second-suffix"
     hashed = hash_password(password)
+    assert hashed.startswith("bcrypt-sha256$")
     assert verify_password(password, hashed)
-    assert not verify_password("完全不同的短密码", hashed)
+    assert not verify_password(colliding_legacy_password, hashed)
+
+
+def test_legacy_bcrypt_hash_remains_compatible():
+    """升级前保存的 raw bcrypt 哈希仍能登录。"""
+    import bcrypt
+
+    password = "legacy-secret"
+    legacy_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("ascii")
+    assert verify_password(password, legacy_hash)
 
 
 def test_verify_password_invalid_hash_returns_false():
@@ -81,9 +92,27 @@ def test_prod_accepts_strong_secrets(monkeypatch):
     assert s.environment == "prod"
 
 
+def test_prod_rejects_compose_default_jwt_with_strong_encryption_key(monkeypatch):
+    """Compose 的占位 JWT 不能因加密主密钥已配置而漏过启动校验。"""
+    from pydantic import ValidationError
+
+    from app.core.config import Settings
+
+    monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
+    monkeypatch.delenv("ENCRYPTION_KEY", raising=False)
+    with pytest.raises(ValidationError, match="JWT_SECRET_KEY"):
+        Settings(
+            environment="prod",
+            jwt_secret_key="change-me-in-production",
+            encryption_key="b" * 64,
+            _env_file=None,
+        )
+
+
 def test_contract_fields_defaults():
-    """跨包契约 1：scheduler_timezone / minio_public_url 默认值。"""
+    """跨包契约 1：调度、MinIO 和本地推理安全默认值。"""
     from app.core.config import settings
 
     assert settings.scheduler_timezone == "Asia/Shanghai"
     assert settings.minio_public_url is None
+    assert settings.openclaw_chat_enabled is False

@@ -246,6 +246,22 @@ async def delete_doc_chunks(doc_id: str) -> int:
     return deleted
 
 
+async def delete_chunks_by_ids(chunk_ids: list[str]) -> int:
+    """按 Chunk ID 批量删除 ES 索引。"""
+    if not chunk_ids:
+        return 0
+    es = get_es_client()
+    result = await es.delete_by_query(
+        index=settings.es_kb_index,
+        body={"query": {"ids": {"values": chunk_ids}}},
+        refresh=True,
+        conflicts="proceed",
+    )
+    deleted = int(result.get("deleted", 0))
+    logger.info("ES 批量删除 %d/%d chunks", deleted, len(chunk_ids))
+    return deleted
+
+
 async def delete_kb_chunks(kb_id: str) -> int:
     """删除某知识库的所有 chunk 索引。"""
     es = get_es_client()

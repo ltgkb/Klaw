@@ -138,6 +138,9 @@ export const authApi = {
 
   refresh: (refreshToken: string) =>
     api.post<TokenResponse>("/auth/refresh", { refresh_token: refreshToken }),
+
+  logout: (refreshToken: string) =>
+    api.post<void>("/auth/logout", { refresh_token: refreshToken }),
 }
 
 // ── 知识库 API ──
@@ -171,8 +174,18 @@ export interface DocumentRead {
   file_size: number
   page_count: number
   parse_status: "pending" | "parsing" | "parsed" | "failed"
+  parse_error: string | null
   created_at: string
   updated_at: string
+}
+
+export interface DocumentUploadResponse {
+  id: string
+  kb_id: string
+  filename: string
+  file_size: number
+  parse_status: "pending"
+  message: string
 }
 
 export interface SearchHit {
@@ -232,7 +245,7 @@ export const kbApi = {
   uploadDocument: (kbId: string, file: File) => {
     const formData = new FormData()
     formData.append("file", file)
-    return api.post<DocumentRead>(`/knowledge-bases/${kbId}/documents`, formData, {
+    return api.post<DocumentUploadResponse>(`/knowledge-bases/${kbId}/documents`, formData, {
       headers: { "Content-Type": "multipart/form-data" },
     })
   },
@@ -240,10 +253,21 @@ export const kbApi = {
   deleteDocument: (kbId: string, docId: string) =>
     api.delete(`/knowledge-bases/${kbId}/documents/${docId}`),
 
+  reparseDocument: (kbId: string, docId: string) =>
+    api.post<DocumentRead>(`/knowledge-bases/${kbId}/documents/${docId}/reparse`),
+
   // Chunk 查询 (契约4)
-  listChunks: (kbId: string, page = 1, pageSize = 10) =>
+  listChunks: (kbId: string, page = 1, pageSize = 10, docId?: string) =>
     api.get<PageResponse<ChunkRead>>(`/knowledge-bases/${kbId}/chunks`, {
-      params: { page, page_size: pageSize },
+      params: { page, page_size: pageSize, ...(docId ? { doc_id: docId } : {}) },
+    }),
+
+  updateChunk: (kbId: string, chunkId: string, content: string) =>
+    api.put<ChunkRead>(`/knowledge-bases/${kbId}/chunks/${chunkId}`, { content }),
+
+  deleteChunks: (kbId: string, chunkIds: string[]) =>
+    api.delete<{ deleted: number }>(`/knowledge-bases/${kbId}/chunks`, {
+      data: { chunk_ids: chunkIds },
     }),
 
   // 检索
@@ -258,7 +282,7 @@ export type TriggerType = "manual" | "scheduled" | "webhook"
 export type ExecutionStatus = "pending" | "running" | "paused" | "success" | "failed" | "cancelled"
 
 /** XYFlow 节点类型 */
-export type NodeType = "start" | "end" | "llm" | "retrieval" | "condition" | "loop" | "text" | "notify" | "memory"
+export type NodeType = "start" | "end" | "llm" | "retrieval" | "condition" | "loop" | "text" | "notify" | "memory" | "http" | "tool"
 
 /** XYFlow 兼容的 DAG 格式 */
 export interface FlowDag {
@@ -299,13 +323,14 @@ export interface FlowRead {
 }
 
 export interface NodeState {
-  status: "running" | "success" | "failed"
+  status: "running" | "success" | "failed" | "skipped" | "cancelled"
   output?: string
   error?: string
   started_at?: string
   ended_at?: string
   label?: string
   type?: string
+  duration_ms?: number
 }
 
 export interface ExecutionRead {
@@ -318,6 +343,116 @@ export interface ExecutionRead {
   error_message: string | null
   created_at: string
   updated_at: string
+}
+
+export interface ExecutionStreamPayload {
+  execution_id: string
+  status: ExecutionStatus
+  node_states: Record<string, NodeState>
+  output: Record<string, unknown> | null
+  error_message: string | null
+}
+
+export interface ExecutionStreamHandlers {
+  onProgress?: (payload: ExecutionStreamPayload) => void
+  onComplete?: (payload: ExecutionStreamPayload) => void
+  onError?: (error: Error) => void
+}
+
+function dispatchSseBlock(block: string, handlers: ExecutionStreamHandlers) {
+  let event = "message"
+  const data: string[] = []
+  for (const line of block.split(/\r?\n/)) {
+    if (!line || line.startsWith(":")) continue
+    const separator = line.indexOf(":")
+    const field = separator === -1 ? line : line.slice(0, separator)
+    const value = separator === -1 ? "" : line.slice(separator + 1).replace(/^ /, "")
+    if (field === "event") event = value
+    if (field === "data") data.push(value)
+  }
+  if (!data.length) return
+
+  const raw = data.join("\n")
+  if (event === "error") {
+    try {
+      const payload = JSON.parse(raw) as { error?: string }
+      handlers.onError?.(new Error(payload.error || "执行流返回错误"))
+    } catch {
+      handlers.onError?.(new Error(raw || "执行流返回错误"))
+    }
+    return
+  }
+
+  const payload = JSON.parse(raw) as ExecutionStreamPayload
+  if (event === "progress") handlers.onProgress?.(payload)
+  if (event === "complete") handlers.onComplete?.(payload)
+}
+
+async function consumeExecutionStream(
+  flowId: string,
+  executionId: string,
+  signal: AbortSignal,
+  handlers: ExecutionStreamHandlers,
+) {
+  const url = `${API_BASE}/agent-flows/${flowId}/executions/${executionId}/stream`
+  const request = (token: string | null) => fetch(url, {
+    headers: {
+      Accept: "text/event-stream",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    signal,
+  })
+
+  let response = await request(localStorage.getItem("access_token"))
+  if (response.status === 401) {
+    const refreshed = await tryRefresh()
+    if (!refreshed) {
+      forceLogout()
+      throw new Error("登录已过期")
+    }
+    response = await request(refreshed)
+  }
+  if (!response.ok) {
+    let detail = `执行流连接失败 (${response.status})`
+    try {
+      const body = await response.json() as { detail?: string }
+      if (body.detail) detail = body.detail
+    } catch {
+      // Keep the status-based error when the response is not JSON.
+    }
+    throw new Error(detail)
+  }
+  if (!response.body) throw new Error("浏览器不支持流式响应")
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ""
+  while (true) {
+    const { done, value } = await reader.read()
+    buffer += decoder.decode(value, { stream: !done })
+    let boundary = buffer.match(/\r?\n\r?\n/)
+    while (boundary?.index !== undefined) {
+      const block = buffer.slice(0, boundary.index)
+      buffer = buffer.slice(boundary.index + boundary[0].length)
+      dispatchSseBlock(block, handlers)
+      boundary = buffer.match(/\r?\n\r?\n/)
+    }
+    if (done) break
+  }
+  if (buffer.trim()) dispatchSseBlock(buffer, handlers)
+}
+
+export function streamExecution(
+  flowId: string,
+  executionId: string,
+  handlers: ExecutionStreamHandlers,
+): AbortController {
+  const controller = new AbortController()
+  void consumeExecutionStream(flowId, executionId, controller.signal, handlers).catch((error: unknown) => {
+    if (controller.signal.aborted) return
+    handlers.onError?.(error instanceof Error ? error : new Error("执行流连接失败"))
+  })
+  return controller
 }
 
 export interface ExecuteResponse {
@@ -356,6 +491,8 @@ export const flowApi = {
 
   getExecution: (flowId: string, executionId: string) =>
     api.get<ExecutionRead>(`/agent-flows/${flowId}/executions/${executionId}`),
+
+  streamExecution,
 
   // 执行控制 (M4: 暂停/恢复/取消)
   pauseExecution: (flowId: string, executionId: string) =>
@@ -430,33 +567,6 @@ export const memoryApi = {
     api.get<MemoryRead[]>("/memories/search", { params: { q, ...params } }),
 }
 
-// ── 定时任务 API (M4) ──
-
-export type ScheduleStatus = "active" | "paused"
-
-export interface ScheduleRead {
-  id: string
-  flow_id: string
-  name: string
-  cron: string
-  input: Record<string, unknown> | null
-  status: ScheduleStatus
-  next_run_time: string | null
-  apscheduler_job_id: string | null
-  created_at: string
-  updated_at: string
-}
-
-export const scheduleApi = {
-  list: () => api.get<ScheduleRead[]>("/schedules"),
-  get: (id: string) => api.get<ScheduleRead>(`/schedules/${id}`),
-  create: (data: { flow_id: string; name: string; cron: string; input?: Record<string, unknown> | null }) =>
-    api.post<ScheduleRead>("/schedules", data),
-  update: (id: string, data: { name?: string; cron?: string; status?: ScheduleStatus; input?: Record<string, unknown> | null }) =>
-    api.put<ScheduleRead>(`/schedules/${id}`, data),
-  delete: (id: string) => api.delete(`/schedules/${id}`),
-}
-
 // ── 推送通知 API (M4) ──
 
 export interface NotifyChannelConfig {
@@ -526,6 +636,7 @@ export interface ToolInfo {
   description: string | null
   source: string
   parameters: Record<string, unknown> | null
+  executable: boolean
 }
 
 export interface ToolCallResponse {
@@ -543,11 +654,41 @@ export interface LocalAgentHealth {
   hermes_url: string
 }
 
+export interface McpServerRead {
+  id: string
+  name: string
+  url: string
+  has_token: boolean
+  enabled: boolean
+  tools: Array<{
+    name: string
+    description?: string | null
+    inputSchema?: Record<string, unknown>
+  }>
+}
+
+export interface McpServerTestResponse {
+  success: boolean
+  protocol_version: string
+  server_info: Record<string, unknown>
+  server: McpServerRead
+}
+
 export const localAgentApi = {
   listTools: () => api.get<ToolInfo[]>("/local-agent/tools"),
   callTool: (toolId: string, parameters: Record<string, unknown>) =>
     api.post<ToolCallResponse>(`/local-agent/tools/${toolId}/call`, { parameters }),
   health: () => api.get<LocalAgentHealth>("/local-agent/health"),
+}
+
+export const mcpApi = {
+  list: () => api.get<McpServerRead[]>("/local-agent/mcp/servers"),
+  create: (data: { name: string; url: string; bearer_token?: string }) =>
+    api.post<McpServerRead>("/local-agent/mcp/servers", data),
+  test: (serverId: string) =>
+    api.post<McpServerTestResponse>(`/local-agent/mcp/servers/${serverId}/test`),
+  delete: (serverId: string) =>
+    api.delete(`/local-agent/mcp/servers/${serverId}`),
 }
 
 // ── 文件工作区 API (PRD 6.7) ──
@@ -600,6 +741,11 @@ export const pushChannelApi = {
     type: PushChannelType
     config: { webhook_url?: string; bot_token?: string; chat_id?: string; channel?: string }
   }) => api.post<PushChannelRead>("/push/channels", data),
+  update: (id: string, data: {
+    name?: string
+    type?: PushChannelType
+    config?: { webhook_url?: string; bot_token?: string; chat_id?: string; channel?: string }
+  }) => api.put<PushChannelRead>(`/push/channels/${id}`, data),
   delete: (id: string) => api.delete(`/push/channels/${id}`),
 }
 
@@ -607,17 +753,77 @@ export const pushChannelApi = {
 
 export interface ConversationMessage {
   id: string
+  conversation_id?: string
   role: "user" | "assistant"
   content: string
   created_at: string
 }
 
+export interface ConversationRead {
+  id: string
+  flow_id: string
+  title: string
+  created_at: string
+  updated_at: string
+}
+
 export const chatApi = {
-  messages: (flowId: string) => api.get<ConversationMessage[]>(`/agent-flows/${flowId}/chat/messages`),
+  conversations: (flowId: string) =>
+    api.get<ConversationRead[]>(`/agent-flows/${flowId}/chat/conversations`),
+  createConversation: (flowId: string) =>
+    api.post<ConversationRead>(`/agent-flows/${flowId}/chat/conversations`),
+  deleteConversation: (flowId: string, conversationId: string) =>
+    api.delete(`/agent-flows/${flowId}/chat/conversations/${conversationId}`),
+  messages: (flowId: string, conversationId?: string) =>
+    api.get<ConversationMessage[]>(`/agent-flows/${flowId}/chat/messages`, {
+      params: conversationId ? { conversation_id: conversationId } : undefined,
+    }),
   /** 发起一轮对话 (异步触发, 返回 execution_id; 需轮询 messages 获取回答) */
-  send: (flowId: string, message: string) =>
+  send: (flowId: string, message: string, conversationId?: string) =>
     api.post<{ execution_id: string; conversation_id: string; status: string }>(
       `/agent-flows/${flowId}/chat`,
-      { message },
+      { message, conversation_id: conversationId },
     ),
+}
+
+export interface PublicChatResponse {
+  answer: string
+  conversation_id: string
+  execution_id: string
+  created_at: string
+}
+
+export const publicChatApi = {
+  send: (message: string, conversationId?: string | null, language: "zh-TW" | "en" | "zh-CN" = "zh-TW") =>
+    api.post<PublicChatResponse>("/public-chat", {
+      message,
+      conversation_id: conversationId || null,
+      language,
+    }),
+}
+
+export interface PublicKnowledgeBaseItem {
+  id: string
+  name: string
+  description: string | null
+  embedding_model: string
+  chunk_strategy: string
+  document_count: number
+  status: string
+}
+
+export interface PublicFlowItem {
+  id: string
+  name: string
+  description: string | null
+  node_count: number
+  status: string
+}
+
+export const publicCatalogApi = {
+  get: () =>
+    api.get<{
+      knowledge_bases: PublicKnowledgeBaseItem[]
+      flows: PublicFlowItem[]
+    }>("/public-chat/catalog"),
 }

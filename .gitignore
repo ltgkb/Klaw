@@ -4,6 +4,9 @@ __pycache__/
 *.egg-info/
 .venv/
 .env
+supplier-api.env
+kai-knowledge-api.env
+.codex-backup-*/
 
 # Node
 node_modules/

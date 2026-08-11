@@ -1,25 +1,25 @@
 @import "tailwindcss";
 
-/* shadcn/ui 主题变量 — Tailwind v4 用 @theme 定义设计令牌 */
+/* shadcn/ui 主题变量 - Tailwind v4 用 @theme 定义设计令牌 */
 @theme {
-  --color-background: oklch(1 0 0);
-  --color-foreground: oklch(0.145 0 0);
-  --color-card: oklch(1 0 0);
-  --color-card-foreground: oklch(0.145 0 0);
-  --color-primary: oklch(0.205 0 0);
+  --color-background: #f5f8f8;
+  --color-foreground: #13292b;
+  --color-card: #fbfdfd;
+  --color-card-foreground: #13292b;
+  --color-primary: #126f70;
   --color-primary-foreground: oklch(0.985 0 0);
-  --color-secondary: oklch(0.97 0 0);
-  --color-secondary-foreground: oklch(0.205 0 0);
-  --color-muted: oklch(0.97 0 0);
-  --color-muted-foreground: oklch(0.556 0 0);
-  --color-accent: oklch(0.97 0 0);
-  --color-accent-foreground: oklch(0.205 0 0);
+  --color-secondary: #e7eeee;
+  --color-secondary-foreground: #294446;
+  --color-muted: #e8efef;
+  --color-muted-foreground: #5f7476;
+  --color-accent: #dceaea;
+  --color-accent-foreground: #0c2628;
   --color-destructive: oklch(0.577 0.245 27.325);
   --color-destructive-foreground: oklch(0.985 0 0);
-  --color-border: oklch(0.922 0 0);
-  --color-input: oklch(0.922 0 0);
-  --color-ring: oklch(0.708 0 0);
-  --radius: 0.625rem;
+  --color-border: #cfdddd;
+  --color-input: #9ab2b4;
+  --color-ring: #126f70;
+  --radius: 12px;
 }
 
 * {
@@ -28,7 +28,325 @@
 
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: "Work Sans Variable", "Work Sans", "Noto Sans SC Variable", "Noto Sans SC",
+    -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   background-color: var(--color-background);
   color: var(--color-foreground);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+html[data-color-mode="dark"] {
+  --color-background: #0b1416;
+  --color-foreground: #cad7d8;
+  --color-card: #111f21;
+  --color-card-foreground: #cad7d8;
+  --color-primary: #177777;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #17282a;
+  --color-secondary-foreground: #cad7d8;
+  --color-muted: #17282a;
+  --color-muted-foreground: #809597;
+  --color-accent: #153536;
+  --color-accent-foreground: #eef7f7;
+  --color-border: #263b3d;
+  --color-input: #426164;
+  --color-ring: #62cccc;
+}
+
+.kai-admin-shell {
+  color: var(--color-foreground);
+  background: var(--color-background);
+}
+
+.kai-admin-sidebar {
+  background: var(--color-card);
+}
+
+.kai-admin-shell main {
+  background: var(--color-background);
+}
+
+.kai-admin-shell main > div {
+  margin-inline: auto;
+  width: min(100%, 1280px);
+}
+
+.kai-admin-header,
+.kai-admin-brand,
+.kai-mobile-nav {
+  background: color-mix(in srgb, var(--color-card) 94%, transparent);
+  backdrop-filter: blur(12px);
+}
+
+.kai-kb-page {
+  margin-inline: auto;
+  width: min(100%, 1280px);
+}
+
+.kai-kb-skeleton {
+  background: linear-gradient(100deg, var(--color-card) 20%, var(--color-muted) 50%, var(--color-card) 80%);
+  background-size: 220% 100%;
+}
+
+.kai-kb-card {
+  background: var(--color-card);
+}
+
+.kai-public-shell {
+  --kai-brand: #126f70;
+  --kai-brand-hover: #0d5e5f;
+  --kai-accent: #126f70;
+  --kai-accent-soft: #dceeee;
+  --kai-canvas: #f5f8f8;
+  --kai-layer-01: #fbfdfd;
+  --kai-layer-02: #e9f0f0;
+  --kai-layer-hover-01: #e5eeee;
+  --kai-field-01: #ffffff;
+  --kai-ink: #0c2628;
+  --kai-foreground: #294446;
+  --kai-muted-foreground: #647b7d;
+  --kai-border-subtle: #cfdddd;
+  --kai-border-strong: #9ab2b4;
+  --kai-focus: #177777;
+  --kai-text-on-color: #ffffff;
+  color: var(--kai-foreground);
+  background: var(--kai-canvas);
+  transition: color 180ms ease, background-color 180ms ease;
+}
+
+.kai-public-shell.is-dark {
+  --kai-brand: #177777;
+  --kai-brand-hover: #229090;
+  --kai-accent: #62cccc;
+  --kai-accent-soft: #153536;
+  --kai-canvas: #0b1416;
+  --kai-layer-01: #111f21;
+  --kai-layer-02: #17282a;
+  --kai-layer-hover-01: #1b3032;
+  --kai-field-01: #111f21;
+  --kai-ink: #eef7f7;
+  --kai-foreground: #cad7d8;
+  --kai-muted-foreground: #809597;
+  --kai-border-subtle: #263b3d;
+  --kai-border-strong: #426164;
+  --kai-focus: #62cccc;
+  --kai-text-on-color: #ffffff;
+}
+
+.kai-public-header {
+  color: var(--kai-ink);
+  border-bottom: 1px solid var(--kai-border-subtle);
+  background: color-mix(in srgb, var(--kai-canvas) 92%, transparent);
+  backdrop-filter: blur(16px);
+}
+
+.kai-brand-mark {
+  color: var(--kai-text-on-color);
+  background: var(--kai-brand);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.kai-muted {
+  color: var(--kai-muted-foreground);
+}
+
+.kai-accent {
+  color: var(--kai-accent);
+}
+
+.kai-section-rule {
+  background: var(--kai-accent);
+}
+
+.kai-hero-title {
+  color: var(--kai-ink);
+  font-size: clamp(3rem, 8vw, 5.5rem);
+  font-weight: 640;
+  line-height: 1;
+  letter-spacing: -0.065em;
+}
+
+.kai-control {
+  color: var(--kai-muted-foreground);
+  border-radius: 0;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.kai-control:hover {
+  color: var(--kai-ink);
+  background: var(--kai-layer-hover-01);
+}
+
+.kai-control:focus-visible,
+.kai-query-field:focus-within,
+.kai-suggestion:focus-visible,
+.kai-kb-link:focus-visible {
+  outline: 2px solid var(--kai-focus);
+  outline-offset: 2px;
+}
+
+.kai-query-field {
+  color: var(--kai-ink);
+  border: 1px solid var(--kai-border-strong);
+  background: var(--kai-field-01);
+  box-shadow: 0 18px 50px color-mix(in srgb, var(--kai-brand) 8%, transparent);
+  transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.kai-query-field:focus-within {
+  border-color: var(--kai-focus);
+  box-shadow: 0 20px 60px color-mix(in srgb, var(--kai-brand) 13%, transparent);
+}
+
+.kai-query-field textarea::placeholder {
+  color: var(--kai-muted-foreground);
+}
+
+.kai-primary-action {
+  color: var(--kai-text-on-color);
+  background: var(--kai-brand);
+  box-shadow: none;
+  transition: background-color 120ms ease;
+}
+
+.kai-primary-action:hover {
+  background: var(--kai-brand-hover);
+}
+
+.kai-primary-action:disabled {
+  color: var(--kai-muted-foreground);
+  background: var(--kai-layer-02);
+}
+
+.kai-suggestion-swap {
+  background: transparent;
+}
+
+.kai-suggestion {
+  color: var(--kai-foreground);
+  width: fit-content;
+  border: 1px solid var(--kai-border-subtle);
+  background: var(--kai-layer-01);
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.kai-suggestion:hover {
+  color: var(--kai-ink);
+  border-color: var(--kai-border-strong);
+  background: var(--kai-layer-hover-01);
+  transform: translateX(2px);
+}
+
+.kai-announcement {
+  color: var(--kai-muted-foreground);
+}
+
+.kai-message {
+  border: 1px solid var(--kai-border-subtle);
+  border-radius: 12px;
+}
+
+.kai-message-user {
+  color: var(--kai-text-on-color);
+  border-color: var(--kai-brand);
+  background: var(--kai-brand);
+}
+
+.kai-message-assistant {
+  color: var(--kai-foreground);
+  background: var(--kai-layer-01);
+}
+
+.kai-message-meta {
+  color: var(--kai-muted-foreground);
+  border-color: var(--kai-border-subtle);
+}
+
+.kai-kb-link {
+  color: var(--kai-foreground);
+  border: 1px solid var(--kai-border-strong);
+  background: color-mix(in srgb, var(--kai-layer-01) 92%, transparent);
+  backdrop-filter: blur(12px);
+  transition: color 120ms ease, border-color 120ms ease, background-color 120ms ease;
+}
+
+.kai-kb-link:hover {
+  color: var(--kai-ink);
+  border-color: var(--kai-accent);
+  background: var(--kai-layer-01);
+}
+
+@keyframes kai-ticker {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-50%);
+  }
+}
+
+.kai-ticker {
+  animation: kai-ticker 6s linear infinite;
+}
+
+@keyframes kai-suggestion-swap {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.kai-suggestion-swap {
+  animation: kai-suggestion-swap 180ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kai-admin-shell .animate-pulse,
+  .kai-flow-page .animate-spin {
+    animation: none !important;
+  }
+
+  .kai-ticker {
+    animation-play-state: paused;
+  }
+
+  .kai-suggestion-swap {
+    animation: none;
+  }
+
+  .kai-kb-skeleton {
+    animation: none;
+  }
+}
+
+@media (max-width: 639px) {
+  .kai-hero-title {
+    font-size: clamp(2.75rem, 15vw, 4.25rem);
+  }
+
+  .kai-query-field {
+    box-shadow: 0 12px 36px color-mix(in srgb, var(--kai-brand) 8%, transparent);
+  }
+}
+
+.kai-tech-grid {
+  background-image:
+    linear-gradient(rgba(15, 23, 42, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15, 23, 42, 0.035) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.75), transparent 85%);
+}
+
+.kai-tech-grid-dark {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.016) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.016) 1px, transparent 1px);
+  background-size: 40px 40px;
 }

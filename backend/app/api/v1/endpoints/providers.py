@@ -39,12 +39,19 @@ async def list_providers(_: CurrentUser):
 
     # OpenClaw (本地优先)
     openclaw_ok = await llm_client.health_check()
+    openclaw_status = "ok" if openclaw_ok and settings.openclaw_chat_enabled else (
+        "not_configured" if openclaw_ok else "unavailable"
+    )
     providers.append(ProviderInfo(
         name="openclaw",
-        status="ok" if openclaw_ok else "unavailable",
+        status=openclaw_status,
         deploy="local",
         priority="P0",
-        detail=settings.openclaw_url,
+        detail=(
+            settings.openclaw_url
+            if settings.openclaw_chat_enabled
+            else f"{settings.openclaw_url} (gateway/tools only; chat disabled)"
+        ),
     ))
 
     # Hermes (本地备选)
@@ -57,10 +64,16 @@ async def list_providers(_: CurrentUser):
         hermes_ok = False
     providers.append(ProviderInfo(
         name="hermes",
-        status="ok" if hermes_ok else "unavailable",
+        status="ok" if hermes_ok and settings.hermes_chat_enabled else (
+            "not_configured" if hermes_ok else "unavailable"
+        ),
         deploy="local",
         priority="P0",
-        detail="OpenAI-compatible API server",
+        detail=(
+            "OpenAI-compatible API server"
+            if settings.hermes_chat_enabled
+            else "gateway online; inference routing disabled"
+        ),
     ))
 
     # OpenAI (云端 fallback)
@@ -102,7 +115,7 @@ async def list_models(_: CurrentUser):
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(data: ChatRequest, current_user: CurrentUser):
-    """统一对话接口。OpenClaw 优先 + OpenAI/Anthropic fallback。"""
+    """统一对话接口。OpenClaw/Hermes 本地优先，再回退云端供应商。"""
     messages = [{"role": m.role, "content": m.content} for m in data.messages]
     try:
         content = await llm_client.chat(

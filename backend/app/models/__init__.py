@@ -9,6 +9,7 @@ from app.models.execution import Execution, ExecutionStatus
 from app.models.knowledge_base import KBStatus, KnowledgeBase
 from app.models.memory import Memory, MemoryType
 from app.models.push_channel import ChannelType, PushChannel
+from app.models.refresh_token import RefreshToken
 from app.models.schedule_job import ScheduleJob, ScheduleStatus
 from app.models.system_setting import SystemSetting
 from app.models.user import User, UserRole
@@ -35,6 +36,7 @@ __all__ = [
     "MemoryType",
     "PushChannel",
     "ChannelType",
+    "RefreshToken",
     "WorkspaceFile",
     "Conversation",
     "Message",

@@ -8,6 +8,7 @@ DB 用 SQLite 内存库; run_flow 内部的 async_session_factory 通过 monkeyp
 """
 
 import uuid
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -16,8 +17,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.models.agent_flow import AgentFlow
 from app.models.execution import Execution, ExecutionStatus
 from app.models.knowledge_base import KnowledgeBase
+from app.models.push_channel import ChannelType, PushChannel
 from app.models.user import User
 from app.services import execution_service
+from app.utils.crypto import encrypt
 
 
 # ── 辅助函数 ──
@@ -66,6 +69,225 @@ def mock_llm(monkeypatch):
 def _text_node(nid, label, template):
     return {"id": nid, "type": "text", "position": {"x": 0, "y": 0},
             "data": {"label": label, "config": {"template": template}}}
+
+
+def _notify_node(channel_ids):
+    return {
+        "id": "notify-1",
+        "type": "notify",
+        "position": {"x": 0, "y": 0},
+        "data": {
+            "label": "通知",
+            "config": {
+                "channel_ids": channel_ids,
+                "title_template": "完成",
+                "content_template": "结果: {input}",
+            },
+        },
+    }
+
+
+def test_kb_query_expansion_matches_triggers_and_deduplicates():
+    expanded = execution_service._expand_kb_query(
+        "供应商如何申请入驻",
+        {
+            "入驻": "申请成为 KAI 容量供应商 合作流程",
+            "供应商申请": "申请成为 KAI 容量供应商 合作流程",
+        },
+    )
+    assert expanded.startswith("供应商如何申请入驻 ")
+    assert expanded.count("申请成为 KAI 容量供应商") == 1
+
+
+def test_kb_query_expansion_leaves_unrelated_queries_unchanged():
+    query = "关闸后如何处理订单"
+    assert execution_service._expand_kb_query(query, {"入驻": "申请 准入"}) == query
+
+
+def test_llm_output_can_strip_markdown_asterisks():
+    content = "**重点**\n* 第一项\n普通文本"
+    result = execution_service._format_llm_output(
+        content, {"strip_markdown_asterisks": True}
+    )
+    assert "*" not in result
+    assert result == "重点\n 第一项\n普通文本"
+
+
+def test_llm_output_preserves_markdown_by_default():
+    assert execution_service._format_llm_output("**重点**", {}) == "**重点**"
+
+
+@pytest.mark.asyncio
+async def test_notify_node_resolves_owner_channel(
+    db_session, patch_session_factory, monkeypatch
+):
+    """工作流只存 channel id，执行时按 owner 解密并发送。"""
+    user = await _make_user(db_session, "notify-owner@test.com")
+    channel = PushChannel(
+        owner_id=user.id,
+        name="团队通知",
+        type=ChannelType.telegram,
+        config={"bot_token": encrypt("123:secret"), "chat_id": "9988"},
+    )
+    db_session.add(channel)
+    await db_session.commit()
+
+    flow = await _make_flow(
+        db_session,
+        user.id,
+        {"nodes": [_notify_node([str(channel.id)])], "edges": []},
+    )
+    execution = await _make_execution(db_session, flow.id, {"input": "日报"})
+    sent = []
+
+    async def fake_notify(channels, title, content):
+        sent.extend(channels)
+        assert title == "完成"
+        assert content == "结果: 日报"
+        return [{"channel": "telegram", "success": True, "error": None}]
+
+    monkeypatch.setattr("app.core.notify_client.notify", fake_notify)
+    await execution_service.run_flow(execution.id, flow.id)
+
+    await db_session.refresh(execution)
+    assert execution.status == ExecutionStatus.success
+    assert sent == [{"bot_token": "123:secret", "chat_id": "9988", "type": "telegram"}]
+    assert execution.node_states["notify-1"]["output"] == "推送完成: 1/1 渠道成功"
+
+
+@pytest.mark.asyncio
+async def test_notify_node_rejects_foreign_channel(
+    db_session, patch_session_factory, monkeypatch
+):
+    """引用其他 owner 的渠道时执行失败，且不会调用发送器。"""
+    owner = await _make_user(db_session, "flow-owner@test.com")
+    other = await _make_user(db_session, "channel-owner@test.com")
+    channel = PushChannel(
+        owner_id=other.id,
+        name="foreign",
+        type=ChannelType.hermes,
+        config={"channel": "ops"},
+    )
+    db_session.add(channel)
+    await db_session.commit()
+
+    flow = await _make_flow(
+        db_session,
+        owner.id,
+        {"nodes": [_notify_node([str(channel.id)])], "edges": []},
+    )
+    execution = await _make_execution(db_session, flow.id)
+    sent = []
+
+    async def fake_notify(*args):
+        sent.append(args)
+        return []
+
+    monkeypatch.setattr("app.core.notify_client.notify", fake_notify)
+    await execution_service.run_flow(execution.id, flow.id)
+
+    await db_session.refresh(execution)
+    assert execution.status == ExecutionStatus.failed
+    assert "不存在或无权访问" in execution.node_states["notify-1"]["error"]
+    assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_tool_node_renders_parameters_and_exposes_result(
+    db_session, patch_session_factory, monkeypatch
+):
+    """工具节点渲染上下文参数，成功结果可写入节点状态。"""
+    user = await _make_user(db_session, "tool-flow@test.com")
+    dag = {
+        "nodes": [{
+            "id": "tool-1",
+            "type": "tool",
+            "position": {"x": 0, "y": 0},
+            "data": {"label": "抓取", "config": {
+                "tool_id": "web_fetch",
+                "parameters_template": '{"url": "{input}", "limit": 3}',
+            }},
+        }],
+        "edges": [],
+    }
+    flow = await _make_flow(db_session, user.id, dag)
+    execution = await _make_execution(
+        db_session, flow.id, {"input": "https://example.com/report"}
+    )
+    calls = []
+
+    async def fake_call(tool_id, parameters):
+        calls.append((tool_id, parameters))
+        return {
+            "tool_id": tool_id,
+            "success": True,
+            "result": {"title": "Report", "items": 3},
+            "error": None,
+            "source": "openclaw",
+        }
+
+    monkeypatch.setattr("app.services.local_agent_service.call_tool", fake_call)
+    await execution_service.run_flow(execution.id, flow.id)
+
+    await db_session.refresh(execution)
+    assert execution.status == ExecutionStatus.success
+    assert calls == [("web_fetch", {"url": "https://example.com/report", "limit": 3})]
+    assert execution.node_states["tool-1"]["output"] == '{"title": "Report", "items": 3}'
+
+
+@pytest.mark.asyncio
+async def test_tool_node_failure_is_not_reported_as_success(
+    db_session, patch_session_factory, monkeypatch
+):
+    """OpenClaw 明确失败时，工具节点和整体执行都必须失败。"""
+    user = await _make_user(db_session, "tool-failure@test.com")
+    dag = {
+        "nodes": [{
+            "id": "tool-1",
+            "type": "tool",
+            "position": {"x": 0, "y": 0},
+            "data": {"label": "抓取", "config": {
+                "tool_id": "web_fetch",
+                "parameters_template": "{}",
+            }},
+        }],
+        "edges": [],
+    }
+    flow = await _make_flow(db_session, user.id, dag)
+    execution = await _make_execution(db_session, flow.id)
+
+    async def failed_call(tool_id, parameters):
+        return {
+            "tool_id": tool_id,
+            "success": False,
+            "result": {"mock": True},
+            "error": "OpenClaw 工具服务不可用",
+            "source": "mock",
+        }
+
+    monkeypatch.setattr("app.services.local_agent_service.call_tool", failed_call)
+    await execution_service.run_flow(execution.id, flow.id)
+
+    await db_session.refresh(execution)
+    assert execution.status == ExecutionStatus.failed
+    assert execution.node_states["tool-1"]["status"] == "failed"
+    assert "OpenClaw 工具服务不可用" in execution.node_states["tool-1"]["error"]
+
+
+@pytest.mark.asyncio
+async def test_tool_node_rejects_invalid_json_before_call(monkeypatch):
+    calls = []
+
+    async def unexpected_call(*args):
+        calls.append(args)
+
+    monkeypatch.setattr("app.services.local_agent_service.call_tool", unexpected_call)
+    with pytest.raises(ValueError, match="有效 JSON"):
+        await execution_service._execute_tool_node(
+            {"tool_id": "web_fetch", "parameters_template": "{broken"},
+            {},
+        )
+    assert calls == []
 
 
 # ── P0-2: 启动前取消 ──
@@ -318,6 +540,10 @@ async def test_http_node_success(db_session, patch_session_factory, monkeypatch)
     calls = []
     queue = [_FakeResponse('{"echo": "pong"}')]
     monkeypatch.setattr(
+        execution_service, "assert_url_is_safe", lambda _url: ("api.example.com", "1.1.1.1")
+    )
+    monkeypatch.setattr(execution_service, "pin_dns_global", lambda *_args: nullcontext())
+    monkeypatch.setattr(
         execution_service.httpx, "AsyncClient", _make_fake_client(calls, queue)
     )
 
@@ -358,6 +584,10 @@ async def test_http_node_retry_on_error(db_session, patch_session_factory, monke
     calls = []
     queue = [ConnectionError("连接失败"), _FakeResponse("RECOVERED")]
     monkeypatch.setattr(
+        execution_service, "assert_url_is_safe", lambda _url: ("api.example.com", "1.1.1.1")
+    )
+    monkeypatch.setattr(execution_service, "pin_dns_global", lambda *_args: nullcontext())
+    monkeypatch.setattr(
         execution_service.httpx, "AsyncClient", _make_fake_client(calls, queue)
     )
 
@@ -369,7 +599,224 @@ async def test_http_node_retry_on_error(db_session, patch_session_factory, monke
     assert ex.node_states["n1"]["output"] == "RECOVERED"
 
 
-# ── P1-4: retrieval 节点 KB owner 校验 ──
+@pytest.mark.asyncio
+async def test_http_node_blocks_private_network_before_request(monkeypatch):
+    """用户配置的 HTTP 节点不能访问 loopback、内网或云元数据地址。"""
+    called = False
+
+    class UnexpectedClient:
+        def __init__(self, *args, **kwargs):
+            nonlocal called
+            called = True
+
+    monkeypatch.setattr(execution_service.httpx, "AsyncClient", UnexpectedClient)
+
+    with pytest.raises(ValueError, match="non-public"):
+        await execution_service._execute_http_node(
+            {"method": "GET", "url": "http://127.0.0.1:8000/api/v1/health"}, {}
+        )
+
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_http_node_error_does_not_expose_url_credentials(monkeypatch):
+    """HTTP 状态错误只包含状态码，不能把 query token 写入执行错误和日志。"""
+    token = "query-secret-token"
+    calls = []
+    queue = [_FakeResponse("denied", status_code=401)]
+    monkeypatch.setattr(
+        execution_service, "assert_url_is_safe", lambda _url: ("api.example.com", "1.1.1.1")
+    )
+    monkeypatch.setattr(execution_service, "pin_dns_global", lambda *_args: nullcontext())
+    monkeypatch.setattr(
+        execution_service.httpx, "AsyncClient", _make_fake_client(calls, queue)
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await execution_service._execute_http_node(
+            {"method": "GET", "url": f"https://api.example.com/data?token={token}"}, {}
+        )
+
+    assert str(exc_info.value) == "HTTP request returned 401"
+    assert token not in str(exc_info.value)
+
+
+# ── P1-4: retrieval / LLM 节点 KB owner 校验与检索增强 ──
+
+@pytest.mark.asyncio
+async def test_llm_node_retrieves_owned_kb_and_injects_grounded_context(
+    db_session, patch_session_factory, monkeypatch
+):
+    """LLM 节点可直接检索本人知识库，并把 Top-K/重排及证据传给模型。"""
+    owner = await _make_user(db_session, "llm-kb-owner@test.com")
+    kb = KnowledgeBase(name="产品问答", owner_id=owner.id)
+    db_session.add(kb)
+    await db_session.commit()
+    searches = []
+    llm_calls = []
+
+    async def fake_search(db, kb_id, request):
+        searches.append((kb_id, request))
+        return SimpleNamespace(hits=[
+            SimpleNamespace(content="标准答案 A"),
+            SimpleNamespace(content="补充证据 B"),
+        ])
+
+    async def fake_chat(messages, model="default", user=None, **kwargs):
+        llm_calls.append((messages, model, user))
+        return "有依据的回答 [1]"
+
+    monkeypatch.setattr("app.services.document_service.search", fake_search)
+    monkeypatch.setattr("app.services.execution_service.llm_chat", fake_chat)
+    dag = {
+        "nodes": [{
+            "id": "llm-1",
+            "type": "llm",
+            "position": {"x": 0, "y": 0},
+            "data": {"label": "回答", "config": {
+                "model": "default",
+                "system_prompt": "回答产品问题",
+                "user_template": "用户问题：{input}",
+                "kb_id": str(kb.id),
+                "kb_query_template": "检索：{input}",
+                "kb_top_k": 3,
+                "kb_rerank": True,
+            }},
+        }],
+        "edges": [],
+    }
+    flow = await _make_flow(db_session, owner.id, dag)
+    ex = await _make_execution(db_session, flow.id, {"input": "如何退款"})
+
+    await execution_service.run_flow(ex.id, flow.id)
+
+    await db_session.refresh(ex)
+    assert ex.status == ExecutionStatus.success
+    assert searches[0][0] == kb.id
+    assert searches[0][1].query == "检索：如何退款"
+    assert searches[0][1].top_k == 3
+    assert searches[0][1].rerank is True
+    messages, model, called_user = llm_calls[0]
+    assert model == "default"
+    assert called_user.id == owner.id
+    assert "资料不足时明确说明" in messages[0]["content"]
+    assert "用户问题：如何退款" in messages[1]["content"]
+    assert "[1] 标准答案 A" in messages[1]["content"]
+    assert "[2] 补充证据 B" in messages[1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_llm_node_rejects_foreign_kb_before_model_call(
+    db_session, patch_session_factory, monkeypatch
+):
+    """LLM 节点不能借内置检索访问其他 owner 的知识库。"""
+    owner = await _make_user(db_session, "llm-flow-owner@test.com")
+    other = await _make_user(db_session, "llm-kb-other@test.com")
+    kb = KnowledgeBase(name="他人私有库", owner_id=other.id)
+    db_session.add(kb)
+    await db_session.commit()
+    llm_calls = []
+
+    async def unexpected_chat(*args, **kwargs):
+        llm_calls.append((args, kwargs))
+        return "不应调用"
+
+    monkeypatch.setattr("app.services.execution_service.llm_chat", unexpected_chat)
+    dag = {
+        "nodes": [{
+            "id": "llm-1",
+            "type": "llm",
+            "position": {"x": 0, "y": 0},
+            "data": {"label": "回答", "config": {
+                "user_template": "{input}",
+                "kb_id": str(kb.id),
+            }},
+        }],
+        "edges": [],
+    }
+    flow = await _make_flow(db_session, owner.id, dag)
+    ex = await _make_execution(db_session, flow.id)
+
+    await execution_service.run_flow(ex.id, flow.id)
+
+    await db_session.refresh(ex)
+    assert ex.status == ExecutionStatus.failed
+    assert "无权访问" in (ex.error_message or "")
+    assert llm_calls == []
+
+
+@pytest.mark.asyncio
+async def test_llm_node_without_kb_keeps_existing_message_contract(monkeypatch):
+    """旧工作流未配置知识库时，不改变发送给模型的消息。"""
+    llm_calls = []
+
+    async def fake_chat(messages, model="default", user=None, **kwargs):
+        llm_calls.append((messages, model))
+        return "旧行为回答"
+
+    monkeypatch.setattr("app.services.execution_service.llm_chat", fake_chat)
+
+    result = await execution_service._execute_llm_node(
+        {
+            "model": "legacy-model",
+            "system_prompt": "原系统提示",
+            "user_template": "问题：{input}",
+        },
+        {"input": "旧工作流"},
+    )
+
+    assert result == "旧行为回答"
+    assert llm_calls == [([
+        {"role": "system", "content": "原系统提示"},
+        {"role": "user", "content": "问题：旧工作流"},
+    ], "legacy-model")]
+
+
+@pytest.mark.asyncio
+async def test_llm_node_marks_empty_kb_results_for_conservative_answer(
+    db_session, patch_session_factory, monkeypatch
+):
+    """知识库无命中时仍明确告知模型证据不足，避免伪造检索结果。"""
+    owner = await _make_user(db_session, "llm-empty-kb@test.com")
+    kb = KnowledgeBase(name="空知识库", owner_id=owner.id)
+    db_session.add(kb)
+    await db_session.commit()
+    llm_messages = []
+
+    async def fake_search(db, kb_id, request):
+        return SimpleNamespace(hits=[
+            SimpleNamespace(content="卖", rerank_score=0.02),
+        ])
+
+    async def fake_chat(messages, model="default", user=None, **kwargs):
+        llm_messages.extend(messages)
+        return "未找到相关资料"
+
+    monkeypatch.setattr("app.services.document_service.search", fake_search)
+    monkeypatch.setattr("app.services.execution_service.llm_chat", fake_chat)
+    dag = {
+        "nodes": [{
+            "id": "llm-1",
+            "type": "llm",
+            "position": {"x": 0, "y": 0},
+            "data": {"label": "回答", "config": {
+                "user_template": "{input}",
+                "kb_id": str(kb.id),
+            }},
+        }],
+        "edges": [],
+    }
+    flow = await _make_flow(db_session, owner.id, dag)
+    ex = await _make_execution(db_session, flow.id)
+
+    await execution_service.run_flow(ex.id, flow.id)
+
+    await db_session.refresh(ex)
+    assert ex.status == ExecutionStatus.success
+    assert "[未检索到与问题相关的知识库内容]" in llm_messages[-1]["content"]
+    assert "卖" not in llm_messages[-1]["content"]
+    assert "问候或寒暄" in llm_messages[0]["content"]
 
 @pytest.mark.asyncio
 async def test_retrieval_node_rejects_other_users_kb(db_session, patch_session_factory, mock_llm):

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react"
-import { Brain, Database, GitBranch, Type, Bell, BrainCog, Trash2, Plus, X, Play, Repeat2, Square, Globe } from "lucide-react"
-import { providerApi, type NodeType, type ModelInfo } from "@/lib/api"
+import { Link } from "react-router-dom"
+import { AlertTriangle, Brain, Database, GitBranch, Type, Bell, BrainCog, Trash2, Plus, X, Play, Repeat2, Square, Globe, Loader2, RefreshCw, Settings2, Wrench } from "lucide-react"
+import { kbApi, localAgentApi, providerApi, pushChannelApi, type KBRead, type NodeType, type ModelInfo, type PushChannelRead, type ToolInfo } from "@/lib/api"
 import type { Node } from "@xyflow/react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -19,6 +20,7 @@ const NODE_ICONS: Record<CanvasNodeType, typeof Brain> = {
   notify: Bell,
   memory: BrainCog,
   http: Globe,
+  tool: Wrench,
 }
 
 const NODE_LABELS: Record<CanvasNodeType, string> = {
@@ -32,23 +34,44 @@ const NODE_LABELS: Record<CanvasNodeType, string> = {
   notify: "消息推送",
   memory: "记忆读写",
   http: "HTTP 请求",
+  tool: "本地工具",
 }
 
 /** 模型选择器: 从 /providers/models 拉取真实模型列表 */
 function ModelSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const [models, setModels] = useState<ModelInfo[]>([])
   const [loaded, setLoaded] = useState(false)
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
+    let active = true
+    setLoaded(false)
+    setLoadFailed(false)
     providerApi
       .listModels()
-      .then((r) => setModels(r.data))
-      .catch(() => setModels([]))
-      .finally(() => setLoaded(true))
-  }, [])
+      .then((response) => {
+        if (active) setModels(response.data)
+      })
+      .catch(() => {
+        if (active) {
+          setModels([])
+          setLoadFailed(true)
+        }
+      })
+      .finally(() => {
+        if (active) setLoaded(true)
+      })
+    return () => {
+      active = false
+    }
+  }, [reloadKey])
 
-  // 当前值不在列表里也保留显示
-  const options = [{ id: "default", name: "default (Kaiweb 优先)", provider: "auto" }, ...models]
+  // 后端可能已经返回 default；统一按 id 去重，当前自定义值仍保留显示。
+  const options = Array.from(new Map(models.map((model) => [model.id, model])).values())
+  if (!options.some((model) => model.id === "default")) {
+    options.unshift({ id: "default", name: "default (自动路由)", provider: "auto" })
+  }
   if (value && !options.some((m) => m.id === value)) {
     options.unshift({ id: value, name: value, provider: "自定义" })
   }
@@ -61,17 +84,291 @@ function ModelSelect({ value, onChange }: { value: string; onChange: (v: string)
         value={value || "default"}
         onChange={(e) => onChange(e.target.value)}
       >
-        {!loaded && <option value="default">加载模型中…</option>}
-        {options.map((m) => (
-          <option key={m.id} value={m.id}>
-            {m.name} ({m.provider})
+        {!loaded ? (
+          <option value="default">加载模型中…</option>
+        ) : (
+          options.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name} ({m.provider})
+            </option>
+          ))
+        )}
+      </select>
+      {loadFailed ? (
+        <div className="flex items-center justify-between text-xs text-destructive">
+          <span>模型列表加载失败，当前仅保留自动路由</span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={() => setReloadKey((key) => key + 1)}
+            title="重新加载模型"
+            aria-label="重新加载模型"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          default 按当前可用状态自动路由；Mock 仅用于开发环境兜底
+        </p>
+      )}
+    </>
+  )
+}
+
+/** 知识库选择器：UI 展示名称，保存时仍使用后端稳定 UUID。 */
+function KnowledgeBaseSelect({
+  value,
+  onChange,
+  inputId = "ret-kb",
+  optional = false,
+}: {
+  value: string
+  onChange: (v: string) => void
+  inputId?: string
+  optional?: boolean
+}) {
+  const [knowledgeBases, setKnowledgeBases] = useState<KBRead[]>([])
+  const [loaded, setLoaded] = useState(false)
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
+
+  useEffect(() => {
+    let active = true
+    setLoaded(false)
+    setLoadFailed(false)
+    kbApi
+      .list(1, 100)
+      .then((response) => {
+        if (active) setKnowledgeBases(response.data.items)
+      })
+      .catch(() => {
+        if (active) {
+          setKnowledgeBases([])
+          setLoadFailed(true)
+        }
+      })
+      .finally(() => {
+        if (active) setLoaded(true)
+      })
+    return () => {
+      active = false
+    }
+  }, [reloadKey])
+
+  const selectedStillExists = knowledgeBases.some((knowledgeBase) => knowledgeBase.id === value)
+
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={inputId}>知识库{optional ? "（可选）" : ""}</Label>
+      <select
+        id={inputId}
+        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        disabled={!loaded || loadFailed}
+      >
+        <option value="">{loaded ? "选择知识库" : "加载知识库中…"}</option>
+        {value && !selectedStillExists && (
+          <option value={value}>当前配置的知识库（已不可见，请重新选择）</option>
+        )}
+        {knowledgeBases.map((knowledgeBase) => (
+          <option key={knowledgeBase.id} value={knowledgeBase.id}>
+            {knowledgeBase.name}
           </option>
         ))}
       </select>
-      <p className="text-xs text-muted-foreground">
-        default → Kaiweb → OpenClaw → OpenAI → Anthropic fallback
-      </p>
+      {loadFailed ? (
+        <div className="flex items-center justify-between text-xs text-destructive">
+          <span>知识库列表加载失败</span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={() => setReloadKey((key) => key + 1)}
+            title="重新加载知识库"
+            aria-label="重新加载知识库"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      ) : knowledgeBases.length === 0 && loaded ? (
+        <p className="text-xs text-muted-foreground">
+          暂无知识库，<Link to="/kb" className="underline">先创建知识库</Link>
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          {optional
+            ? "选择后，此节点会先检索知识库，再结合命中内容回答。"
+            : "选择名称后，工作流会保存对应知识库引用。"}
+        </p>
+      )}
+    </div>
+  )
+}
+
+function ToolSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [tools, setTools] = useState<ToolInfo[]>([])
+  const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    localAgentApi
+      .listTools()
+      .then((response) => {
+        if (active) setTools(response.data)
+      })
+      .catch(() => {
+        if (active) setTools([])
+      })
+      .finally(() => {
+        if (active) setLoaded(true)
+      })
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const executableTools = tools.filter((tool) => tool.executable)
+  const selected = executableTools.find((tool) => tool.id === value)
+  return (
+    <>
+      <select
+        id="tool-id"
+        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        <option value="">{loaded ? "选择工具" : "加载工具中…"}</option>
+        {executableTools.map((tool) => (
+          <option key={tool.id} value={tool.id}>{tool.name} ({tool.source})</option>
+        ))}
+      </select>
+      {selected?.description && (
+        <p className="text-xs text-muted-foreground">{selected.description}</p>
+      )}
     </>
+  )
+}
+
+const CHANNEL_TYPE_LABELS: Record<PushChannelRead["type"], string> = {
+  feishu: "飞书",
+  wechat: "企业微信",
+  telegram: "Telegram",
+  hermes: "Hermes",
+}
+
+function NotifyChannelSelector({
+  value,
+  legacyCount,
+  onChange,
+  onClearLegacy,
+}: {
+  value: string[]
+  legacyCount: number
+  onChange: (ids: string[]) => void
+  onClearLegacy: () => void
+}) {
+  const [channels, setChannels] = useState<PushChannelRead[]>([])
+  const [loading, setLoading] = useState(true)
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
+
+  useEffect(() => {
+    let active = true
+    setLoading(true)
+    setLoadFailed(false)
+    pushChannelApi
+      .list()
+      .then((response) => {
+        if (active) setChannels(response.data)
+      })
+      .catch(() => {
+        if (active) setLoadFailed(true)
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [reloadKey])
+
+  const toggle = (channelId: string) => {
+    onChange(
+      value.includes(channelId)
+        ? value.filter((id) => id !== channelId)
+        : [...value, channelId],
+    )
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <Label>已保存渠道</Label>
+        <Button asChild variant="ghost" size="sm" className="h-7 px-2 text-xs">
+          <Link to="/settings">
+            <Settings2 className="h-3.5 w-3.5" />
+            管理渠道
+          </Link>
+        </Button>
+      </div>
+
+      {legacyCount > 0 && (
+        <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <p>此旧节点含 {legacyCount} 个内联渠道配置。</p>
+            <button type="button" className="mt-1 font-medium underline" onClick={onClearLegacy}>
+              清除旧配置
+            </button>
+          </div>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="flex h-16 items-center justify-center rounded-md border">
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        </div>
+      ) : loadFailed ? (
+        <div className="flex h-16 items-center justify-between rounded-md border px-3 text-sm text-destructive">
+          <span>渠道加载失败</span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 w-8 p-0"
+            title="重新加载渠道"
+            onClick={() => setReloadKey((key) => key + 1)}
+          >
+            <RefreshCw className="h-4 w-4" />
+          </Button>
+        </div>
+      ) : channels.length === 0 ? (
+        <p className="rounded-md border p-3 text-sm text-muted-foreground">暂无已保存渠道</p>
+      ) : (
+        <div className="max-h-52 space-y-1 overflow-auto rounded-md border p-1">
+          {channels.map((channel) => (
+            <label
+              key={channel.id}
+              className="flex min-h-10 cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-accent"
+            >
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-input"
+                checked={value.includes(channel.id)}
+                onChange={() => toggle(channel.id)}
+              />
+              <span className="min-w-0 flex-1 truncate text-sm">{channel.name}</span>
+              <span className="text-xs text-muted-foreground">{CHANNEL_TYPE_LABELS[channel.type]}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -130,7 +427,6 @@ function VarPicker({ vars, onInsert }: { vars: VarOpt[]; onInsert: (token: strin
                 className="block w-full rounded px-2 py-1 text-left text-xs hover:bg-accent"
                 onClick={() => {
                   onInsert(v.token)
-                  setOpen(false)
                 }}
               >
                 {v.label}
@@ -212,7 +508,7 @@ export function NodeConfigPanel({ node, allNodes = [], onChange, onDelete }: Pro
   ]
 
   const loopBodyOptions = allNodes.filter(
-    (n) => n.id !== node.id && ["llm", "retrieval", "text", "notify", "memory"].includes(n.type || ""),
+    (n) => n.id !== node.id && ["llm", "retrieval", "text", "notify", "memory", "tool"].includes(n.type || ""),
   )
 
   const updateLabel = (label: string) => {
@@ -381,23 +677,78 @@ export function NodeConfigPanel({ node, allNodes = [], onChange, onDelete }: Pro
                 {`{节点名} 引用上游节点输出, {input}/{sys.query} 引用输入, {history} 引用对话历史`}
               </p>
             </div>
+            <div className="border-t pt-4">
+              <KnowledgeBaseSelect
+                inputId="llm-kb"
+                optional
+                value={(config.kb_id as string) || ""}
+                onChange={(value) => updateConfig("kb_id", value)}
+              />
+            </div>
+            {(config.kb_id as string) && (
+              <>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="llm-kb-query">知识库查询模板</Label>
+                    <VarPicker vars={availableVars} onInsert={(t) => insertVar("kb_query_template", t)} />
+                  </div>
+                  <Input
+                    id="llm-kb-query"
+                    value={(config.kb_query_template as string) || "{input}"}
+                    onChange={(e) => updateConfig("kb_query_template", e.target.value)}
+                    placeholder="{input}"
+                  />
+                </div>
+                <div className="grid grid-cols-[1fr_auto] items-end gap-3">
+                  <div className="space-y-2">
+                    <Label htmlFor="llm-kb-topk">检索条数</Label>
+                    <Input
+                      id="llm-kb-topk"
+                      type="number"
+                      value={(config.kb_top_k as number) ?? 5}
+                      onChange={(e) => updateConfig("kb_top_k", parseInt(e.target.value) || 5)}
+                      min={1}
+                      max={50}
+                    />
+                  </div>
+                  <label className="flex h-9 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-input"
+                      checked={(config.kb_rerank as boolean | undefined) ?? true}
+                      onChange={(e) => updateConfig("kb_rerank", e.target.checked)}
+                    />
+                    智能重排
+                  </label>
+                </div>
+                {((config.kb_rerank as boolean | undefined) ?? true) && (
+                  <div className="space-y-2">
+                    <Label htmlFor="llm-kb-min-relevance">最低相关度</Label>
+                    <Input
+                      id="llm-kb-min-relevance"
+                      type="number"
+                      value={(config.kb_min_relevance as number) ?? 0.35}
+                      onChange={(e) => updateConfig("kb_min_relevance", parseFloat(e.target.value) || 0)}
+                      min={0}
+                      max={1}
+                      step={0.05}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      低于此重排分数的内容不会交给模型，减少无关片段干扰。
+                    </p>
+                  </div>
+                )}
+              </>
+            )}
           </>
         )}
 
         {nodeType === "retrieval" && (
           <>
-            <div className="space-y-2">
-              <Label htmlFor="ret-kb">知识库 ID</Label>
-              <Input
-                id="ret-kb"
-                value={(config.kb_id as string) || ""}
-                onChange={(e) => updateConfig("kb_id", e.target.value)}
-                placeholder="粘贴知识库 UUID"
-              />
-              <p className="text-xs text-muted-foreground">
-                在知识库详情页可获取 UUID
-              </p>
-            </div>
+            <KnowledgeBaseSelect
+              value={(config.kb_id as string) || ""}
+              onChange={(value) => updateConfig("kb_id", value)}
+            />
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label htmlFor="ret-query">查询模板</Label>
@@ -644,99 +995,17 @@ export function NodeConfigPanel({ node, allNodes = [], onChange, onDelete }: Pro
                 {"{node_id} 引用上游节点输出"}
               </p>
             </div>
-            <div className="space-y-2">
-              <Label>推送渠道</Label>
-              {((config.channels as Array<Record<string, string>>) || []).map((ch, i) => (
-                <div key={i} className="space-y-1.5 rounded-md border p-2">
-                  <div className="flex items-center gap-2">
-                    <select
-                      className="flex h-8 flex-1 rounded-md border border-input bg-background px-2 text-xs"
-                      value={ch.type || "feishu"}
-                      onChange={(e) => {
-                        const channels = [...((config.channels as Array<Record<string, string>>) || [])]
-                        channels[i] = { ...ch, type: e.target.value }
-                        updateConfig("channels", channels)
-                      }}
-                    >
-                      <option value="feishu">飞书</option>
-                      <option value="wechat">企业微信</option>
-                      <option value="telegram">Telegram</option>
-                      <option value="hermes">Hermes</option>
-                    </select>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 px-2"
-                      onClick={() => {
-                        const channels = [...((config.channels as Array<Record<string, string>>) || [])]
-                        channels.splice(i, 1)
-                        updateConfig("channels", channels)
-                      }}
-                    >
-                      <X className="h-3 w-3" />
-                    </Button>
-                  </div>
-                  {ch.type === "telegram" ? (
-                    <>
-                      <Input
-                        className="h-8 text-xs"
-                        value={ch.bot_token || ""}
-                        onChange={(e) => {
-                          const channels = [...((config.channels as Array<Record<string, string>>) || [])]
-                          channels[i] = { ...ch, bot_token: e.target.value }
-                          updateConfig("channels", channels)
-                        }}
-                        placeholder="Bot Token"
-                      />
-                      <Input
-                        className="h-8 text-xs"
-                        value={ch.chat_id || ""}
-                        onChange={(e) => {
-                          const channels = [...((config.channels as Array<Record<string, string>>) || [])]
-                          channels[i] = { ...ch, chat_id: e.target.value }
-                          updateConfig("channels", channels)
-                        }}
-                        placeholder="Chat ID"
-                      />
-                    </>
-                  ) : ch.type === "hermes" ? (
-                    <Input
-                      className="h-8 text-xs"
-                      value={ch.channel || ""}
-                      onChange={(e) => {
-                        const channels = [...((config.channels as Array<Record<string, string>>) || [])]
-                        channels[i] = { ...ch, channel: e.target.value }
-                        updateConfig("channels", channels)
-                      }}
-                      placeholder="Hermes channel"
-                    />
-                  ) : (
-                    <Input
-                      className="h-8 text-xs"
-                      value={ch.webhook_url || ""}
-                      onChange={(e) => {
-                        const channels = [...((config.channels as Array<Record<string, string>>) || [])]
-                        channels[i] = { ...ch, webhook_url: e.target.value }
-                        updateConfig("channels", channels)
-                      }}
-                      placeholder="Webhook URL"
-                    />
-                  )}
-                </div>
-              ))}
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full"
-                onClick={() => {
-                  const channels = [...((config.channels as Array<Record<string, string>>) || []), { type: "feishu", webhook_url: "" }]
-                  updateConfig("channels", channels)
-                }}
-              >
-                <Plus className="h-3 w-3" />
-                添加渠道
-              </Button>
-            </div>
+            <NotifyChannelSelector
+              value={(config.channel_ids as string[]) || []}
+              legacyCount={((config.channels as unknown[]) || []).length}
+              onChange={(channelIds) => {
+                onChange(node.id, {
+                  ...nodeData,
+                  config: { ...config, channel_ids: channelIds, channels: [] },
+                })
+              }}
+              onClearLegacy={() => updateConfig("channels", [])}
+            />
           </>
         )}
 
@@ -907,6 +1176,35 @@ export function NodeConfigPanel({ node, allNodes = [], onChange, onDelete }: Pro
             <p className="text-xs text-muted-foreground">
               响应文本作为节点输出存入上下文, 下游可用 {`{节点名}`} 引用
             </p>
+          </>
+        )}
+
+        {nodeType === "tool" && (
+          <>
+            <div className="space-y-2">
+              <Label htmlFor="tool-id">工具</Label>
+              <ToolSelect
+                value={(config.tool_id as string) || ""}
+                onChange={(toolId) => updateConfig("tool_id", toolId)}
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="tool-parameters">JSON 参数</Label>
+                <VarPicker vars={availableVars} onInsert={(token) => insertVar("parameters_template", token)} />
+              </div>
+              <textarea
+                id="tool-parameters"
+                className={cn(
+                  "flex min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-2",
+                  "font-mono text-xs ring-offset-background placeholder:text-muted-foreground",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                )}
+                value={(config.parameters_template as string) || "{}"}
+                onChange={(event) => updateConfig("parameters_template", event.target.value)}
+                placeholder={'{"url": "{input}"}'}
+              />
+            </div>
           </>
         )}
       </div>

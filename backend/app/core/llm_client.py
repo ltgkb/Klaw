@@ -1,6 +1,6 @@
 """LLM 统一客户端。
 
-对齐 PRD 第 7 节, 实际降级链: OpenClaw (本地 agent 网关, 优先) → Kaiweb 直连 (自建网关兜底) → OpenAI → Anthropic → dev mock 兜底。
+对齐 PRD 第 7 节, 实际降级链: OpenClaw → Hermes (启用时) → Kaiweb → OpenAI → Anthropic → dev mock。
 通过 httpx 直调 HTTP API, 不引入 langchain/openai SDK。
 供应商 API Key 经 llm_config 做 DB 热更新: 先读内存缓存, 缓存为空回落 settings (.env)。
 """
@@ -17,6 +17,28 @@ from app.core import llm_config
 from app.utils.crypto import decrypt
 
 logger = logging.getLogger("claw.llm")
+
+
+def _should_try_openclaw(model: str) -> bool:
+    """Use OpenClaw for default routing only when chat is configured.
+
+    Explicit OpenClaw model selections still probe the gateway so operators can
+    diagnose a newly configured provider without restarting Klaw.
+    """
+    return settings.openclaw_chat_enabled or model == "openclaw" or model.startswith(
+        ("openclaw/", "openclaw:", "agent:")
+    )
+
+
+def _should_try_hermes(model: str) -> bool:
+    """Route to Hermes only when configured or explicitly selected."""
+    return settings.hermes_chat_enabled or model == "hermes" or model.startswith("hermes/")
+
+
+def _hermes_model(model: str) -> str:
+    if model.startswith("hermes/") and model != "hermes/hermes-agent":
+        return model.removeprefix("hermes/")
+    return "hermes-agent"
 
 
 async def _retry_once(call, provider: str):
@@ -45,10 +67,11 @@ async def chat(
 
     优先级:
       1. OpenClaw (本地 agent 网关, settings.openclaw_url) — agent 上下文/工具/供应商路由由 OpenClaw 托管, 数据不出域
-      2. Kaiweb 直连 (自建 OpenAI 兼容网关, settings.kaiweb_base_url) — OpenClaw 不可用时兜底
-      3. OpenAI (用户 API Key 或全局配置)
-      4. Anthropic (全局配置)
-      5. dev mock 兜底 (仅 environment=dev)
+      2. Hermes (本地 OpenAI 兼容网关, 显式启用后参与 fallback)
+      3. Kaiweb 直连 (自建 OpenAI 兼容网关)
+      4. OpenAI (用户 API Key 或全局配置)
+      5. Anthropic (全局配置)
+      6. dev mock 兜底 (仅 environment=dev)
 
     供应商 Key 先读 llm_config 内存缓存 (DB 热更新), 缓存为空回落 settings。
     每级 5xx / 连接错误 0.5s 退避重试一次后再降级。
@@ -64,19 +87,42 @@ async def chat(
     Returns:
         LLM 回复文本
     """
-    # 1. OpenClaw owns agent context, tools, and provider routing.
-    try:
-        result = await _retry_once(
-            lambda: _call_openclaw(messages, model, temperature, max_tokens, timeout),
-            "OpenClaw",
-        )
-        if result:
-            logger.info("LLM 调用成功: OpenClaw (model=%s)", model)
-            return result
-    except Exception as e:
-        logger.warning("OpenClaw 调用失败, 尝试 fallback: %s", e)
+    # 1. OpenClaw owns agent context, tools, and provider routing when enabled.
+    if _should_try_openclaw(model):
+        try:
+            result = await _retry_once(
+                lambda: _call_openclaw(messages, model, temperature, max_tokens, timeout),
+                "OpenClaw",
+            )
+            if result:
+                logger.info("LLM 调用成功: OpenClaw (model=%s)", model)
+                return result
+        except Exception as e:
+            logger.warning("OpenClaw 调用失败, 尝试 fallback: %s", e)
 
-    # 2. Kaiweb 直连兜底 (Key 经 llm_config 热更新, 缓存为空回落 settings)
+    # 2. Hermes local gateway (disabled until its inference provider is configured).
+    if _should_try_hermes(model):
+        try:
+            result = await _retry_once(
+                lambda: _call_openai_compatible(
+                    messages,
+                    _hermes_model(model),
+                    f"{settings.hermes_url.rstrip('/')}/v1",
+                    settings.hermes_api_server_key,
+                    "hermes",
+                    temperature,
+                    max_tokens,
+                    timeout,
+                ),
+                "Hermes",
+            )
+            if result:
+                logger.info("LLM 调用成功: Hermes (model=%s)", model)
+                return result
+        except Exception as e:
+            logger.warning("Hermes 调用失败, 尝试 fallback: %s", e)
+
+    # 3. Kaiweb 直连兜底 (Key 经 llm_config 热更新, 缓存为空回落 settings)
     kaiweb_key = llm_config.get_key("kaiweb")
     if kaiweb_key:
         try:
@@ -93,7 +139,7 @@ async def chat(
         except Exception as e:
             logger.warning("Kaiweb 调用失败, 尝试 fallback: %s", e)
 
-    # 3. 尝试 OpenAI
+    # 4. 尝试 OpenAI
     openai_key = _get_openai_key(user)
     if openai_key:
         try:
@@ -107,7 +153,7 @@ async def chat(
         except Exception as e:
             logger.warning("OpenAI 调用失败, 尝试 fallback: %s", e)
 
-    # 4. 尝试 Anthropic
+    # 5. 尝试 Anthropic
     anthropic_key = llm_config.get_key("anthropic")
     if anthropic_key:
         try:
@@ -121,7 +167,7 @@ async def chat(
         except Exception as e:
             logger.warning("Anthropic 调用失败: %s", e)
 
-    # 5. dev 兜底: 所有真实供应商不可用时, 返回模板化回复 (仅开发环境)
+    # 6. dev 兜底: 所有真实供应商不可用时, 返回模板化回复 (仅开发环境)
     if settings.environment == "dev":
         logger.warning("所有真实 LLM 供应商不可用, dev 回退 mock 回复")
         return _call_mock(messages, model)
@@ -349,26 +395,52 @@ async def chat_stream(
 ) -> AsyncGenerator[str, None]:
     """流式调用 LLM, yield 文本增量。
 
-    优先级: OpenClaw → Kaiweb 直连 → OpenAI → 非流式 chat() 一次性 yield。
+    优先级: OpenClaw → Hermes → Kaiweb 直连 → OpenAI → 非流式 chat() 一次性 yield。
     已开始输出 (yield) 后失败不再降级 (避免重复内容), 异常向上抛出;
     流式 0 字节视为失败, 继续降级到下一供应商。
     """
-    # 1. OpenClaw owns the primary streaming path.
-    started = False
-    try:
-        async for chunk in _stream_openclaw(messages, model, temperature, max_tokens, timeout):
-            started = True
-            yield chunk
-        if started:
-            return
-        logger.warning("OpenClaw 流式返回 0 字节, 视为失败继续降级")
-    except Exception as e:
-        if started:
-            logger.error("OpenClaw 流式中途失败, 已输出部分内容, 不再降级: %s", e)
-            raise
-        logger.warning("OpenClaw 流式失败, 尝试 fallback: %s", e)
+    # 1. OpenClaw owns the primary streaming path when chat routing is enabled.
+    if _should_try_openclaw(model):
+        started = False
+        try:
+            async for chunk in _stream_openclaw(messages, model, temperature, max_tokens, timeout):
+                started = True
+                yield chunk
+            if started:
+                return
+            logger.warning("OpenClaw 流式返回 0 字节, 视为失败继续降级")
+        except Exception as e:
+            if started:
+                logger.error("OpenClaw 流式中途失败, 已输出部分内容, 不再降级: %s", e)
+                raise
+            logger.warning("OpenClaw 流式失败, 尝试 fallback: %s", e)
 
-    # 2. Kaiweb 直连流式兜底 (Key 经 llm_config 热更新, 缓存为空回落 settings)
+    # 2. Hermes local gateway streaming.
+    if _should_try_hermes(model):
+        started = False
+        try:
+            async for chunk in _stream_openai_compatible(
+                messages,
+                _hermes_model(model),
+                f"{settings.hermes_url.rstrip('/')}/v1",
+                settings.hermes_api_server_key,
+                "hermes",
+                temperature,
+                max_tokens,
+                timeout,
+            ):
+                started = True
+                yield chunk
+            if started:
+                return
+            logger.warning("Hermes 流式返回 0 字节, 视为失败继续降级")
+        except Exception as e:
+            if started:
+                logger.error("Hermes 流式中途失败, 已输出部分内容, 不再降级: %s", e)
+                raise
+            logger.warning("Hermes 流式失败, 尝试 fallback: %s", e)
+
+    # 3. Kaiweb 直连流式兜底 (Key 经 llm_config 热更新, 缓存为空回落 settings)
     kaiweb_key = llm_config.get_key("kaiweb")
     if kaiweb_key:
         started = False
@@ -388,7 +460,7 @@ async def chat_stream(
                 raise
             logger.warning("Kaiweb 流式失败, 尝试 fallback: %s", e)
 
-    # 3. 尝试 OpenAI 流式
+    # 4. 尝试 OpenAI 流式
     openai_key = _get_openai_key(user)
     if openai_key:
         started = False
@@ -405,7 +477,7 @@ async def chat_stream(
                 raise
             logger.warning("OpenAI 流式失败, 尝试非流式: %s", e)
 
-    # 4. 降级: 非流式调用, 一次性 yield
+    # 5. 降级: 非流式调用, 一次性 yield
     result = await chat(messages, model=model, user=user, temperature=temperature, max_tokens=max_tokens, timeout=timeout)
     yield result
 
@@ -523,34 +595,64 @@ async def list_models() -> list[dict]:
                         for m in models
                     ]
                     if kaiweb_models:
-                        return kaiweb_models
+                        return _with_hermes_model(kaiweb_models)
         except Exception as e:
             logger.warning("Kaiweb 模型列表拉取失败: %s", e)
 
-    # 2. OpenClaw
-    try:
-        headers = {}
-        if settings.openclaw_token:
-            headers["Authorization"] = f"Bearer {settings.openclaw_token}"
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"{settings.openclaw_url}/v1/models", headers=headers)
-            if resp.status_code == 200:
-                data = resp.json()
-                models = data.get("data", [])
-                openclaw_models = [
-                    {"id": m.get("id", ""), "provider": "openclaw", "name": m.get("id", "")}
-                    for m in models if isinstance(m, dict) and m.get("id")
-                ]
-                if openclaw_models:
-                    return openclaw_models
-    except Exception:
-        pass
+    # 2. OpenClaw. A healthy tools-only gateway must not advertise models.
+    if settings.openclaw_chat_enabled:
+        try:
+            headers = {}
+            if settings.openclaw_token:
+                headers["Authorization"] = f"Bearer {settings.openclaw_token}"
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(f"{settings.openclaw_url}/v1/models", headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    models = data.get("data", [])
+                    openclaw_models = [
+                        {"id": m.get("id", ""), "provider": "openclaw", "name": m.get("id", "")}
+                        for m in models if isinstance(m, dict) and m.get("id")
+                    ]
+                    if openclaw_models:
+                        return _with_hermes_model(openclaw_models)
+        except Exception as e:
+            logger.warning("OpenClaw 模型列表拉取失败: %s", e)
 
-    # 3. 预定义模型列表
+    # 3. Config-derived fallback list. Do not advertise providers with no key.
+    configured_models = [
+        {"id": "default", "provider": "auto", "name": "默认路由"},
+    ]
+    if kaiweb_key:
+        configured_models.append(
+            {"id": settings.kaiweb_model, "provider": "kaiweb", "name": settings.kaiweb_model}
+        )
+    if llm_config.get_key("openai"):
+        configured_models.append(
+            {"id": "gpt-4o-mini", "provider": "openai", "name": "GPT-4o mini"}
+        )
+    if llm_config.get_key("anthropic"):
+        configured_models.append(
+            {
+                "id": "claude-sonnet-4-20250514",
+                "provider": "anthropic",
+                "name": "Claude Sonnet 4",
+            }
+        )
+    if settings.environment == "dev":
+        configured_models.append(
+            {"id": "mock", "provider": "mock", "name": "Mock (开发兜底)"}
+        )
+    return _with_hermes_model(configured_models)
+
+
+def _with_hermes_model(models: list[dict]) -> list[dict]:
+    """Expose Hermes only after operators enable its inference routing."""
+    if not settings.hermes_chat_enabled:
+        return models
+    if any(model.get("provider") == "hermes" for model in models):
+        return models
     return [
-        {"id": "default", "provider": "kaiweb", "name": "默认 (Kaiweb 网关)"},
-        {"id": settings.kaiweb_model, "provider": "kaiweb", "name": settings.kaiweb_model},
-        {"id": "gpt-4o-mini", "provider": "openai", "name": "GPT-4o mini"},
-        {"id": "claude-sonnet-4-20250514", "provider": "anthropic", "name": "Claude Sonnet 4"},
-        {"id": "mock", "provider": "mock", "name": "Mock (开发兜底)"},
+        *models,
+        {"id": "hermes/hermes-agent", "provider": "hermes", "name": "Hermes Agent"},
     ]

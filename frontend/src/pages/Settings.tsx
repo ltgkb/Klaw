@@ -6,14 +6,17 @@ import {
   pushChannelApi,
   systemApi,
   notifyApi,
+  mcpApi,
   type ProviderInfo,
   type ModelInfo,
   type ChatResponse,
   type ToolInfo,
+  type ToolCallResponse,
   type PushChannelRead,
   type PushChannelType,
   type EmbeddingConfig,
   type LocalAgentHealth,
+  type McpServerRead,
 } from "@/lib/api"
 import { toast } from "@/lib/toast"
 import { useAuthStore } from "@/store/auth"
@@ -22,7 +25,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Loader2, Send, Cpu, Cloud, Server, KeyRound, Trash2, Wrench, Plus, Zap } from "lucide-react"
+import { Cable, Loader2, Send, Cpu, Cloud, Server, KeyRound, Trash2, Wrench, Plus, Zap, Play, Pencil, X, RefreshCw } from "lucide-react"
 
 type StatusMeta = { label: string; dotClass: string }
 
@@ -59,11 +62,20 @@ const CHANNEL_TYPES: { value: PushChannelType; label: string; hint: string }[] =
   { value: "hermes", label: "Hermes", hint: "channel" },
 ]
 
+function uniqueModels(models: ModelInfo[]) {
+  return Array.from(new Map(models.map((model) => [model.id, model])).values())
+}
+
 export function Settings() {
   const { user, fetchMe } = useAuthStore()
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [models, setModels] = useState<ModelInfo[]>([])
+  const [modelsLoadFailed, setModelsLoadFailed] = useState(false)
   const [tools, setTools] = useState<ToolInfo[]>([])
+  const [selectedToolId, setSelectedToolId] = useState("web_fetch")
+  const [toolParameters, setToolParameters] = useState('{\n  "url": "https://example.com"\n}')
+  const [toolCalling, setToolCalling] = useState(false)
+  const [toolCallResult, setToolCallResult] = useState<ToolCallResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [chatInput, setChatInput] = useState("")
   const [chatModel, setChatModel] = useState("default")
@@ -84,9 +96,19 @@ export function Settings() {
   const [chField2, setChField2] = useState("")
   const [chSaving, setChSaving] = useState(false)
   const [testingId, setTestingId] = useState<string | null>(null)
+  const [editingChannelId, setEditingChannelId] = useState<string | null>(null)
+  const [editingOriginalType, setEditingOriginalType] = useState<PushChannelType | null>(null)
 
   // 本地 Agent 健康 (openclaw / hermes 连通性)
   const [agentHealth, setAgentHealth] = useState<LocalAgentHealth | null>(null)
+
+  // 远程 MCP 连接
+  const [mcpServers, setMcpServers] = useState<McpServerRead[]>([])
+  const [mcpName, setMcpName] = useState("")
+  const [mcpUrl, setMcpUrl] = useState("")
+  const [mcpToken, setMcpToken] = useState("")
+  const [mcpSaving, setMcpSaving] = useState(false)
+  const [mcpTestingId, setMcpTestingId] = useState<string | null>(null)
 
   // Embedding 模型 API
   const [emb, setEmb] = useState<EmbeddingConfig | null>(null)
@@ -97,14 +119,15 @@ export function Settings() {
   const [embMsg, setEmbMsg] = useState<string | null>(null)
 
   // LLM 默认模型 (画布新建 LLM 节点默认用此模型)
-  const [llmDefault, setLlmDefault] = useState("")
+  const [llmDefault, setLlmDefault] = useState("default")
   const [llmDefaultSaving, setLlmDefaultSaving] = useState(false)
   const [llmDefaultMsg, setLlmDefaultMsg] = useState<string | null>(null)
 
   const loadAll = async () => {
     setLoading(true)
+    setModelsLoadFailed(false)
     // 各区块独立加载, 单个接口失败不影响其它区块展示 (Promise.allSettled)
-    const [providersR, modelsR, toolsR, channelsR, embR, llmR, healthR] = await Promise.allSettled([
+    const [providersR, modelsR, toolsR, channelsR, embR, llmR, healthR, mcpR] = await Promise.allSettled([
       providerApi.list(),
       providerApi.listModels(),
       localAgentApi.listTools(),
@@ -112,24 +135,37 @@ export function Settings() {
       systemApi.getEmbedding(),
       systemApi.getLlmDefault(),
       localAgentApi.health(),
+      mcpApi.list(),
     ])
     if (providersR.status === "fulfilled") setProviders(providersR.value.data)
-    if (modelsR.status === "fulfilled") setModels(modelsR.value.data)
-    if (toolsR.status === "fulfilled") setTools(toolsR.value.data)
+    if (modelsR.status === "fulfilled") setModels(uniqueModels(modelsR.value.data))
+    else setModelsLoadFailed(true)
+    if (toolsR.status === "fulfilled") {
+      setTools(toolsR.value.data)
+      const executableTools = toolsR.value.data.filter((tool) => tool.executable)
+      setSelectedToolId((current) =>
+        executableTools.some((tool) => tool.id === current)
+          ? current
+          : executableTools[0]?.id || "",
+      )
+    }
     if (channelsR.status === "fulfilled") setChannels(channelsR.value.data)
     if (embR.status === "fulfilled") {
       setEmb(embR.value.data)
       setEmbBase(embR.value.data.base_url)
       setEmbModel(embR.value.data.model)
     }
-    if (llmR.status === "fulfilled") setLlmDefault(llmR.value.data.default_model || "")
+    if (llmR.status === "fulfilled") setLlmDefault(llmR.value.data.default_model || "default")
     if (healthR.status === "fulfilled") setAgentHealth(healthR.value.data)
+    if (mcpR.status === "fulfilled") setMcpServers(mcpR.value.data)
     setLoading(false)
   }
 
   useEffect(() => {
     loadAll()
   }, [])
+
+  const executableTools = tools.filter((tool) => tool.executable)
 
   const handleSend = async () => {
     const message = chatInput.trim()
@@ -147,6 +183,34 @@ export function Settings() {
       setChatError(err instanceof Error ? err.message : "请求失败，请检查供应商状态")
     } finally {
       setChatting(false)
+    }
+  }
+
+  const handleToolCall = async () => {
+    if (!selectedToolId || toolCalling) return
+    let parameters: Record<string, unknown>
+    try {
+      const parsed: unknown = JSON.parse(toolParameters)
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("参数必须是 JSON 对象")
+      }
+      parameters = parsed as Record<string, unknown>
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "工具参数不是有效 JSON")
+      return
+    }
+
+    setToolCalling(true)
+    setToolCallResult(null)
+    try {
+      const response = await localAgentApi.callTool(selectedToolId, parameters)
+      setToolCallResult(response.data)
+      if (response.data.success) toast.success("工具调用成功")
+      else toast.error(response.data.error || "工具调用失败")
+    } catch {
+      // The shared API interceptor displays transport and authorization errors.
+    } finally {
+      setToolCalling(false)
     }
   }
 
@@ -179,20 +243,42 @@ export function Settings() {
     }
   }
 
-  const handleAddChannel = async () => {
-    if (!chName.trim() || !chField1.trim()) return
+  const resetChannelForm = () => {
+    setChName("")
+    setChType("feishu")
+    setChField1("")
+    setChField2("")
+    setEditingChannelId(null)
+    setEditingOriginalType(null)
+  }
+
+  const handleEditChannel = (channel: PushChannelRead) => {
+    setEditingChannelId(channel.id)
+    setEditingOriginalType(channel.type)
+    setChName(channel.name)
+    setChType(channel.type)
+    setChField1(channel.type === "hermes" ? channel.config.channel || "" : "")
+    setChField2(channel.type === "telegram" ? channel.config.chat_id || "" : "")
+  }
+
+  const handleSaveChannel = async () => {
+    if (!chName.trim()) return
     setChSaving(true)
     try {
       const config: Record<string, string> = {}
-      if (chType === "feishu" || chType === "wechat") config.webhook_url = chField1
+      if ((chType === "feishu" || chType === "wechat") && chField1) config.webhook_url = chField1
       else if (chType === "telegram") {
-        config.bot_token = chField1
+        if (chField1) config.bot_token = chField1
         config.chat_id = chField2
       } else if (chType === "hermes") config.channel = chField1
-      await pushChannelApi.create({ name: chName.trim(), type: chType, config })
-      setChName("")
-      setChField1("")
-      setChField2("")
+      if (editingChannelId) {
+        await pushChannelApi.update(editingChannelId, { name: chName.trim(), type: chType, config })
+        toast.success("渠道已更新")
+      } else {
+        await pushChannelApi.create({ name: chName.trim(), type: chType, config })
+        toast.success("渠道已添加")
+      }
+      resetChannelForm()
       await loadAll()
     } catch {
       // 拦截器处理
@@ -205,6 +291,7 @@ export function Settings() {
     if (!confirm(`确认删除推送渠道「${name}」？`)) return
     try {
       await pushChannelApi.delete(id)
+      if (editingChannelId === id) resetChannelForm()
       toast.success("渠道已删除")
       await loadAll()
     } catch {
@@ -218,7 +305,7 @@ export function Settings() {
     try {
       const resp = await notifyApi.send({
         title: "测试推送",
-        content: `来自 Claw 平台的渠道连通性测试 (${c.name})`,
+        content: `来自 KAI知识的渠道连通性测试 (${c.name})`,
         channels: [],
         channel_ids: [c.id],
       })
@@ -271,8 +358,59 @@ export function Settings() {
     }
   }
 
+  const handleAddMcp = async () => {
+    if (!mcpName.trim() || !mcpUrl.trim() || mcpSaving) return
+    setMcpSaving(true)
+    try {
+      const response = await mcpApi.create({
+        name: mcpName.trim(),
+        url: mcpUrl.trim(),
+        ...(mcpToken.trim() ? { bearer_token: mcpToken.trim() } : {}),
+      })
+      setMcpServers((current) => [response.data, ...current])
+      setMcpName("")
+      setMcpUrl("")
+      setMcpToken("")
+      toast.success(`MCP 已连接，发现 ${response.data.tools.length} 个工具`)
+      await loadAll()
+    } catch {
+      // 拦截器展示连接错误
+    } finally {
+      setMcpSaving(false)
+    }
+  }
+
+  const handleTestMcp = async (server: McpServerRead) => {
+    setMcpTestingId(server.id)
+    try {
+      const response = await mcpApi.test(server.id)
+      setMcpServers((current) =>
+        current.map((item) => item.id === server.id ? response.data.server : item),
+      )
+      toast.success(`连接正常，发现 ${response.data.server.tools.length} 个工具`)
+      await loadAll()
+    } catch {
+      // 拦截器展示连接错误
+    } finally {
+      setMcpTestingId(null)
+    }
+  }
+
+  const handleDeleteMcp = async (server: McpServerRead) => {
+    if (!confirm(`确认删除 MCP 连接「${server.name}」？工作流中的相关工具节点将不可用。`)) return
+    try {
+      await mcpApi.delete(server.id)
+      setMcpServers((current) => current.filter((item) => item.id !== server.id))
+      toast.success("MCP 连接已删除")
+      await loadAll()
+    } catch {
+      // 拦截器展示删除错误
+    }
+  }
+
   const channelHint = CHANNEL_TYPES.find((c) => c.value === chType)?.hint ?? ""
   const isTelegram = chType === "telegram"
+  const requiresNewSecret = !editingChannelId || editingOriginalType !== chType
 
   return (
     <div className="space-y-6">
@@ -395,8 +533,8 @@ export function Settings() {
                 value={llmDefault}
                 onChange={(e) => setLlmDefault(e.target.value)}
               >
-                <option value="default">default (自动: Kaiweb 优先)</option>
-                {models.map((m) => (
+                <option value="default">default (自动路由)</option>
+                {models.filter((model) => model.id !== "default").map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name} ({m.provider})
                   </option>
@@ -516,6 +654,9 @@ export function Settings() {
                           )}
                           测试
                         </Button>
+                        <Button variant="ghost" size="icon" title="编辑渠道" onClick={() => handleEditChannel(c)}>
+                          <Pencil className="h-4 w-4" />
+                        </Button>
                         <Button variant="ghost" size="icon" onClick={() => handleDeleteChannel(c.id, c.name)}>
                           <Trash2 className="h-4 w-4 text-destructive" />
                         </Button>
@@ -529,7 +670,11 @@ export function Settings() {
                 <select
                   className="h-9 rounded-md border bg-background px-2 text-sm"
                   value={chType}
-                  onChange={(e) => setChType(e.target.value as PushChannelType)}
+                  onChange={(e) => {
+                    setChType(e.target.value as PushChannelType)
+                    setChField1("")
+                    setChField2("")
+                  }}
                 >
                   {CHANNEL_TYPES.map((c) => (
                     <option key={c.value} value={c.value}>
@@ -538,37 +683,155 @@ export function Settings() {
                   ))}
                 </select>
                 <Input
-                  placeholder={isTelegram ? "bot_token" : channelHint}
+                  placeholder={editingChannelId && chType !== "hermes" ? `${isTelegram ? "bot_token" : channelHint}（留空保留）` : isTelegram ? "bot_token" : channelHint}
                   value={chField1}
                   onChange={(e) => setChField1(e.target.value)}
                 />
                 {isTelegram ? (
                   <Input placeholder="chat_id" value={chField2} onChange={(e) => setChField2(e.target.value)} />
                 ) : (
-                  <Button onClick={handleAddChannel} disabled={chSaving || !chName.trim() || !chField1.trim()}>
-                    {chSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                    添加
-                  </Button>
+                  <div className="flex gap-1">
+                    <Button
+                      className="flex-1"
+                      onClick={handleSaveChannel}
+                      disabled={chSaving || !chName.trim() || ((requiresNewSecret || chType === "hermes") && !chField1.trim())}
+                    >
+                      {chSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : editingChannelId ? <Pencil className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+                      {editingChannelId ? "更新" : "添加"}
+                    </Button>
+                    {editingChannelId && (
+                      <Button variant="ghost" size="icon" title="取消编辑" onClick={resetChannelForm}>
+                        <X className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
                 )}
               </div>
               {isTelegram && (
-                <Button onClick={handleAddChannel} disabled={chSaving || !chName.trim() || !chField1.trim() || !chField2.trim()}>
-                  {chSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                  添加 Telegram 渠道
-                </Button>
+                <div className="flex gap-1">
+                  <Button
+                    onClick={handleSaveChannel}
+                    disabled={chSaving || !chName.trim() || (requiresNewSecret && !chField1.trim()) || !chField2.trim()}
+                  >
+                    {chSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : editingChannelId ? <Pencil className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+                    {editingChannelId ? "更新 Telegram 渠道" : "添加 Telegram 渠道"}
+                  </Button>
+                  {editingChannelId && (
+                    <Button variant="ghost" size="icon" title="取消编辑" onClick={resetChannelForm}>
+                      <X className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
               )}
             </CardContent>
           </Card>
 
-          {/* 本地工具 */}
+          {/* MCP 连接 */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Cable className="h-5 w-5 text-muted-foreground" />
+                <div>
+                  <CardTitle className="text-base">MCP 连接</CardTitle>
+                  <CardDescription>
+                    连接远程 Streamable HTTP MCP；Bearer Token 加密保存，工具自动加入工作流工具节点
+                  </CardDescription>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {mcpServers.length === 0 ? (
+                <p className="text-sm text-muted-foreground">暂无 MCP 连接</p>
+              ) : (
+                <div className="space-y-2">
+                  {mcpServers.map((server) => (
+                    <div key={server.id} className="flex flex-col gap-3 border p-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-medium">{server.name}</span>
+                          <span className="bg-secondary px-1.5 py-0.5 text-xs text-muted-foreground">
+                            {server.tools.length} 工具
+                          </span>
+                          {server.has_token && (
+                            <span className="bg-secondary px-1.5 py-0.5 text-xs text-muted-foreground">Token</span>
+                          )}
+                        </div>
+                        <p className="mt-1 truncate text-xs text-muted-foreground" title={server.url}>{server.url}</p>
+                        {server.tools.length > 0 && (
+                          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                            {server.tools.map((tool) => tool.name).join(" · ")}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex shrink-0 gap-1">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleTestMcp(server)}
+                          disabled={mcpTestingId === server.id}
+                        >
+                          {mcpTestingId === server.id
+                            ? <Loader2 className="h-4 w-4 animate-spin" />
+                            : <Zap className="h-4 w-4" />}
+                          测试连接
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          title="删除 MCP 连接"
+                          aria-label={`删除 MCP 连接 ${server.name}`}
+                          onClick={() => handleDeleteMcp(server)}
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="grid gap-2 sm:grid-cols-[minmax(0,180px)_minmax(0,1fr)_minmax(0,220px)_auto]">
+                <Input
+                  value={mcpName}
+                  onChange={(event) => setMcpName(event.target.value)}
+                  placeholder="连接名称"
+                  disabled={mcpSaving}
+                />
+                <Input
+                  value={mcpUrl}
+                  onChange={(event) => setMcpUrl(event.target.value)}
+                  placeholder="https://mcp.example.com/mcp"
+                  disabled={mcpSaving}
+                />
+                <Input
+                  type="password"
+                  value={mcpToken}
+                  onChange={(event) => setMcpToken(event.target.value)}
+                  placeholder="Bearer Token（可选）"
+                  disabled={mcpSaving}
+                />
+                <Button
+                  onClick={handleAddMcp}
+                  disabled={mcpSaving || !mcpName.trim() || !mcpUrl.trim()}
+                >
+                  {mcpSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                  连接 MCP
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                出于安全限制，仅允许连接可公开访问的 HTTP/HTTPS 地址；不在浏览器中执行本地 stdio 命令。
+              </p>
+            </CardContent>
+          </Card>
+
+          {/* 本地与 MCP 工具 */}
           <Card>
             <CardHeader>
               <div className="flex items-center gap-2">
                 <Wrench className="h-5 w-5 text-muted-foreground" />
                 <div>
-                  <CardTitle className="text-base">本地工具 (Skills)</CardTitle>
+                  <CardTitle className="text-base">工具 (Skills / MCP)</CardTitle>
                   <CardDescription>
-                    扫描 deploy/openclaw/skills 与 deploy/hermes/skills · OpenClaw 在线工具自动合并
+                    本地 Skills、OpenClaw 与已连接 MCP 工具统一发现，可在这里测试并用于工作流
                   </CardDescription>
                 </div>
               </div>
@@ -597,12 +860,55 @@ export function Settings() {
                       <div className="flex items-center justify-between">
                         <span className="font-medium">{t.name}</span>
                         <span className="rounded bg-secondary px-1.5 py-0.5 text-xs text-muted-foreground">
-                          {t.source}
+                          {t.source} · {t.executable ? "可调用" : "仅发现"}
                         </span>
                       </div>
                       <div className="mt-1 text-xs text-muted-foreground">{t.description}</div>
                     </div>
                   ))}
+                </div>
+              )}
+              {executableTools.length > 0 && (
+                <div className="space-y-3 border-t pt-3">
+                  <div className="grid gap-3 sm:grid-cols-[minmax(0,220px)_1fr]">
+                    <div className="space-y-2">
+                      <Label htmlFor="tool-select">工具</Label>
+                      <select
+                        id="tool-select"
+                        className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                        value={selectedToolId}
+                        onChange={(event) => {
+                          const toolId = event.target.value
+                          setSelectedToolId(toolId)
+                          setToolCallResult(null)
+                          setToolParameters(toolId === "web_fetch" ? '{\n  "url": "https://example.com"\n}' : "{}")
+                        }}
+                      >
+                        {executableTools.map((tool) => <option key={tool.id} value={tool.id}>{tool.name}</option>)}
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="tool-parameters">JSON 参数</Label>
+                      <textarea
+                        id="tool-parameters"
+                        className="min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs"
+                        value={toolParameters}
+                        onChange={(event) => setToolParameters(event.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <Button onClick={handleToolCall} disabled={toolCalling || !selectedToolId}>
+                    {toolCalling ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                    调用工具
+                  </Button>
+                  {toolCallResult && (
+                    <pre className={cn(
+                      "max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border p-3 text-xs",
+                      toolCallResult.success ? "border-green-200 bg-green-50" : "border-red-200 bg-red-50",
+                    )}>
+                      {JSON.stringify(toolCallResult, null, 2)}
+                    </pre>
+                  )}
                 </div>
               )}
             </CardContent>
@@ -620,7 +926,15 @@ export function Settings() {
               </div>
             </CardHeader>
             <CardContent>
-              {models.length === 0 ? (
+              {modelsLoadFailed ? (
+                <div className="flex items-center justify-between rounded-md border border-destructive/50 p-3 text-sm text-destructive">
+                  <span>模型列表加载失败</span>
+                  <Button variant="outline" size="sm" onClick={loadAll} disabled={loading}>
+                    <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+                    重试
+                  </Button>
+                </div>
+              ) : models.length === 0 ? (
                 <p className="py-6 text-center text-sm text-muted-foreground">暂无可用模型</p>
               ) : (
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -653,8 +967,8 @@ export function Settings() {
                 onChange={(e) => setChatModel(e.target.value)}
                 disabled={chatting}
               >
-                <option value="default">default (自动)</option>
-                {models.map((m) => (
+                <option value="default">default (自动路由)</option>
+                {models.filter((model) => model.id !== "default").map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name}
                   </option>

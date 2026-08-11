@@ -21,6 +21,10 @@ RUN printf 'server {\n\
         proxy_set_header Host $host;\n\
         proxy_set_header X-Real-IP $remote_addr;\n\
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n\
+        proxy_http_version 1.1;\n\
+        proxy_buffering off;\n\
+        proxy_cache off;\n\
+        proxy_read_timeout 3600s;\n\
     }\n\
 \n\
     # SPA 路由回退\n\

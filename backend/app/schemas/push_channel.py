@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.push_channel import ChannelType
 
@@ -16,7 +16,7 @@ from app.models.push_channel import ChannelType
 SENSITIVE_CONFIG_KEYS = {"webhook_url", "bot_token"}
 
 # 各渠道类型的必填配置字段
-_REQUIRED_FIELDS_BY_TYPE = {
+REQUIRED_FIELDS_BY_TYPE = {
     ChannelType.feishu: ("webhook_url",),
     ChannelType.wechat: ("webhook_url",),
     ChannelType.telegram: ("bot_token", "chat_id"),
@@ -36,20 +36,28 @@ class ChannelConfigIn(BaseModel):
 class PushChannelCreate(BaseModel):
     """创建推送渠道。"""
 
-    name: str
+    name: str = Field(..., min_length=1, max_length=200)
     type: ChannelType
-    config: ChannelConfigIn = ChannelConfigIn()
+    config: ChannelConfigIn = Field(default_factory=ChannelConfigIn)
 
     @model_validator(mode="after")
     def _validate_required_fields(self) -> "PushChannelCreate":
         """按渠道类型校验必填字段, 缺失返回 422。"""
-        required = _REQUIRED_FIELDS_BY_TYPE.get(self.type, ())
+        required = REQUIRED_FIELDS_BY_TYPE.get(self.type, ())
         missing = [f for f in required if not getattr(self.config, f, None)]
         if missing:
             raise ValueError(
                 f"{self.type.value} 渠道缺少必填配置字段: {', '.join(missing)}"
             )
         return self
+
+
+class PushChannelUpdate(BaseModel):
+    """Update a channel in place so workflow channel_ids remain stable."""
+
+    name: str | None = Field(None, min_length=1, max_length=200)
+    type: ChannelType | None = None
+    config: ChannelConfigIn | None = None
 
 
 class PushChannelRead(BaseModel):

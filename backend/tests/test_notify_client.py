@@ -10,6 +10,7 @@
 """
 
 import uuid
+from contextlib import contextmanager
 
 import pytest
 
@@ -153,6 +154,19 @@ async def test_telegram_fallback_also_fails(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_telegram_auth_error_does_not_raise_url_with_token(monkeypatch, caplog):
+    """非 400 API 错误只记录状态，不能通过 HTTPStatusError 暴露 URL 中的 token。"""
+    token = "123456:SECRET-token"
+    _patch_httpx(monkeypatch, lambda url, json: _FakeResponse(401, {"ok": False}))
+
+    with caplog.at_level("WARNING"):
+        assert await send_telegram(token, "123", "x") is False
+
+    assert token not in caplog.text
+    assert "HTTP 401" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_telegram_invalid_token_rejected(monkeypatch):
     requests = _patch_httpx(monkeypatch, lambda url, json: _FakeResponse(200, {"ok": True}))
     with pytest.raises(ValueError, match="bot_token"):
@@ -187,12 +201,21 @@ async def test_notify_ssrf_blocks_bad_scheme(monkeypatch):
 @pytest.mark.asyncio
 async def test_notify_dispatch_success(monkeypatch):
     """合法公网 webhook 正常分发 (SSRF 校验打桩)。"""
+    pins = []
+
+    @contextmanager
+    def fake_pin(hostname, resolved_ip):
+        pins.append((hostname, resolved_ip))
+        yield
+
     _noop_ssrf(monkeypatch)
+    monkeypatch.setattr(notify_client, "pin_dns_global", fake_pin)
     _patch_httpx(monkeypatch, lambda url, json: _FakeResponse(200, {"code": 0}))
     results = await notify(
         [{"type": "feishu", "webhook_url": "https://open.feishu.cn/hook/x"}], "t", "c"
     )
     assert results == [{"channel": "feishu", "success": True, "error": None}]
+    assert pins == [("host", "1.1.1.1")]
 
 
 @pytest.mark.asyncio
@@ -260,6 +283,104 @@ async def test_create_channel_plaintext_chat_id_echo(client):
     # 通过列表接口再确认明文回显一致
     resp = await client.get("/api/v1/push/channels", headers=h)
     assert resp.json()[0]["config"]["chat_id"] == "123456"
+
+
+@pytest.mark.asyncio
+async def test_update_channel_preserves_id_and_omitted_secret(client, db_session):
+    """原地编辑保留 channel id；敏感字段留空时保留旧密文。"""
+    import uuid
+
+    from sqlalchemy import select
+
+    from app.models.push_channel import PushChannel
+    from app.utils.crypto import decrypt
+
+    h = await _register_and_login(client, "channel-update@test.com")
+    created = await client.post("/api/v1/push/channels", json={
+        "name": "old", "type": "telegram",
+        "config": {"bot_token": "123:old-secret", "chat_id": "100"},
+    }, headers=h)
+    channel_id = created.json()["id"]
+
+    updated = await client.put(f"/api/v1/push/channels/{channel_id}", json={
+        "name": "new",
+        "config": {"bot_token": "", "chat_id": "200"},
+    }, headers=h)
+    assert updated.status_code == 200
+    assert updated.json()["id"] == channel_id
+    assert updated.json()["name"] == "new"
+    assert updated.json()["config"] == {"bot_token": "******", "chat_id": "200"}
+
+    result = await db_session.execute(
+        select(PushChannel).where(PushChannel.id == uuid.UUID(channel_id))
+    )
+    stored = result.scalar_one()
+    assert decrypt(stored.config["bot_token"]) == "123:old-secret"
+
+    rotated = await client.put(f"/api/v1/push/channels/{channel_id}", json={
+        "config": {"bot_token": "123:new-secret"},
+    }, headers=h)
+    assert rotated.status_code == 200
+    await db_session.refresh(stored)
+    assert decrypt(stored.config["bot_token"]) == "123:new-secret"
+
+
+@pytest.mark.asyncio
+async def test_update_channel_owner_isolation_and_type_requirements(client):
+    owner = await _register_and_login(client, "channel-owner-update@test.com")
+    other = await _register_and_login(client, "channel-other-update@test.com")
+    created = await client.post("/api/v1/push/channels", json={
+        "name": "ops", "type": "hermes", "config": {"channel": "ops"},
+    }, headers=owner)
+    channel_id = created.json()["id"]
+
+    forbidden = await client.put(
+        f"/api/v1/push/channels/{channel_id}",
+        json={"name": "stolen"},
+        headers=other,
+    )
+    assert forbidden.status_code == 404
+
+    missing_secret = await client.put(
+        f"/api/v1/push/channels/{channel_id}",
+        json={"type": "telegram", "config": {"chat_id": "9"}},
+        headers=owner,
+    )
+    assert missing_secret.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_delete_channel_referenced_by_flow_conflicts(client):
+    """删除被 notify 节点引用的渠道应返回 409，避免静默破坏工作流。"""
+    h = await _register_and_login(client, "channel-reference@test.com")
+    created = await client.post("/api/v1/push/channels", json={
+        "name": "ops", "type": "hermes", "config": {"channel": "ops"},
+    }, headers=h)
+    channel_id = created.json()["id"]
+    dag = {
+        "nodes": [{
+            "id": "notify",
+            "type": "notify",
+            "position": {"x": 0, "y": 0},
+            "data": {"label": "Notify", "config": {
+                "channel_ids": [channel_id],
+                "title_template": "t",
+                "content_template": "c",
+            }},
+        }],
+        "edges": [],
+    }
+    flow = await client.post(
+        "/api/v1/agent-flows", json={"name": "Referenced", "dag": dag}, headers=h
+    )
+    assert flow.status_code == 201
+
+    deleted = await client.delete(f"/api/v1/push/channels/{channel_id}", headers=h)
+    assert deleted.status_code == 409
+    assert "1 个工作流引用" in deleted.json()["detail"]
+
+    listed = await client.get("/api/v1/push/channels", headers=h)
+    assert any(channel["id"] == channel_id for channel in listed.json())
 
 
 @pytest.mark.asyncio

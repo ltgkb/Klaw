@@ -45,10 +45,19 @@ import {
   Repeat2,
   Square,
   Globe,
+  Wrench,
   GripVertical,
   Home,
 } from "lucide-react"
-import { flowApi, systemApi, type FlowRead, type NodeType, type ExecutionRead, type NodeState } from "@/lib/api"
+import {
+  flowApi,
+  systemApi,
+  type FlowRead,
+  type NodeType,
+  type ExecutionRead,
+  type ExecutionStreamPayload,
+  type NodeState,
+} from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { NodeToolbox } from "@/components/flow/NodeToolbox"
@@ -164,14 +173,24 @@ function PanelResizeHandle({ label, value, min, max, direction, onPointerDown, o
 const DEFAULT_CONFIGS: Record<CanvasNodeType, Record<string, unknown>> = {
   start: { template: "{input}" },
   end: { template: "" },
-  llm: { model: "default", system_prompt: "", user_template: "{input}" },
+  llm: {
+    model: "default",
+    system_prompt: "",
+    user_template: "{input}",
+    kb_id: "",
+    kb_query_template: "{input}",
+    kb_top_k: 5,
+    kb_rerank: true,
+    kb_min_relevance: 0.35,
+  },
   retrieval: { kb_id: "", query_template: "{input}", top_k: 5 },
   condition: { cases: [{ id: "case1", name: "条件1", expression: "{input} == ''" }], default_name: "默认" },
   loop: { items_template: "{input}", body_node_id: "", item_variable: "item", index_variable: "index", max_iterations: 20, continue_on_error: false },
   text: { template: "" },
-  notify: { title_template: "Agent 通知", content_template: "{input}", channels: [] },
+  notify: { title_template: "Agent 通知", content_template: "{input}", channel_ids: [] },
   memory: { action: "save", key: "", value_template: "{input}", session_id: "" },
   http: { method: "GET", url: "", headers: {}, body: "", timeout_s: 30 },
+  tool: { tool_id: "", parameters_template: "{}" },
 }
 
 const NODE_LABELS: Record<CanvasNodeType, string> = {
@@ -185,6 +204,7 @@ const NODE_LABELS: Record<CanvasNodeType, string> = {
   notify: "消息推送",
   memory: "记忆读写",
   http: "HTTP 请求",
+  tool: "本地工具",
 }
 
 // 拖线弹出菜单可添加的节点 (不含 start, start 是入口)
@@ -198,6 +218,7 @@ const ADDABLE_TYPES: { type: CanvasNodeType; label: string; icon: typeof Brain }
   { type: "notify", label: "消息推送", icon: Bell },
   { type: "memory", label: "记忆读写", icon: BrainCog },
   { type: "http", label: "HTTP 请求", icon: Globe },
+  { type: "tool", label: "本地工具", icon: Wrench },
 ]
 
 function FlowCanvasInner() {
@@ -220,8 +241,8 @@ function FlowCanvasInner() {
   const [configWidth, setConfigWidth] = useState(() => clamp(readStoredWidth(CONFIG_WIDTH_KEY, 288), 260, 520))
 
   // 执行状态
-  const [execution, setExecution] = useState<ExecutionRead | null>(null)
-  const eventSourceRef = useRef<EventSource | null>(null)
+  const [execution, setExecution] = useState<ExecutionRead | ExecutionStreamPayload | null>(null)
+  const streamAbortRef = useRef<AbortController | null>(null)
 
   // 系统默认 LLM 模型 (新建 LLM 节点默认使用)
   const [defaultLlmModel, setDefaultLlmModel] = useState("")
@@ -265,7 +286,7 @@ function FlowCanvasInner() {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
-      eventSourceRef.current?.close()
+      streamAbortRef.current?.abort()
     }
   }, [])
 
@@ -641,58 +662,26 @@ function FlowCanvasInner() {
       const resp = await flowApi.execute(flowId, input)
       const execId = resp.data.execution_id
 
-      // SSE 连接
-      const token = localStorage.getItem("access_token")
-      eventSourceRef.current?.close()
-      const es = new EventSource(
-        `/api/v1/agent-flows/${flowId}/executions/${execId}/stream?token=${token}`,
-      )
-      eventSourceRef.current = es
-
-      es.addEventListener("progress", (ev) => {
-        try {
-          const data = JSON.parse((ev as MessageEvent).data)
-          setExecution(data)
-          // 更新节点状态
-          updateNodeStates(data.node_states || {})
-        } catch {
-          // 忽略解析错误
-        }
-      })
-
-      es.addEventListener("complete", (ev) => {
-        try {
-          const data = JSON.parse((ev as MessageEvent).data)
+      streamAbortRef.current?.abort()
+      streamAbortRef.current = flowApi.streamExecution(flowId, execId, {
+        onProgress: (data) => {
+          if (!mountedRef.current) return
           setExecution(data)
           updateNodeStates(data.node_states || {})
-        } catch {
-          // 忽略解析错误
-        }
-        es.close()
-        eventSourceRef.current = null
-        setExecuting(false)
-      })
-
-      es.addEventListener("error", (ev) => {
-        try {
-          const data = JSON.parse((ev as MessageEvent).data)
+        },
+        onComplete: (data) => {
+          if (!mountedRef.current) return
           setExecution(data)
-        } catch {
-          // 连接错误
-        }
-        es.close()
-        eventSourceRef.current = null
-        setExecuting(false)
+          updateNodeStates(data.node_states || {})
+          streamAbortRef.current = null
+          setExecuting(false)
+        },
+        onError: () => {
+          if (!mountedRef.current) return
+          streamAbortRef.current = null
+          void pollExecution(flowId, execId)
+        },
       })
-
-      // SSE 也可能因网络错误关闭
-      es.onerror = () => {
-        es.close()
-        eventSourceRef.current = null
-        setExecuting(false)
-        // 兜底: 轮询获取最终状态
-        pollExecution(flowId, execId)
-      }
     } catch {
       setExecuting(false)
     }
@@ -753,7 +742,7 @@ function FlowCanvasInner() {
   }
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-[100dvh] flex-col">
       {/* 顶部工具栏 */}
       <div className="flex items-center gap-3 overflow-x-auto border-b px-4 py-2">
         <Button
@@ -844,7 +833,7 @@ function FlowCanvasInner() {
         )}>
           <span className="font-medium">执行状态: {execution.status}</span>
           {execution.error_message && (
-            <span className="truncate">— {execution.error_message}</span>
+            <span className="truncate">错误：{execution.error_message}</span>
           )}
         </div>
       )}

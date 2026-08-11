@@ -1,9 +1,10 @@
 import { useEffect, type ReactNode } from "react"
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom"
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom"
 import { useAuthStore } from "@/store/auth"
 import { AppLayout } from "@/components/layout/AppLayout"
 import { Login } from "@/pages/Login"
 import { Register } from "@/pages/Register"
+import { PublicChat } from "@/pages/PublicChat"
 import { Dashboard } from "@/pages/Dashboard"
 import { KnowledgeBase } from "@/pages/KnowledgeBase"
 import { KBDetail } from "@/pages/KBDetail"
@@ -11,7 +12,6 @@ import { FlowList } from "@/pages/FlowList"
 import { FlowCanvas } from "@/pages/FlowCanvas"
 import { ExecutionList, ExecutionDetail } from "@/pages/ExecutionDetail"
 import { Settings } from "@/pages/Settings"
-import { ScheduleList } from "@/pages/ScheduleList"
 import { MemoryList } from "@/pages/MemoryList"
 import { AgentChat } from "@/pages/AgentChat"
 import { Files } from "@/pages/Files"
@@ -20,6 +20,7 @@ import { UserManagement } from "@/pages/UserManagement"
 /** 路由守卫：未登录跳转 /login */
 function ProtectedRoute({ children }: { children: ReactNode }) {
   const { isAuthenticated, fetchMe, user } = useAuthStore()
+  const location = useLocation()
 
   useEffect(() => {
     if (isAuthenticated && !user) {
@@ -28,7 +29,7 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
   }, [isAuthenticated, user, fetchMe])
 
   if (!isAuthenticated) {
-    return <Navigate to="/login" replace />
+    return <Navigate to={`/login?next=${encodeURIComponent(location.pathname)}`} replace />
   }
   return <>{children}</>
 }
@@ -41,6 +42,10 @@ function App() {
         <Route path="/register" element={<Register />} />
         <Route
           path="/"
+          element={<PublicChat />}
+        />
+        <Route
+          path="/dashboard"
           element={
             <ProtectedRoute>
               <AppLayout>
@@ -52,11 +57,9 @@ function App() {
         <Route
           path="/kb"
           element={
-            <ProtectedRoute>
-              <AppLayout>
-                <KnowledgeBase />
-              </AppLayout>
-            </ProtectedRoute>
+            <AppLayout>
+              <KnowledgeBase />
+            </AppLayout>
           }
         />
         <Route
@@ -72,11 +75,9 @@ function App() {
         <Route
           path="/flows"
           element={
-            <ProtectedRoute>
-              <AppLayout>
-                <FlowList />
-              </AppLayout>
-            </ProtectedRoute>
+            <AppLayout>
+              <FlowList />
+            </AppLayout>
           }
         />
         <Route
@@ -113,16 +114,6 @@ function App() {
             <ProtectedRoute>
               <AppLayout>
                 <Settings />
-              </AppLayout>
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/schedules"
-          element={
-            <ProtectedRoute>
-              <AppLayout>
-                <ScheduleList />
               </AppLayout>
             </ProtectedRoute>
           }

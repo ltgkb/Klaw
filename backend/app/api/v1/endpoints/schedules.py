@@ -142,7 +142,11 @@ async def update_schedule(schedule_id: uuid.UUID, data: ScheduleUpdate, current_
     if data.status is not None:
         job.status = data.status
         if data.status == ScheduleStatus.paused:
-            scheduler_module.pause_scheduled_job(str(job.id))
+            if not scheduler_module.pause_scheduled_job(str(job.id)):
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="调度器不可用, 暂停失败",
+                )
             job.next_run_time = None
         elif data.status == ScheduleStatus.active:
             # 恢复时用 schedule_flow 重建 job, 保证最新 cron/input 生效

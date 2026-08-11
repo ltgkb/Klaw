@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.document import ParseStatus
 from app.models.knowledge_base import ChunkStrategy, KBStatus
@@ -20,6 +20,12 @@ class KBCreate(BaseModel):
     chunk_strategy: ChunkStrategy = ChunkStrategy.recursive
     chunk_size: int = Field(512, ge=100, le=4096)
     chunk_overlap: int = Field(50, ge=0, le=512)
+
+    @model_validator(mode="after")
+    def validate_chunk_window(self) -> "KBCreate":
+        if self.chunk_overlap >= self.chunk_size:
+            raise ValueError("chunk_overlap 必须小于 chunk_size")
+        return self
 
 
 class KBUpdate(BaseModel):
@@ -58,6 +64,7 @@ class DocumentRead(BaseModel):
     file_size: int
     page_count: int
     parse_status: ParseStatus
+    parse_error: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -86,6 +93,21 @@ class ChunkRead(BaseModel):
     page: int
     embedding_stored: bool
     created_at: datetime
+
+
+class ChunkUpdate(BaseModel):
+    """手动更新 Chunk 内容。"""
+    content: str = Field(..., min_length=1, max_length=100_000)
+
+
+class ChunkBatchDelete(BaseModel):
+    """批量删除 Chunk 请求。"""
+    chunk_ids: list[uuid.UUID] = Field(..., min_length=1, max_length=100)
+
+
+class ChunkDeleteResponse(BaseModel):
+    """Chunk 删除结果。"""
+    deleted: int
 
 
 # ── 检索 ──

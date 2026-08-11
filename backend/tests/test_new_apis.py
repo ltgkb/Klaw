@@ -76,11 +76,14 @@ async def test_local_agent_tools_discovery(client):
     assert resp.status_code == 200
     data = resp.json()
     ids = [t["id"] for t in data]
-    # deploy/openclaw/skills 下应有 web_search / send_notification
-    assert "web_search" in ids
+    # deploy/openclaw/skills 下应有真实 OpenClaw 内置工具 web_fetch / send_notification
+    assert "web_fetch" in ids
     assert "send_notification" in ids
     # deploy/hermes/skills 下应有 data_analysis
     assert "data_analysis" in ids
+    tools = {tool["id"]: tool for tool in data}
+    assert tools["web_fetch"]["executable"] is True
+    assert tools["data_analysis"]["executable"] is False
 
 
 @pytest.mark.asyncio
@@ -88,8 +91,8 @@ async def test_local_agent_tool_call_mock(client):
     """离线工具调用必须明确失败，不能把 mock 结果报告为执行成功。"""
     token = await _register_and_login(client, "toolcall@test.com")
     resp = await client.post(
-        "/api/v1/local-agent/tools/web_search/call",
-        json={"parameters": {"query": "hello"}},
+        "/api/v1/local-agent/tools/web_fetch/call",
+        json={"parameters": {"url": "https://example.com"}},
         headers=_auth_headers(token),
     )
     assert resp.status_code == 200
@@ -196,6 +199,11 @@ def mock_minio(monkeypatch):
         store[object_name] = (data, content_type)
         return object_name
 
+    def fake_upload_stream(object_name, data, length, content_type="application/octet-stream"):
+        data.seek(0)
+        store[object_name] = (data.read(length), content_type)
+        return object_name
+
     def fake_download(object_name):
         return store[object_name][0]
 
@@ -205,8 +213,9 @@ def mock_minio(monkeypatch):
     def fake_delete(object_name):
         store.pop(object_name, None)
 
+    monkeypatch.setattr(minio_client, "upload_file", fake_upload)
     for mod in (minio_client, files_ep):
-        monkeypatch.setattr(mod, "upload_file", fake_upload)
+        monkeypatch.setattr(mod, "upload_stream", fake_upload_stream)
         monkeypatch.setattr(mod, "download_file", fake_download)
         monkeypatch.setattr(mod, "get_presigned_url", fake_presigned)
         monkeypatch.setattr(mod, "delete_file", fake_delete)
@@ -251,6 +260,28 @@ async def test_file_workspace_crud(client, mock_minio):
     assert len(resp.json()) == 0
 
 
+@pytest.mark.asyncio
+async def test_file_workspace_rejects_oversized_upload_before_storage(client, monkeypatch):
+    """工作区文件超过限制时返回 413，且不会进入对象存储。"""
+    from app.api.v1.endpoints import files as files_ep
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "max_upload_size", 3)
+
+    def unexpected_upload(*args, **kwargs):
+        raise AssertionError("oversized upload must be rejected before MinIO")
+
+    monkeypatch.setattr(files_ep, "upload_stream", unexpected_upload)
+    token = await _register_and_login(client, "filelarge@test.com")
+    resp = await client.post(
+        "/api/v1/files",
+        files={"file": ("large.txt", b"four", "text/plain")},
+        headers=_auth_headers(token),
+    )
+
+    assert resp.status_code == 413
+
+
 # ── WP6: 文件记忆与本地工具修复 ──
 
 @pytest.mark.asyncio
@@ -285,7 +316,7 @@ async def test_file_upload_minio_failure_503(client, monkeypatch):
     def boom(*args, **kwargs):
         raise S3Error(None, "NoSuchBucket", "bucket gone", "res", "req", "host")
 
-    monkeypatch.setattr(files_ep, "upload_file", boom)
+    monkeypatch.setattr(files_ep, "upload_stream", boom)
 
     token = await _register_and_login(client, "s3fail@test.com")
     resp = await client.post(
@@ -370,8 +401,8 @@ async def test_local_agent_tool_call_http_error_not_fake_success(client, monkeyp
 
     token = await _register_and_login(client, "toolfail@test.com")
     resp = await client.post(
-        "/api/v1/local-agent/tools/web_search/call",
-        json={"parameters": {"query": "hello"}},
+        "/api/v1/local-agent/tools/web_fetch/call",
+        json={"parameters": {"url": "https://example.com"}},
         headers=_auth_headers(token),
     )
     assert resp.status_code == 200
@@ -381,8 +412,60 @@ async def test_local_agent_tool_call_http_error_not_fake_success(client, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_local_agent_tool_call_unknown_tool(client):
+async def test_local_agent_tool_call_preserves_openclaw_success_envelope(client, monkeypatch):
+    """OpenClaw ok:true 的真实工具结果必须原样作为成功返回。"""
+    from app.services import local_agent_service
+
+    class _Resp:
+        status_code = 200
+        text = '{"ok":true}'
+
+        def json(self):
+            return {"ok": True, "result": {"details": {"status": 200, "title": "Example Domain"}}}
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return _Resp()
+
+    monkeypatch.setattr(local_agent_service.httpx, "AsyncClient", _FakeClient)
+
+    token = await _register_and_login(client, "toolsuccess@test.com")
+    resp = await client.post(
+        "/api/v1/local-agent/tools/web_fetch/call",
+        json={"parameters": {"url": "https://example.com"}},
+        headers=_auth_headers(token),
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "tool_id": "web_fetch",
+        "success": True,
+        "result": {"details": {"status": 200, "title": "Example Domain"}},
+        "error": None,
+        "source": "openclaw",
+    }
+
+
+@pytest.mark.asyncio
+async def test_local_agent_tool_call_unknown_tool(client, monkeypatch):
     """调用前校验 tool_id: 不存在的工具 → success=False。"""
+    from app.services import local_agent_service
+
+    class _UnexpectedClient:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("unknown tool must be rejected before contacting OpenClaw")
+
+    monkeypatch.setattr(local_agent_service.httpx, "AsyncClient", _UnexpectedClient)
+
     token = await _register_and_login(client, "tool404@test.com")
     resp = await client.post(
         "/api/v1/local-agent/tools/nonexistent_tool_xyz/call",
@@ -393,6 +476,53 @@ async def test_local_agent_tool_call_unknown_tool(client):
     data = resp.json()
     assert data["success"] is False
     assert "不存在" in data["error"]
+
+
+@pytest.mark.asyncio
+async def test_local_agent_discovered_only_tool_does_not_contact_openclaw(client, monkeypatch):
+    """Hermes 清单工具没有调用端点时，必须明确失败且不误发给 OpenClaw。"""
+    from app.services import local_agent_service
+
+    class _UnexpectedClient:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("discovered-only tool must not contact OpenClaw")
+
+    monkeypatch.setattr(local_agent_service.httpx, "AsyncClient", _UnexpectedClient)
+    token = await _register_and_login(client, "hermestool@test.com")
+    resp = await client.post(
+        "/api/v1/local-agent/tools/data_analysis/call",
+        json={"parameters": {"dataset_url": "https://example.com/data.csv"}},
+        headers=_auth_headers(token),
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["success"] is False
+    assert resp.json()["source"] == "hermes"
+    assert "没有可用的调用端点" in resp.json()["error"]
+
+
+@pytest.mark.asyncio
+async def test_local_agent_web_fetch_blocks_private_network_before_gateway(client, monkeypatch):
+    """web_fetch 复用 SSRF guard，loopback 请求不得到达 OpenClaw。"""
+    from app.services import local_agent_service
+
+    class _UnexpectedClient:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("private URL must be rejected before contacting OpenClaw")
+
+    monkeypatch.setattr(local_agent_service.httpx, "AsyncClient", _UnexpectedClient)
+    token = await _register_and_login(client, "toolssrf@test.com")
+    resp = await client.post(
+        "/api/v1/local-agent/tools/web_fetch/call",
+        json={"parameters": {"url": "http://127.0.0.1:8000/internal"}},
+        headers=_auth_headers(token),
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["success"] is False
+    assert resp.json()["source"] == "local"
+    assert resp.json()["result"] is None
+    assert "安全策略拒绝" in resp.json()["error"]
 
 
 @pytest.mark.asyncio

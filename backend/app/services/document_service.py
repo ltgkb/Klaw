@@ -6,13 +6,19 @@
 import asyncio
 import logging
 import uuid
+from typing import BinaryIO
 
 from fastapi import HTTPException
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.es_client import delete_doc_chunks, hybrid_search as es_hybrid_search, index_chunks_bulk
-from app.core.minio_client import delete_file, download_file, upload_file
+from app.core.es_client import (
+    delete_chunks_by_ids,
+    delete_doc_chunks,
+    hybrid_search as es_hybrid_search,
+    index_chunks_bulk,
+)
+from app.core.minio_client import delete_file, download_file, upload_file, upload_stream
 from app.core.tei_client import embed_query, embed_texts
 from app.models.chunk import Chunk, ContentType
 from app.models.document import Document, ParseStatus
@@ -21,6 +27,21 @@ from app.schemas.knowledge_base import SearchRequest, SearchResponse, SearchHit
 from app.services import deepdoc_service, kb_service
 
 logger = logging.getLogger("claw.doc_service")
+
+_parse_semaphore: asyncio.Semaphore | None = None
+_parse_semaphore_limit: int | None = None
+
+
+def _get_parse_semaphore() -> asyncio.Semaphore:
+    """Lazily create the per-process parser bound used by background tasks."""
+    global _parse_semaphore, _parse_semaphore_limit
+    from app.core.config import settings
+
+    limit = max(1, int(settings.document_parse_max_concurrency))
+    if _parse_semaphore is None or _parse_semaphore_limit != limit:
+        _parse_semaphore = asyncio.Semaphore(limit)
+        _parse_semaphore_limit = limit
+    return _parse_semaphore
 
 
 # ── 上传 ──
@@ -55,9 +76,47 @@ async def upload_document(
     return doc
 
 
+async def upload_document_stream(
+    db: AsyncSession,
+    kb: KnowledgeBase,
+    filename: str,
+    file_stream: BinaryIO,
+    file_size: int,
+    content_type: str,
+) -> Document:
+    """Stream an UploadFile spool to MinIO and create its pending document row."""
+    doc_id = uuid.uuid4()
+    object_name = f"{kb.id}/{doc_id}/{filename}"
+    await asyncio.to_thread(
+        upload_stream, object_name, file_stream, file_size, content_type
+    )
+
+    doc = Document(
+        id=doc_id,
+        kb_id=kb.id,
+        filename=filename,
+        file_path=object_name,
+        file_size=file_size,
+        parse_status=ParseStatus.pending,
+    )
+    db.add(doc)
+    await kb_service.increment_doc_count(db, kb.id, delta=1)
+    await db.commit()
+    await db.refresh(doc)
+    logger.info("文档流式上传: %s → %s (%d bytes)", filename, doc.id, file_size)
+    return doc
+
+
 # ── 异步解析+索引管线 ──
 
 async def parse_and_index(doc_id: uuid.UUID, kb_id: uuid.UUID) -> None:
+    """Queue CPU/memory-heavy parsing behind a small per-process bound."""
+    semaphore = _get_parse_semaphore()
+    async with semaphore:
+        await _parse_and_index_unbounded(doc_id, kb_id)
+
+
+async def _parse_and_index_unbounded(doc_id: uuid.UUID, kb_id: uuid.UUID) -> None:
     """后台任务: 解析文档 → 分块 → 向量化 → ES 索引。
 
     使用独立的 DB session (不在请求上下文内)。
@@ -334,6 +393,64 @@ async def list_chunks(db: AsyncSession, kb_id, doc_id=None, page: int = 1, page_
         base_query.order_by(Chunk.created_at).offset((page - 1) * page_size).limit(page_size)
     )
     return list(result.scalars().all()), total
+
+
+async def get_chunk(db: AsyncSession, chunk_id: uuid.UUID) -> Chunk | None:
+    """按 ID 获取单个 Chunk。"""
+    result = await db.execute(select(Chunk).where(Chunk.id == chunk_id))
+    return result.scalar_one_or_none()
+
+
+async def update_chunk_content(db: AsyncSession, chunk: Chunk, content: str) -> Chunk:
+    """更新 Chunk 正文并同步重建向量与 Elasticsearch 索引。"""
+    normalized = content.strip()
+    if not normalized:
+        raise HTTPException(status_code=422, detail="Chunk 内容不能为空")
+
+    embeddings = await embed_texts([normalized])
+    if len(embeddings) != 1:
+        raise RuntimeError("Chunk 向量化结果数量不符")
+
+    await index_chunks_bulk([{
+        "chunk_id": str(chunk.id),
+        "kb_id": str(chunk.kb_id),
+        "doc_id": str(chunk.doc_id),
+        "content": normalized,
+        "content_type": chunk.content_type.value,
+        "page": chunk.page,
+        "embedding": embeddings[0],
+        "metadata": chunk.chunk_metadata or {},
+    }])
+
+    chunk.content = normalized
+    chunk.embedding_stored = True
+    await db.commit()
+    await db.refresh(chunk)
+    logger.info("Chunk 手动更新并重新索引: %s", chunk.id)
+    return chunk
+
+
+async def delete_chunks(
+    db: AsyncSession,
+    kb_id: uuid.UUID,
+    chunk_ids: list[uuid.UUID],
+) -> int:
+    """批量删除指定知识库下的 Chunk，并同步清理 ES 索引。"""
+    unique_ids = list(dict.fromkeys(chunk_ids))
+    result = await db.execute(
+        select(Chunk).where(Chunk.kb_id == kb_id, Chunk.id.in_(unique_ids))
+    )
+    chunks = list(result.scalars().all())
+    if len(chunks) != len(unique_ids):
+        raise HTTPException(status_code=404, detail="部分 Chunk 不存在")
+
+    await delete_chunks_by_ids([str(chunk.id) for chunk in chunks])
+    await db.execute(
+        delete(Chunk).where(Chunk.kb_id == kb_id, Chunk.id.in_(unique_ids))
+    )
+    await db.commit()
+    logger.info("Chunk 批量删除: kb=%s count=%d", kb_id, len(chunks))
+    return len(chunks)
 
 
 # ── 检索 ──

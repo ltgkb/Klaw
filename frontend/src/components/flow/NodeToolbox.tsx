@@ -1,4 +1,4 @@
-import { Brain, Database, GitBranch, Type, Bell, BrainCog, Play, Repeat2, Square, Globe } from "lucide-react"
+import { Brain, Database, GitBranch, Type, Bell, BrainCog, Play, Repeat2, Square, Globe, Wrench } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { CanvasNodeType } from "@/components/flow/nodes"
 
@@ -13,6 +13,7 @@ const TOOLBOX_ITEMS: { type: CanvasNodeType; label: string; icon: typeof Brain; 
   { type: "notify", label: "消息推送", icon: Bell, color: "border-pink-300 bg-pink-50 hover:bg-pink-100" },
   { type: "memory", label: "记忆读写", icon: BrainCog, color: "border-teal-300 bg-teal-50 hover:bg-teal-100" },
   { type: "http", label: "HTTP 请求", icon: Globe, color: "border-cyan-300 bg-cyan-50 hover:bg-cyan-100" },
+  { type: "tool", label: "本地工具", icon: Wrench, color: "border-indigo-300 bg-indigo-50 hover:bg-indigo-100" },
 ]
 
 interface Props {

@@ -70,6 +70,57 @@ async def test_login_wrong_password(client):
 
 
 @pytest.mark.asyncio
+async def test_long_password_suffix_cannot_authenticate(client):
+    """bcrypt 的 72 字节边界之后不同，不得被视为同一密码。"""
+    password = "a" * 72 + "registered"
+    collision = "a" * 72 + "attacker"
+    register = await client.post("/api/v1/auth/register", json={
+        "email": "long-password@test.com",
+        "name": "Long Password",
+        "password": password,
+    })
+    assert register.status_code == 201
+
+    rejected = await client.post("/api/v1/auth/login", json={
+        "email": "long-password@test.com",
+        "password": collision,
+    })
+    accepted = await client.post("/api/v1/auth/login", json={
+        "email": "long-password@test.com",
+        "password": password,
+    })
+    assert rejected.status_code == 401
+    assert accepted.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_legacy_password_hash_is_upgraded_on_login(client, db_session):
+    """普通长度的 legacy bcrypt 哈希在成功登录后惰性升级。"""
+    import bcrypt
+    from sqlalchemy import select
+
+    from app.models.user import User
+
+    await client.post("/api/v1/auth/register", json={
+        "email": "legacy-upgrade@test.com",
+        "name": "Legacy",
+        "password": "legacy-secret",
+    })
+    result = await db_session.execute(select(User).where(User.email == "legacy-upgrade@test.com"))
+    user = result.scalar_one()
+    user.hashed_password = bcrypt.hashpw(b"legacy-secret", bcrypt.gensalt()).decode("ascii")
+    await db_session.commit()
+
+    login = await client.post("/api/v1/auth/login", json={
+        "email": "legacy-upgrade@test.com",
+        "password": "legacy-secret",
+    })
+    assert login.status_code == 200
+    await db_session.refresh(user)
+    assert user.hashed_password.startswith("bcrypt-sha256$")
+
+
+@pytest.mark.asyncio
 async def test_me_with_valid_token(client):
     await client.post("/api/v1/auth/register", json={
         "email": "me@test.com", "name": "Me", "password": "secret123",
@@ -103,6 +154,47 @@ async def test_refresh_token(client):
     resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": refresh})
     assert resp.status_code == 200
     assert "access_token" in resp.json()
+    replacement = resp.json()["refresh_token"]
+
+    replay = await client.post("/api/v1/auth/refresh", json={"refresh_token": refresh})
+    assert replay.status_code == 401
+    assert "已使用或失效" in replay.json()["detail"]
+
+    rotated = await client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": replacement}
+    )
+    assert rotated.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_logout_revokes_refresh_token(client):
+    await client.post("/api/v1/auth/register", json={
+        "email": "logout@test.com", "name": "Logout", "password": "secret123",
+    })
+    login_resp = await client.post("/api/v1/auth/login", json={
+        "email": "logout@test.com", "password": "secret123",
+    })
+    refresh = login_resp.json()["refresh_token"]
+    logout = await client.post("/api/v1/auth/logout", json={"refresh_token": refresh})
+    assert logout.status_code == 204
+    assert (await client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": refresh}
+    )).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_access_token_lifetime_is_30_minutes(client):
+    from app.core.security import decode_token
+
+    await client.post("/api/v1/auth/register", json={
+        "email": "expiry@test.com", "name": "Expiry", "password": "secret123",
+    })
+    login_resp = await client.post("/api/v1/auth/login", json={
+        "email": "expiry@test.com", "password": "secret123",
+    })
+    payload = decode_token(login_resp.json()["access_token"])
+    assert payload is not None
+    assert payload["exp"] - payload["iat"] == 30 * 60
 
 
 @pytest.mark.asyncio
@@ -275,6 +367,8 @@ async def test_register_user_integrity_error_becomes_conflict():
 
     db = AsyncMock()
     db.add = MagicMock()  # Session.add 是同步方法
+    from types import SimpleNamespace
+    db.get_bind = MagicMock(return_value=SimpleNamespace(dialect=SimpleNamespace(name="sqlite")))
     # 预检查：邮箱不存在、已有其他用户（非首个）
     result = MagicMock()
     result.scalar_one_or_none.return_value = None
@@ -286,3 +380,23 @@ async def test_register_user_integrity_error_becomes_conflict():
             db, UserRegister(email="race@test.com", name="Race", password="secret123")
         )
     db.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_postgres_registration_acquires_advisory_lock():
+    """首用户角色判断前应在 PostgreSQL 事务内串行化注册。"""
+    from unittest.mock import AsyncMock, MagicMock
+    from types import SimpleNamespace
+
+    from app.services.user_service import _lock_user_registration
+
+    db = AsyncMock()
+    db.get_bind = MagicMock(
+        return_value=SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+    )
+    await _lock_user_registration(db)
+
+    db.execute.assert_awaited_once()
+    statement, params = db.execute.await_args.args
+    assert "pg_advisory_xact_lock" in str(statement)
+    assert isinstance(params["lock_id"], int)

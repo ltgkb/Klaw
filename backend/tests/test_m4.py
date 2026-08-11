@@ -195,6 +195,7 @@ def mock_llm_provider(monkeypatch):
     monkeypatch.setattr(llm_client, "health_check", mock_health)
     monkeypatch.setattr(llm_client, "chat", mock_chat)
     monkeypatch.setattr(llm_client, "list_models", mock_list_models)
+    monkeypatch.setattr(llm_client.settings, "openclaw_chat_enabled", True)
 
 
 @pytest.mark.asyncio
@@ -356,7 +357,7 @@ def mock_scheduler(monkeypatch):
         pass
 
     def mock_pause(job_id):
-        pass
+        return True
 
     def mock_resume(job_id):
         return datetime.now(timezone.utc)

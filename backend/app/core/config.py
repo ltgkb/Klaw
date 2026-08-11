@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     )
 
     # ── 应用 ──
-    app_name: str = "Claw-Native Agent Platform"
+    app_name: str = "Klaw期算平台"
     environment: Literal["dev", "staging", "prod"] = "dev"
     debug: bool = True
     api_v1_prefix: str = "/api/v1"
@@ -24,8 +24,19 @@ class Settings(BaseSettings):
     # ── 安全 ──
     jwt_secret_key: str = "change-me-in-production-please-use-a-long-random-string"
     jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 720  # 12 小时
+    access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
+    # Public supplier customer-service API. Keep the key in .env, never in source.
+    supplier_api_key: str = ""
+    supplier_flow_id: str = ""
+    supplier_api_timeout_seconds: int = 120
+    # Anonymous homepage chat. May be overridden in the service env.
+    public_chat_flow_id: str = "8a1fff7b-ac60-4539-a6e2-d867c61b3ed1"
+    public_chat_timeout_seconds: int = 120
+    # API-key protected KAI knowledge customer-service endpoints.
+    kai_knowledge_api_key: str = ""
+    kai_knowledge_flow_id: str = "8a1fff7b-ac60-4539-a6e2-d867c61b3ed1"
+    kai_knowledge_api_timeout_seconds: int = 120
     # AES-256-GCM 主密钥 (32 bytes, hex 编码 64 字符)
     encryption_key: str = "0" * 64  # 生产环境必须替换
 
@@ -61,13 +72,20 @@ class Settings(BaseSettings):
 
     # ── 文件上传限制 ──
     max_upload_size: int = 100 * 1024 * 1024  # 100 MB
+    document_parse_max_concurrency: int = 2
 
     # ── 本地 Agent: OpenClaw ──
     openclaw_url: str = "http://localhost:8080"
     openclaw_token: str = ""  # Gateway auth token (--auth token --token xxx)
+    # Gateway tools can remain available while model routing is intentionally disabled.
+    # Opt in only after the gateway has a usable inference provider. OpenClaw's
+    # /v1/models endpoint exposes agent aliases even when upstream auth is absent.
+    openclaw_chat_enabled: bool = False
 
     # ── 本地 Agent: Hermes ──
     hermes_url: str = "http://localhost:8081"
+    hermes_api_server_key: str = ""
+    hermes_chat_enabled: bool = False
 
     # ── Cross-Encoder 重排序 (TEI reranker sidecar) ──
     reranker_url: str = "http://localhost:8083"
@@ -85,14 +103,26 @@ class Settings(BaseSettings):
     kaiweb_api_key: str = ""
     kaiweb_model: str = "glm-4.5-air"
 
-    # ── CORS ──
+    # ── CORS / 公网接口保护 ──
+    # 第三方 API 自身使用 API Key，并在对应端点返回无凭证的通配 CORS；
+    # 管理端和匿名首页只允许这里明确列出的站点。
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
+    rate_limit_enabled: bool = True
+    public_chat_rate_per_minute: int = 12
+    public_chat_max_concurrency: int = 4
+    auth_login_rate_per_minute: int = 10
+    auth_register_rate_per_minute: int = 5
+    api_key_rate_per_minute: int = 60
+    api_key_max_concurrency: int = 8
 
     @model_validator(mode="after")
     def _reject_default_secrets_in_prod(self) -> "Settings":
         """prod 环境启动校验：拒绝默认 JWT/加密密钥，防止弱密钥上线。"""
         if self.environment == "prod":
-            if self.jwt_secret_key == "change-me-in-production-please-use-a-long-random-string":
+            if self.jwt_secret_key in {
+                "change-me-in-production",
+                "change-me-in-production-please-use-a-long-random-string",
+            }:
                 raise ValueError(
                     "prod 环境必须通过 JWT_SECRET_KEY 设置强随机密钥"
                 )
@@ -101,6 +131,8 @@ class Settings(BaseSettings):
                     "prod 环境必须通过 ENCRYPTION_KEY 设置真实加密密钥 "
                     "(python -c \"import secrets; print(secrets.token_hex(32))\")"
                 )
+            if "*" in self.cors_origins:
+                raise ValueError("prod 环境禁止 CORS_ORIGINS 使用通配符 *")
         return self
 
     @property

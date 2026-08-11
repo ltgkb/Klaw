@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { Plus, Trash2, BookOpen, Loader2 } from "lucide-react"
-import { kbApi, type KBRead } from "@/lib/api"
+import { Plus, Trash2, BookOpen, Loader2, Upload, FolderOpen, X } from "lucide-react"
+import { kbApi, publicCatalogApi, type KBRead } from "@/lib/api"
+import { useAuthStore } from "@/store/auth"
+import { toast } from "@/lib/toast"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -9,6 +11,7 @@ import { Label } from "@/components/ui/label"
 
 export function KnowledgeBase() {
   const navigate = useNavigate()
+  const { isAuthenticated } = useAuthStore()
   const [kbs, setKbs] = useState<KBRead[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
@@ -18,12 +21,35 @@ export function KnowledgeBase() {
   const [chunkSize, setChunkSize] = useState(256)
   const [chunkOverlap, setChunkOverlap] = useState(32)
   const [creating, setCreating] = useState(false)
+  const [showImport, setShowImport] = useState(false)
+  const [importName, setImportName] = useState("")
+  const [importFiles, setImportFiles] = useState<File[]>([])
+  const [importing, setImporting] = useState(false)
+  const importInputRef = useRef<HTMLInputElement>(null)
+  const folderInputRef = useRef<HTMLInputElement>(null)
+  const chunkConfigValid =
+    chunkSize >= 100 &&
+    chunkSize <= 4096 &&
+    chunkOverlap >= 0 &&
+    chunkOverlap < chunkSize
 
   const fetchKbs = async () => {
     setLoading(true)
     try {
-      const resp = await kbApi.list()
-      setKbs(resp.data.items)
+      if (isAuthenticated) {
+        const resp = await kbApi.list()
+        setKbs(resp.data.items)
+      } else {
+        const resp = await publicCatalogApi.get()
+        setKbs(resp.data.knowledge_bases.map((kb) => ({
+          ...kb,
+          owner_id: "",
+          chunk_size: 0,
+          chunk_overlap: 0,
+          created_at: "",
+          updated_at: "",
+        } as KBRead)))
+      }
     } catch {
       // 错误由拦截器处理
     } finally {
@@ -33,9 +59,21 @@ export function KnowledgeBase() {
 
   useEffect(() => {
     fetchKbs()
-  }, [])
+  }, [isAuthenticated])
+
+  const requireAuth = (next = "/kb") => {
+    if (isAuthenticated) return true
+    navigate(`/login?next=${encodeURIComponent(next)}`)
+    return false
+  }
+
+  useEffect(() => {
+    folderInputRef.current?.setAttribute("webkitdirectory", "")
+    folderInputRef.current?.setAttribute("directory", "")
+  }, [showImport])
 
   const handleCreate = async () => {
+    if (!requireAuth()) return
     if (!name.trim()) return
     setCreating(true)
     try {
@@ -61,6 +99,7 @@ export function KnowledgeBase() {
   }
 
   const handleDelete = async (kbId: string) => {
+    if (!requireAuth()) return
     if (!confirm("确认删除此知识库？所有文档和索引将一并删除。")) return
     try {
       await kbApi.delete(kbId)
@@ -70,20 +109,140 @@ export function KnowledgeBase() {
     }
   }
 
+  const selectImportFiles = (files: FileList | null) => {
+    if (!files) return
+    const supported = Array.from(files).filter((file) =>
+      /\.(pdf|docx|xlsx|csv|pptx|txt|md|markdown|html|htm|json|epub)$/i.test(file.name),
+    )
+    setImportFiles(supported)
+    if (!importName && supported.length > 0) {
+      const relativeRoot = supported[0].webkitRelativePath?.split("/")[0]
+      setImportName(relativeRoot || supported[0].name.replace(/\.[^.]+$/, ""))
+    }
+    if (supported.length !== files.length) {
+      toast.error(`已忽略 ${files.length - supported.length} 个不支持的文件`)
+    }
+  }
+
+  const resetImport = () => {
+    setShowImport(false)
+    setImportName("")
+    setImportFiles([])
+    if (importInputRef.current) importInputRef.current.value = ""
+    if (folderInputRef.current) folderInputRef.current.value = ""
+  }
+
+  const handleImport = async () => {
+    if (!requireAuth()) return
+    if (!importName.trim() || importFiles.length === 0 || importing) return
+    setImporting(true)
+    try {
+      const created = await kbApi.create({ name: importName.trim() })
+      let failed = 0
+      for (const file of importFiles) {
+        try {
+          await kbApi.uploadDocument(created.data.id, file)
+        } catch {
+          failed += 1
+        }
+      }
+      if (failed > 0) {
+        toast.error(`知识库已创建，${importFiles.length - failed} 个文件已导入，${failed} 个失败`)
+      } else {
+        toast.success(`已导入 ${importFiles.length} 个文件`)
+      }
+      resetImport()
+      navigate(`/kb/${created.data.id}`)
+    } finally {
+      setImporting(false)
+    }
+  }
+
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="kai-kb-page space-y-6">
+      <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold">知识库</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             DeepDoc 解析 · BGE-M3 向量化 · ES 混合检索
           </p>
         </div>
-        <Button onClick={() => setShowCreate(!showCreate)}>
-          <Plus className="h-4 w-4" />
-          新建知识库
-        </Button>
+        <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto">
+          <Button className="w-full sm:w-auto" variant="outline" onClick={() => {
+            if (!requireAuth()) return
+            setShowImport(!showImport)
+            setShowCreate(false)
+          }}>
+            <Upload className="h-4 w-4" />
+            导入知识库
+          </Button>
+          <Button className="w-full sm:w-auto" onClick={() => {
+            if (!requireAuth()) return
+            setShowCreate(!showCreate)
+            setShowImport(false)
+          }}>
+            <Plus className="h-4 w-4" />
+            新建知识库
+          </Button>
+        </div>
       </div>
+
+      {showImport && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <CardTitle className="text-base">导入知识库</CardTitle>
+                <CardDescription>选择文件或文件夹，自动创建知识库并开始解析</CardDescription>
+              </div>
+              <Button variant="ghost" size="icon" onClick={resetImport} title="取消导入">
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="import-kb-name">知识库名称</Label>
+              <Input
+                id="import-kb-name"
+                value={importName}
+                onChange={(e) => setImportName(e.target.value)}
+                placeholder="导入的知识库"
+              />
+            </div>
+            <input
+              ref={importInputRef}
+              type="file"
+              multiple
+              accept=".pdf,.docx,.xlsx,.csv,.pptx,.txt,.md,.markdown,.html,.htm,.json,.epub"
+              className="hidden"
+              onChange={(e) => selectImportFiles(e.target.files)}
+            />
+            <input
+              ref={folderInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => selectImportFiles(e.target.files)}
+            />
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={() => importInputRef.current?.click()} disabled={importing}>
+                <Upload className="h-4 w-4" /> 选择文件
+              </Button>
+              <Button variant="outline" onClick={() => folderInputRef.current?.click()} disabled={importing}>
+                <FolderOpen className="h-4 w-4" /> 选择文件夹
+              </Button>
+              <span className="self-center text-sm text-muted-foreground">
+                {importFiles.length > 0 ? `已选择 ${importFiles.length} 个文件` : "尚未选择文件"}
+              </span>
+            </div>
+            <Button onClick={handleImport} disabled={importing || !importName.trim() || importFiles.length === 0}>
+              {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+              {importing ? "正在导入" : "开始导入"}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {showCreate && (
         <Card>
@@ -130,8 +289,15 @@ export function KnowledgeBase() {
                   id="kb-size"
                   type="number"
                   value={chunkSize}
-                  onChange={(e) => setChunkSize(Number(e.target.value))}
-                  min={32}
+                  onChange={(e) => {
+                    const size = Number(e.target.value)
+                    setChunkSize(size)
+                    if (Number.isFinite(size) && chunkOverlap >= size) {
+                      setChunkOverlap(Math.max(0, size - 1))
+                    }
+                  }}
+                  min={100}
+                  max={4096}
                 />
               </div>
               <div className="space-y-2">
@@ -142,11 +308,12 @@ export function KnowledgeBase() {
                   value={chunkOverlap}
                   onChange={(e) => setChunkOverlap(Number(e.target.value))}
                   min={0}
+                  max={Math.max(0, chunkSize - 1)}
                 />
               </div>
             </div>
             <div className="flex gap-2">
-              <Button onClick={handleCreate} disabled={creating || !name.trim()}>
+              <Button onClick={handleCreate} disabled={creating || !name.trim() || !chunkConfigValid}>
                 {creating && <Loader2 className="h-4 w-4 animate-spin" />}
                 创建
               </Button>
@@ -159,8 +326,10 @@ export function KnowledgeBase() {
       )}
 
       {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3" aria-label="正在加载知识库">
+          {Array.from({ length: 6 }).map((_, index) => (
+            <div key={index} className="kai-kb-skeleton h-44 animate-pulse rounded-xl border" />
+          ))}
         </div>
       ) : kbs.length === 0 ? (
         <Card>
@@ -170,37 +339,55 @@ export function KnowledgeBase() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {kbs.map((kb) => (
             <Card
               key={kb.id}
-              className="cursor-pointer transition-shadow hover:shadow-md"
-              onClick={() => navigate(`/kb/${kb.id}`)}
+              className="kai-kb-card group relative overflow-hidden transition-[border-color,box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:border-primary/35 hover:shadow-lg hover:shadow-primary/5"
             >
-              <CardHeader>
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-2">
-                    <BookOpen className="h-5 w-5 text-muted-foreground" />
-                    <CardTitle className="text-base">{kb.name}</CardTitle>
+              <button
+                type="button"
+                aria-label={`打开 ${kb.name}`}
+                className="absolute inset-0 z-0 cursor-pointer rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                onClick={() => {
+                  if (!requireAuth(`/kb/${kb.id}`)) return
+                  navigate(`/kb/${kb.id}`)
+                }}
+              />
+              <CardHeader className="pointer-events-none relative z-[1] min-h-32 p-5">
+                <div className="flex min-w-0 items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-start gap-3">
+                    <span className="kai-kb-icon flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent text-primary">
+                      <BookOpen className="h-4 w-4" />
+                    </span>
+                    <div className="min-w-0 pt-1.5">
+                      <CardTitle className="line-clamp-2 text-base leading-5">{kb.name}</CardTitle>
+                    </div>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      handleDelete(kb.id)
-                    }}
-                  >
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
+                  {isAuthenticated && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="pointer-events-auto relative z-[2] h-8 w-8 shrink-0 text-muted-foreground opacity-70 hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+                      title={`删除 ${kb.name}`}
+                      aria-label={`删除 ${kb.name}`}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleDelete(kb.id)
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  )}
                 </div>
-                <CardDescription>{kb.description || "无描述"}</CardDescription>
+                <CardDescription className="line-clamp-2 pl-12 leading-5">
+                  {kb.description || "暂无描述"}
+                </CardDescription>
               </CardHeader>
-              <CardContent>
-                <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                  <span>{kb.document_count} 文档</span>
-                  <span>{kb.embedding_model}</span>
-                  <span>{kb.chunk_strategy}</span>
+              <CardContent className="pointer-events-none relative z-[1] border-t bg-muted/25 px-5 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                  <span><strong className="font-semibold text-foreground">{kb.document_count}</strong> 文档</span>
+                  <span>{kb.embedding_model} / {kb.chunk_strategy}</span>
                 </div>
               </CardContent>
             </Card>

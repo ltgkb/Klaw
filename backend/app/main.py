@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.v1.router import api_router
 from app.core.config import settings
+from app.core.rate_limit import RateLimitMiddleware, SecurityHeadersMiddleware
 
 # 结构化日志 (JSON 格式, 按 task_id 关联 — PRD 8.3)
 logging.basicConfig(
@@ -18,6 +19,11 @@ logging.basicConfig(
     format='{"time":"%(asctime)s","level":"%(levelname)s","logger":"%(name)s","message":"%(message)s"}',
     stream=sys.stdout,
 )
+# httpx logs the full request URL at INFO and httpcore does so at DEBUG.
+# Webhook paths and Telegram Bot API paths contain credentials, so retain only
+# warnings/errors from generic HTTP transports and log safe context ourselves.
+for noisy_logger in ("httpx", "httpcore"):
+    logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 logger = logging.getLogger("claw")
 
 
@@ -41,6 +47,17 @@ async def lifespan(app: FastAPI):
         logger.warning("ES 索引初始化失败 (将在请求时重试): %s", e)
 
     logger.info("基础设施资源初始化完成")
+
+    # 所有工作流任务都在本进程内运行；进程重启后遗留的非终态任务不可能恢复。
+    try:
+        from app.core.database import async_session_factory
+        from app.services.agent_flow_service import reap_interrupted_executions
+        async with async_session_factory() as db:
+            reaped = await reap_interrupted_executions(db)
+        if reaped:
+            logger.warning("已回收服务重启中断的执行记录: %d", reaped)
+    except Exception as e:
+        logger.warning("中断执行记录回收失败: %s", e)
 
     # APScheduler 定时调度器
     try:
@@ -93,7 +110,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title=settings.app_name,
         version="0.1.0",
-        description="Claw-Native Agent 平台 — 本地 OpenClaw/Hermes 为一等公民的 Agent 平台",
+        description="Klaw期算平台 — 本地 OpenClaw/Hermes 驱动的知识库与 Agent 工作流平台",
         docs_url="/docs",
         redoc_url="/redoc",
         lifespan=lifespan,
@@ -107,6 +124,8 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
 
     # 全局异常处理
     @app.exception_handler(Exception)

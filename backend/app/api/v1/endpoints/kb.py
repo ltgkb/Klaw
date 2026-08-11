@@ -10,9 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.deps import CurrentUser, DBSession
+from app.core.upload import get_upload_size
 from app.schemas.common import APIResponse, PageResponse
 from app.schemas.knowledge_base import (
+    ChunkBatchDelete,
+    ChunkDeleteResponse,
     ChunkRead,
+    ChunkUpdate,
     DocumentRead,
     DocumentUploadResponse,
     KBCreate,
@@ -104,7 +108,7 @@ async def upload_document(
 ):
     """上传文档到知识库，后台自动解析+分块+向量化+索引。
 
-    支持: PDF, DOCX, XLSX, PPTX, TXT, MD, HTML, JSON, EPUB
+    支持: PDF, DOCX, XLSX, CSV, PPTX, TXT, MD, HTML, JSON, EPUB
     """
     kb = await kb_service.get_kb(db, kb_id, current_user.id)
     if kb is None:
@@ -118,19 +122,24 @@ async def upload_document(
             detail=f"不支持的文件类型: {filename}",
         )
 
-    # 读取文件内容
-    file_data = await file.read()
-    if len(file_data) > settings.max_upload_size:
+    # UploadFile 已由 Starlette spool 到内存/临时文件；只读取长度，不复制全部内容。
+    file_size = await get_upload_size(file)
+    if file_size > settings.max_upload_size:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"文件超过大小限制 ({settings.max_upload_size // 1024 // 1024}MB)",
         )
-    if not file_data:
+    if not file_size:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="文件为空")
 
     # 上传到 MinIO + 创建 DB 记录
-    doc = await document_service.upload_document(
-        db, kb, file.filename or "untitled", file_data, file.content_type or "application/octet-stream"
+    doc = await document_service.upload_document_stream(
+        db,
+        kb,
+        file.filename or "untitled",
+        file.file,
+        file_size,
+        file.content_type or "application/octet-stream",
     )
 
     # 后台异步解析+索引
@@ -219,6 +228,58 @@ async def list_chunks(
         page=page,
         page_size=page_size,
     )
+
+
+@router.delete("/{kb_id}/chunks", response_model=ChunkDeleteResponse)
+async def delete_chunks(
+    kb_id: uuid.UUID,
+    data: ChunkBatchDelete,
+    current_user: CurrentUser,
+    db: DBSession,
+):
+    """单个或批量删除 Chunk，并同步清理检索索引。"""
+    kb = await kb_service.get_kb(db, kb_id, current_user.id)
+    if kb is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识库不存在")
+    try:
+        deleted = await document_service.delete_chunks(db, kb_id, data.chunk_ids)
+    except HTTPException:
+        raise
+    except Exception:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Chunk 删除失败，请稍后重试",
+        )
+    return ChunkDeleteResponse(deleted=deleted)
+
+
+@router.put("/{kb_id}/chunks/{chunk_id}", response_model=ChunkRead)
+async def update_chunk(
+    kb_id: uuid.UUID,
+    chunk_id: uuid.UUID,
+    data: ChunkUpdate,
+    current_user: CurrentUser,
+    db: DBSession,
+):
+    """手动修改已切分的 Chunk，并同步更新向量与检索索引。"""
+    kb = await kb_service.get_kb(db, kb_id, current_user.id)
+    if kb is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识库不存在")
+    chunk = await document_service.get_chunk(db, chunk_id)
+    if chunk is None or chunk.kb_id != kb_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chunk 不存在")
+    try:
+        updated = await document_service.update_chunk_content(db, chunk, data.content)
+    except HTTPException:
+        raise
+    except Exception:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Chunk 更新失败，请稍后重试",
+        )
+    return ChunkRead.model_validate(updated)
 
 
 # ── 混合检索 ──
